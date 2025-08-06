@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Users, Clock, Smartphone, Volume2, BarChart3, Shield, ArrowRight, Menu, X, MapPin, Phone, Mail } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 
 export default function LandingPage() {
     const [isMenuOpen, setIsMenuOpen] = useState(false)
@@ -53,12 +56,14 @@ export default function LandingPage() {
                         </div>
 
                         {/* Mobile menu button */}
-                        <button
-                            className="md:hidden p-2"
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="md:hidden"
                             onClick={() => setIsMenuOpen(!isMenuOpen)}
                         >
                             {isMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-                        </button>
+                        </Button>
 
                         {/* Desktop navigation */}
                         <nav className="hidden md:flex items-center gap-6">
@@ -68,12 +73,9 @@ export default function LandingPage() {
                             <Link to="/login" className="text-gray-600 hover:text-blue-600 transition-colors">
                                 Staff Login
                             </Link>
-                            <Link
-                                to="/student"
-                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-                            >
-                                Get Queue Number
-                            </Link>
+                            <Button asChild>
+                                <Link to="/student">Get Queue Number</Link>
+                            </Button>
                         </nav>
                     </div>
 
@@ -95,13 +97,11 @@ export default function LandingPage() {
                                 >
                                     Staff Login
                                 </Link>
-                                <Link
-                                    to="/student"
-                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-center"
-                                    onClick={() => setIsMenuOpen(false)}
-                                >
-                                    Get Queue Number
-                                </Link>
+                                <Button asChild className="w-full">
+                                    <Link to="/student" onClick={() => setIsMenuOpen(false)}>
+                                        Get Queue Number
+                                    </Link>
+                                </Button>
                             </div>
                         </nav>
                     )}
@@ -111,35 +111,28 @@ export default function LandingPage() {
             {/* Hero Section */}
             <section className="container mx-auto px-4 py-16">
                 <div className="text-center max-w-4xl mx-auto">
-                    <div className="inline-flex items-center gap-2 bg-blue-100 text-blue-800 px-4 py-2 rounded-full text-sm mb-6">
-                        <Shield className="h-4 w-4" />
+                    <Badge variant="secondary" className="mb-6">
+                        <Shield className="h-4 w-4 mr-2" />
                         Jose Rizal Memorial State University
-                    </div>
-
+                    </Badge>
                     <h1 className="text-4xl md:text-6xl font-bold text-gray-900 mb-6">
                         Smart Queue Management
                         <span className="block text-blue-600">for JRMSU Students</span>
                     </h1>
-
                     <p className="text-lg md:text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
                         Skip the physical lines. Get your queue number digitally, receive SMS updates,
                         and know exactly when it's your turn across all university service points.
                     </p>
-
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Link
-                            to="/student"
-                            className="bg-blue-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
-                        >
-                            Get Queue Number
-                            <ArrowRight className="h-5 w-5" />
-                        </Link>
-                        <Link
-                            to="/display/registrar"
-                            className="border border-gray-300 text-gray-700 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-gray-50 transition-colors"
-                        >
-                            View Queue Status
-                        </Link>
+                        <Button size="lg" asChild>
+                            <Link to="/student">
+                                Get Queue Number
+                                <ArrowRight className="h-5 w-5 ml-2" />
+                            </Link>
+                        </Button>
+                        <Button variant="outline" size="lg" asChild>
+                            <Link to="/display/registrar">View Queue Status</Link>
+                        </Button>
                     </div>
                 </div>
             </section>
@@ -150,36 +143,36 @@ export default function LandingPage() {
                     <h2 className="text-3xl font-bold text-gray-900 mb-4">Live Service Points</h2>
                     <p className="text-gray-600">Current queue status across JRMSU service centers</p>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {servicePoints.map((point, index) => (
-                        <div key={index} className="bg-white rounded-xl p-6 shadow-lg border hover:shadow-xl transition-shadow">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="font-semibold text-gray-900">{point.name}</h3>
-                                <div className="flex items-center gap-1">
-                                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                                    <span className="text-xs text-green-600">Live</span>
+                        <Card key={index} className="hover:shadow-lg transition-shadow">
+                            <CardHeader className="pb-3">
+                                <div className="flex items-center justify-between">
+                                    <CardTitle className="text-lg">{point.name}</CardTitle>
+                                    <Badge variant="secondary" className="text-xs">
+                                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-1"></div>
+                                        Live
+                                    </Badge>
                                 </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <p className="text-2xl font-bold text-blue-600">{point.queue}</p>
-                                    <p className="text-sm text-gray-500">In Queue</p>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="grid grid-cols-2 gap-4 mb-4">
+                                    <div>
+                                        <p className="text-2xl font-bold text-blue-600">{point.queue}</p>
+                                        <p className="text-sm text-gray-500">In Queue</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-2xl font-bold text-orange-600">{point.avgWait}</p>
+                                        <p className="text-sm text-gray-500">Avg Wait</p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <p className="text-2xl font-bold text-orange-600">{point.avgWait}</p>
-                                    <p className="text-sm text-gray-500">Avg Wait</p>
-                                </div>
-                            </div>
-
-                            <Link
-                                to={`/display/${point.name.toLowerCase().replace(/\s+/g, '-')}`}
-                                className="mt-4 w-full bg-gray-100 text-gray-700 py-2 rounded-lg hover:bg-gray-200 transition-colors text-center block"
-                            >
-                                View Details
-                            </Link>
-                        </div>
+                                <Button variant="outline" className="w-full" asChild>
+                                    <Link to={`/display/${point.name.toLowerCase().replace(/\s+/g, '-')}`}>
+                                        View Details
+                                    </Link>
+                                </Button>
+                            </CardContent>
+                        </Card>
                     ))}
                 </div>
             </section>
@@ -191,16 +184,17 @@ export default function LandingPage() {
                         <h2 className="text-3xl font-bold text-gray-900 mb-4">Why Choose Digital Queue?</h2>
                         <p className="text-gray-600">Modern features designed for student convenience</p>
                     </div>
-
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
                         {features.map((feature, index) => (
-                            <div key={index} className="text-center">
-                                <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                    <feature.icon className="h-8 w-8 text-blue-600" />
-                                </div>
-                                <h3 className="text-xl font-semibold text-gray-900 mb-2">{feature.title}</h3>
-                                <p className="text-gray-600">{feature.description}</p>
-                            </div>
+                            <Card key={index} className="text-center border-0 shadow-none">
+                                <CardContent className="pt-6">
+                                    <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                        <feature.icon className="h-8 w-8 text-blue-600" />
+                                    </div>
+                                    <CardTitle className="text-xl mb-2">{feature.title}</CardTitle>
+                                    <CardDescription>{feature.description}</CardDescription>
+                                </CardContent>
+                            </Card>
                         ))}
                     </div>
                 </div>
@@ -245,7 +239,6 @@ export default function LandingPage() {
                                 Smart queue management system for Jose Rizal Memorial State University
                             </p>
                         </div>
-
                         <div>
                             <h3 className="text-lg font-semibold mb-4">Quick Links</h3>
                             <div className="space-y-2">
@@ -260,7 +253,6 @@ export default function LandingPage() {
                                 </Link>
                             </div>
                         </div>
-
                         <div>
                             <h3 className="text-lg font-semibold mb-4">Contact</h3>
                             <div className="space-y-2 text-gray-400">
@@ -279,7 +271,6 @@ export default function LandingPage() {
                             </div>
                         </div>
                     </div>
-
                     <div className="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400">
                         <p>&copy; 2025 Jose Rizal Memorial State University. All rights reserved.</p>
                     </div>

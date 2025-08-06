@@ -1,9 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft, Users, Volume2, Play, Pause, SkipForward, CheckCircle, Clock, Settings, Shield, Mic, MicOff, Monitor } from 'lucide-react'
 import { useQueue } from '../contexts/QueueContext'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface QueueItem {
     id: string
@@ -21,12 +25,10 @@ export default function ServiceStaffInterface() {
     const { queue, updateQueueStatus, callNext } = useQueue()
     const [currentlyServing, setCurrentlyServing] = useState<QueueItem | null>(null)
     const [isVoiceEnabled, setIsVoiceEnabled] = useState(true)
-    const [windowNumber, setWindowNumber] = useState(1)
+    const [windowNumber, setWindowNumber] = useState("1")
     const [serviceStatus, setServiceStatus] = useState<'open' | 'closed' | 'break'>('open')
 
-    // Filter queue for current service point (simplified - in real app would be based on user's assigned service)
     const serviceQueue = queue.filter(item => item.status === 'waiting').slice(0, 10)
-    const servingQueue = queue.filter(item => item.status === 'serving')
 
     const handleCallNext = () => {
         if (serviceQueue.length === 0) {
@@ -38,11 +40,8 @@ export default function ServiceStaffInterface() {
         setCurrentlyServing(nextStudent)
         callNext(nextStudent.id)
 
-        // Simulate voice announcement
         if (isVoiceEnabled) {
             toast.success(`🔊 Now calling: ${nextStudent.queueNumber} to Window ${windowNumber}`)
-
-            // Simulate text-to-speech
             if ('speechSynthesis' in window) {
                 const utterance = new SpeechSynthesisUtterance(
                     `Now calling queue number ${nextStudent.queueNumber} to window ${windowNumber}`
@@ -53,7 +52,6 @@ export default function ServiceStaffInterface() {
             }
         }
 
-        // Simulate SMS notification
         setTimeout(() => {
             toast.info(`📱 SMS sent to ${nextStudent.phoneNumber}: "Your turn! Please proceed to Window ${windowNumber}"`)
         }, 1000)
@@ -61,12 +59,10 @@ export default function ServiceStaffInterface() {
 
     const handleCompleteService = () => {
         if (!currentlyServing) return
-
         updateQueueStatus(currentlyServing.id, 'completed')
         setCurrentlyServing(null)
         toast.success('Service completed successfully')
 
-        // Simulate SMS notification
         setTimeout(() => {
             toast.info(`📱 SMS sent: "Thank you for using JRMSU Queue System. Service completed."`)
         }, 500)
@@ -74,7 +70,6 @@ export default function ServiceStaffInterface() {
 
     const handleSkipStudent = () => {
         if (!currentlyServing) return
-
         updateQueueStatus(currentlyServing.id, 'waiting')
         setCurrentlyServing(null)
         toast.warning('Student skipped - moved back to queue')
@@ -91,7 +86,6 @@ export default function ServiceStaffInterface() {
             break: 'Service window is on break',
             closed: 'Service window is now closed'
         }
-
         toast.info(statusMessages[nextStatus])
     }
 
@@ -110,19 +104,17 @@ export default function ServiceStaffInterface() {
                                 <p className="text-xs text-gray-600">Service Staff Portal</p>
                             </div>
                         </div>
-
                         <div className="flex items-center gap-4">
                             <div className="text-right">
                                 <p className="text-sm font-medium text-gray-900">{user?.name}</p>
                                 <p className="text-xs text-gray-600">{user?.role} • Window {windowNumber}</p>
                             </div>
-                            <Link
-                                to="/"
-                                className="flex items-center gap-2 text-gray-600 hover:text-blue-600 transition-colors"
-                            >
-                                <ArrowLeft className="h-4 w-4" />
-                                Exit
-                            </Link>
+                            <Button variant="ghost" asChild>
+                                <Link to="/">
+                                    <ArrowLeft className="h-4 w-4 mr-2" />
+                                    Exit
+                                </Link>
+                            </Button>
                         </div>
                     </div>
                 </div>
@@ -133,217 +125,230 @@ export default function ServiceStaffInterface() {
                     {/* Main Control Panel */}
                     <div className="lg:col-span-2 space-y-6">
                         {/* Service Status Card */}
-                        <div className="bg-white rounded-xl shadow-lg p-6">
-                            <div className="flex items-center justify-between mb-6">
-                                <h2 className="text-xl font-bold text-gray-900">Service Control</h2>
-                                <div className="flex items-center gap-2">
-                                    <div className={`w-3 h-3 rounded-full ${serviceStatus === 'open' ? 'bg-green-500' :
-                                            serviceStatus === 'break' ? 'bg-yellow-500' : 'bg-red-500'
-                                        }`} />
-                                    <span className="text-sm font-medium capitalize">{serviceStatus}</span>
+                        <Card>
+                            <CardHeader>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle>Service Control</CardTitle>
+                                    <Badge variant={serviceStatus === 'open' ? 'default' : serviceStatus === 'break' ? 'secondary' : 'destructive'}>
+                                        {serviceStatus === 'open' ? '🟢 Active' : serviceStatus === 'break' ? '🟡 Break' : '🔴 Closed'}
+                                    </Badge>
                                 </div>
-                            </div>
+                            </CardHeader>
+                            <CardContent className="space-y-6">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <Card className="bg-blue-50">
+                                        <CardContent className="pt-6 text-center">
+                                            <Users className="h-8 w-8 text-blue-600 mx-auto mb-2" />
+                                            <p className="text-2xl font-bold text-blue-600">{serviceQueue.length}</p>
+                                            <p className="text-sm text-gray-600">In Queue</p>
+                                        </CardContent>
+                                    </Card>
+                                    <Card className="bg-green-50">
+                                        <CardContent className="pt-6 text-center">
+                                            <CheckCircle className="h-8 w-8 text-green-600 mx-auto mb-2" />
+                                            <p className="text-2xl font-bold text-green-600">{queue.filter(q => q.status === 'completed').length}</p>
+                                            <p className="text-sm text-gray-600">Completed Today</p>
+                                        </CardContent>
+                                    </Card>
+                                    <Card className="bg-orange-50">
+                                        <CardContent className="pt-6 text-center">
+                                            <Clock className="h-8 w-8 text-orange-600 mx-auto mb-2" />
+                                            <p className="text-2xl font-bold text-orange-600">12</p>
+                                            <p className="text-sm text-gray-600">Avg Wait (min)</p>
+                                        </CardContent>
+                                    </Card>
+                                </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                                <div className="bg-blue-50 rounded-lg p-4 text-center">
-                                    <Users className="h-8 w-8 text-blue-600 mx-auto mb-2" />
-                                    <p className="text-2xl font-bold text-blue-600">{serviceQueue.length}</p>
-                                    <p className="text-sm text-gray-600">In Queue</p>
-                                </div>
-                                <div className="bg-green-50 rounded-lg p-4 text-center">
-                                    <CheckCircle className="h-8 w-8 text-green-600 mx-auto mb-2" />
-                                    <p className="text-2xl font-bold text-green-600">{queue.filter(q => q.status === 'completed').length}</p>
-                                    <p className="text-sm text-gray-600">Completed Today</p>
-                                </div>
-                                <div className="bg-orange-50 rounded-lg p-4 text-center">
-                                    <Clock className="h-8 w-8 text-orange-600 mx-auto mb-2" />
-                                    <p className="text-2xl font-bold text-orange-600">12</p>
-                                    <p className="text-sm text-gray-600">Avg Wait (min)</p>
-                                </div>
-                            </div>
+                                {/* Currently Serving */}
+                                {currentlyServing ? (
+                                    <Card className="bg-gradient-to-r from-blue-500 to-blue-600 text-white">
+                                        <CardContent className="pt-6">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <p className="text-blue-100 mb-1">Currently Serving</p>
+                                                    <p className="text-2xl font-bold">{currentlyServing.queueNumber}</p>
+                                                    <p className="text-blue-100">Student ID: {currentlyServing.studentId}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-blue-100">Window</p>
+                                                    <p className="text-3xl font-bold">{windowNumber}</p>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                ) : (
+                                    <Card className="bg-gray-100">
+                                        <CardContent className="pt-6 text-center">
+                                            <Users className="h-12 w-12 text-gray-400 mx-auto mb-2" />
+                                            <p className="text-gray-600">No student currently being served</p>
+                                        </CardContent>
+                                    </Card>
+                                )}
 
-                            {/* Currently Serving */}
-                            {currentlyServing ? (
-                                <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg p-6 mb-6">
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-blue-100 mb-1">Currently Serving</p>
-                                            <p className="text-2xl font-bold">{currentlyServing.queueNumber}</p>
-                                            <p className="text-blue-100">Student ID: {currentlyServing.studentId}</p>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-blue-100">Window</p>
-                                            <p className="text-3xl font-bold">{windowNumber}</p>
-                                        </div>
-                                    </div>
+                                {/* Action Buttons */}
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <Button
+                                        onClick={handleCallNext}
+                                        disabled={serviceQueue.length === 0 || currentlyServing !== null || serviceStatus !== 'open'}
+                                        className="flex items-center gap-2"
+                                    >
+                                        <Play className="h-5 w-5" />
+                                        Call Next
+                                    </Button>
+                                    <Button
+                                        onClick={handleCompleteService}
+                                        disabled={!currentlyServing}
+                                        variant="default"
+                                        className="bg-green-600 hover:bg-green-700 flex items-center gap-2"
+                                    >
+                                        <CheckCircle className="h-5 w-5" />
+                                        Complete
+                                    </Button>
+                                    <Button
+                                        onClick={handleSkipStudent}
+                                        disabled={!currentlyServing}
+                                        variant="default"
+                                        className="bg-orange-600 hover:bg-orange-700 flex items-center gap-2"
+                                    >
+                                        <SkipForward className="h-5 w-5" />
+                                        Skip
+                                    </Button>
                                 </div>
-                            ) : (
-                                <div className="bg-gray-100 rounded-lg p-6 mb-6 text-center">
-                                    <Users className="h-12 w-12 text-gray-400 mx-auto mb-2" />
-                                    <p className="text-gray-600">No student currently being served</p>
-                                </div>
-                            )}
-
-                            {/* Action Buttons */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <button
-                                    onClick={handleCallNext}
-                                    disabled={serviceQueue.length === 0 || currentlyServing !== null || serviceStatus !== 'open'}
-                                    className="bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                >
-                                    <Play className="h-5 w-5" />
-                                    Call Next
-                                </button>
-
-                                <button
-                                    onClick={handleCompleteService}
-                                    disabled={!currentlyServing}
-                                    className="bg-green-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                >
-                                    <CheckCircle className="h-5 w-5" />
-                                    Complete
-                                </button>
-
-                                <button
-                                    onClick={handleSkipStudent}
-                                    disabled={!currentlyServing}
-                                    className="bg-orange-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                >
-                                    <SkipForward className="h-5 w-5" />
-                                    Skip
-                                </button>
-                            </div>
-                        </div>
+                            </CardContent>
+                        </Card>
 
                         {/* Queue List */}
-                        <div className="bg-white rounded-xl shadow-lg p-6">
-                            <h3 className="text-lg font-bold text-gray-900 mb-4">Queue List</h3>
-
-                            {serviceQueue.length === 0 ? (
-                                <div className="text-center py-8">
-                                    <Users className="h-12 w-12 text-gray-400 mx-auto mb-2" />
-                                    <p className="text-gray-600">No students in queue</p>
-                                </div>
-                            ) : (
-                                <div className="space-y-3">
-                                    {serviceQueue.map((item, index) => (
-                                        <div
-                                            key={item.id}
-                                            className={`flex items-center justify-between p-4 rounded-lg border ${index === 0 ? 'border-blue-200 bg-blue-50' : 'border-gray-200'
-                                                }`}
-                                        >
-                                            <div className="flex items-center gap-4">
-                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${index === 0 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
-                                                    }`}>
-                                                    {index + 1}
-                                                </div>
-                                                <div>
-                                                    <p className="font-semibold">{item.queueNumber}</p>
-                                                    <p className="text-sm text-gray-600">ID: {item.studentId}</p>
-                                                </div>
-                                            </div>
-
-                                            <div className="text-right">
-                                                <p className="text-sm text-gray-600">
-                                                    {new Date(item.timestamp).toLocaleTimeString()}
-                                                </p>
-                                                <p className="text-xs text-gray-500">Est: {item.estimatedWaitTime}</p>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Queue List</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                {serviceQueue.length === 0 ? (
+                                    <div className="text-center py-8">
+                                        <Users className="h-12 w-12 text-gray-400 mx-auto mb-2" />
+                                        <p className="text-gray-600">No students in queue</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {serviceQueue.map((item, index) => (
+                                            <Card
+                                                key={item.id}
+                                                className={index === 0 ? 'border-blue-200 bg-blue-50' : ''}
+                                            >
+                                                <CardContent className="p-4">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-4">
+                                                            <Badge variant={index === 0 ? 'default' : 'secondary'}>
+                                                                {index + 1}
+                                                            </Badge>
+                                                            <div>
+                                                                <p className="font-semibold">{item.queueNumber}</p>
+                                                                <p className="text-sm text-gray-600">ID: {item.studentId}</p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="text-sm text-gray-600">
+                                                                {new Date(item.timestamp).toLocaleTimeString()}
+                                                            </p>
+                                                            <p className="text-xs text-gray-500">Est: {item.estimatedWaitTime}</p>
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+                                        ))}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
                     </div>
 
                     {/* Settings Panel */}
                     <div className="space-y-6">
                         {/* Window Settings */}
-                        <div className="bg-white rounded-xl shadow-lg p-6">
-                            <h3 className="text-lg font-bold text-gray-900 mb-4">Window Settings</h3>
-
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Window Number
-                                    </label>
-                                    <select
-                                        value={windowNumber}
-                                        onChange={(e) => setWindowNumber(Number(e.target.value))}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                    >
-                                        {[1, 2, 3, 4, 5].map(num => (
-                                            <option key={num} value={num}>Window {num}</option>
-                                        ))}
-                                    </select>
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Window Settings</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Window Number</label>
+                                    <Select value={windowNumber} onValueChange={setWindowNumber}>
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {[1, 2, 3, 4, 5].map(num => (
+                                                <SelectItem key={num} value={num.toString()}>
+                                                    Window {num}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
 
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Service Status
-                                    </label>
-                                    <button
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Service Status</label>
+                                    <Button
                                         onClick={toggleServiceStatus}
-                                        className={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${serviceStatus === 'open' ? 'bg-green-100 text-green-800' :
-                                                serviceStatus === 'break' ? 'bg-yellow-100 text-yellow-800' :
-                                                    'bg-red-100 text-red-800'
-                                            }`}
+                                        variant="outline"
+                                        className="w-full justify-start"
                                     >
                                         {serviceStatus === 'open' ? '🟢 Open' :
                                             serviceStatus === 'break' ? '🟡 On Break' :
                                                 '🔴 Closed'}
-                                    </button>
+                                    </Button>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                    <span className="text-sm font-medium text-gray-700">Voice Announcements</span>
-                                    <button
+                                    <span className="text-sm font-medium">Voice Announcements</span>
+                                    <Button
+                                        variant="outline"
+                                        size="icon"
                                         onClick={() => setIsVoiceEnabled(!isVoiceEnabled)}
-                                        className={`p-2 rounded-lg transition-colors ${isVoiceEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'
-                                            }`}
                                     >
                                         {isVoiceEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
-                                    </button>
+                                    </Button>
                                 </div>
-                            </div>
-                        </div>
+                            </CardContent>
+                        </Card>
 
                         {/* Quick Actions */}
-                        <div className="bg-white rounded-xl shadow-lg p-6">
-                            <h3 className="text-lg font-bold text-gray-900 mb-4">Quick Actions</h3>
-
-                            <div className="space-y-3">
-                                <Link
-                                    to="/display/registrar"
-                                    className="w-full bg-gray-100 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
-                                >
-                                    <Monitor className="h-5 w-5" />
-                                    View Display
-                                </Link>
-
-                                <button
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Quick Actions</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <Button variant="outline" className="w-full justify-start" asChild>
+                                    <Link to="/display/registrar">
+                                        <Monitor className="h-5 w-5 mr-2" />
+                                        View Display
+                                    </Link>
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    className="w-full justify-start"
                                     onClick={() => toast.info('Test announcement played')}
-                                    className="w-full bg-gray-100 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
                                 >
-                                    <Volume2 className="h-5 w-5" />
+                                    <Volume2 className="h-5 w-5 mr-2" />
                                     Test Voice
-                                </button>
-
-                                <button
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    className="w-full justify-start"
                                     onClick={() => toast.info('Settings panel opened')}
-                                    className="w-full bg-gray-100 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
                                 >
-                                    <Settings className="h-5 w-5" />
+                                    <Settings className="h-5 w-5 mr-2" />
                                     Settings
-                                </button>
-                            </div>
-                        </div>
+                                </Button>
+                            </CardContent>
+                        </Card>
 
                         {/* Service Statistics */}
-                        <div className="bg-white rounded-xl shadow-lg p-6">
-                            <h3 className="text-lg font-bold text-gray-900 mb-4">Today's Stats</h3>
-
-                            <div className="space-y-3">
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Today's Stats</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
                                 <div className="flex justify-between">
                                     <span className="text-gray-600">Students Served</span>
                                     <span className="font-semibold">24</span>
@@ -360,8 +365,8 @@ export default function ServiceStaffInterface() {
                                     <span className="text-gray-600">Efficiency</span>
                                     <span className="font-semibold text-green-600">94%</span>
                                 </div>
-                            </div>
-                        </div>
+                            </CardContent>
+                        </Card>
                     </div>
                 </div>
             </div>
