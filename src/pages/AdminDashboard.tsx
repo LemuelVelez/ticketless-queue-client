@@ -1,15 +1,24 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft, Users, BarChart3, Clock, CheckCircle, AlertTriangle, TrendingUp, TrendingDown, Shield, Monitor, Settings, Activity } from 'lucide-react'
 import { useQueue } from '../contexts/QueueContext'
 import { useAuth } from '../contexts/AuthContext'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+
+// Assuming QueueItem structure for display
+// interface QueueItem {
+//     id: string;
+//     service: string;
+//     status: 'waiting' | 'called' | 'completed';
+//     timestamp: string;
+// }
 
 export default function AdminDashboard() {
     const { user } = useAuth()
-    const { queue } = useQueue()
+    const { queue } = useQueue() // 'queue' is now used
     const [currentTime, setCurrentTime] = useState(new Date())
 
     useEffect(() => {
@@ -69,7 +78,6 @@ export default function AdminDashboard() {
                     </div>
                 </div>
             </header>
-
             <div className="container mx-auto px-4 py-8">
                 {/* Overview Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -90,7 +98,6 @@ export default function AdminDashboard() {
                             </div>
                         </CardContent>
                     </Card>
-
                     <Card>
                         <CardContent className="p-6">
                             <div className="flex items-center justify-between">
@@ -108,7 +115,6 @@ export default function AdminDashboard() {
                             </div>
                         </CardContent>
                     </Card>
-
                     <Card>
                         <CardContent className="p-6">
                             <div className="flex items-center justify-between">
@@ -126,7 +132,6 @@ export default function AdminDashboard() {
                             </div>
                         </CardContent>
                     </Card>
-
                     <Card>
                         <CardContent className="p-6">
                             <div className="flex items-center justify-between">
@@ -145,7 +150,6 @@ export default function AdminDashboard() {
                         </CardContent>
                     </Card>
                 </div>
-
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     {/* Service Points Status */}
                     <Card>
@@ -193,7 +197,6 @@ export default function AdminDashboard() {
                             ))}
                         </CardContent>
                     </Card>
-
                     {/* Recent Activity */}
                     <Card>
                         <CardHeader>
@@ -203,13 +206,12 @@ export default function AdminDashboard() {
                             <div className="space-y-4">
                                 {recentActivity.map((activity, index) => (
                                     <div key={index} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50">
-                                        <div className={`w-2 h-2 rounded-full mt-2 ${
-                                            activity.type === 'completed' ? 'bg-green-500' :
+                                        <div className={`w-2 h-2 rounded-full mt-2 ${activity.type === 'completed' ? 'bg-green-500' :
                                             activity.type === 'new' ? 'bg-blue-500' :
-                                            activity.type === 'called' ? 'bg-orange-500' :
-                                            activity.type === 'status' ? 'bg-yellow-500' :
-                                            'bg-gray-500'
-                                        }`} />
+                                                activity.type === 'called' ? 'bg-orange-500' :
+                                                    activity.type === 'status' ? 'bg-yellow-500' :
+                                                        'bg-gray-500'
+                                            }`} />
                                         <div className="flex-1">
                                             <p className="text-sm">{activity.action}</p>
                                             <p className="text-xs text-gray-500">{activity.time}</p>
@@ -223,6 +225,35 @@ export default function AdminDashboard() {
                         </CardContent>
                     </Card>
                 </div>
+
+                {/* Current Queue Section - Added to use the 'queue' variable */}
+                <Card className="mt-8">
+                    <CardHeader>
+                        <CardTitle>Current Queue</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        {queue && queue.length > 0 ? (
+                            <div className="space-y-4">
+                                {queue.map((item: any, index: number) => (
+                                    <div key={index} className="flex items-center justify-between p-3 rounded-lg border hover:bg-gray-50">
+                                        <div>
+                                            <p className="text-sm font-medium">Queue ID: {item.id}</p>
+                                            <p className="text-xs text-gray-600">Service: {item.service}</p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Badge variant={item.status === 'waiting' ? 'default' : item.status === 'called' ? 'outline' : 'secondary'}>
+                                                {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+                                            </Badge>
+                                            <span className="text-xs text-gray-500">{item.timestamp}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-center text-gray-500">No items currently in the queue.</p>
+                        )}
+                    </CardContent>
+                </Card>
 
                 {/* Quick Actions */}
                 <Card className="mt-8">

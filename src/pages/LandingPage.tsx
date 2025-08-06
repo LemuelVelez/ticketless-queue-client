@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Users, Clock, Smartphone, Volume2, BarChart3, Shield, ArrowRight, Menu, X, MapPin, Phone, Mail } from 'lucide-react'
+import { Users, Clock, Smartphone, Volume2, Shield, ArrowRight, Menu, X, MapPin, Phone, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
