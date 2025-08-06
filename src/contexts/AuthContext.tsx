@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useState, useEffect, type ReactNode } from 'react'
 
 interface User {
     id: string
@@ -54,7 +54,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.setItem('jrmsu_queue_user', JSON.stringify(userData))
             return true
         }
-
         return false
     }
 
@@ -70,10 +69,5 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     )
 }
 
-export function useAuth() {
-    const context = useContext(AuthContext)
-    if (context === undefined) {
-        throw new Error('useAuth must be used within an AuthProvider')
-    }
-    return context
-}
+export { AuthContext }
+export type { User, AuthContextType }

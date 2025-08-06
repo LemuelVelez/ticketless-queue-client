@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from 'react'
+import { createContext, useState, type ReactNode } from 'react'
 
 interface QueueItem {
     id: string
@@ -78,10 +78,5 @@ export function QueueProvider({ children }: { children: ReactNode }) {
     )
 }
 
-export function useQueue() {
-    const context = useContext(QueueContext)
-    if (context === undefined) {
-        throw new Error('useQueue must be used within a QueueProvider')
-    }
-    return context
-}
+export { QueueContext }
+export type { QueueItem, QueueContextType }
