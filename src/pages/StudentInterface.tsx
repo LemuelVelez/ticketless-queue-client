@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, ArrowRight, User, Smartphone, MapPin, Clock, CheckCircle, Users, Volume2, MessageSquare, Shield } from 'lucide-react'
+import { ArrowLeft, ArrowRight, User, MapPin, Clock, CheckCircle, Users, Volume2, MessageSquare, Shield } from 'lucide-react'
 import { useQueue } from '../contexts/QueueContext'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -214,8 +214,8 @@ export default function StudentInterface() {
                                     <Card
                                         key={service.id}
                                         className={`cursor-pointer transition-all ${selectedService?.id === service.id
-                                                ? 'ring-2 ring-blue-500 bg-blue-50'
-                                                : 'hover:shadow-md'
+                                            ? 'ring-2 ring-blue-500 bg-blue-50'
+                                            : 'hover:shadow-md'
                                             } ${!service.isOpen ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         onClick={() => service.isOpen && setSelectedService(service)}
                                     >

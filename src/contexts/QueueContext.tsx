@@ -1,4 +1,5 @@
-import { createContext, useState, type ReactNode } from 'react'
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useState, useContext, type ReactNode } from 'react'
 
 interface QueueItem {
     id: string
@@ -76,6 +77,15 @@ export function QueueProvider({ children }: { children: ReactNode }) {
             {children}
         </QueueContext.Provider>
     )
+}
+
+// Custom hook to consume the QueueContext
+export const useQueue = () => {
+    const context = useContext(QueueContext)
+    if (context === undefined) {
+        throw new Error('useQueue must be used within a QueueProvider')
+    }
+    return context
 }
 
 export { QueueContext }
