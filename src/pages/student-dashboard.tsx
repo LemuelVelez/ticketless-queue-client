@@ -13,7 +13,6 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { mockStudent, type StudentData, type QueueHistoryEntry } from "@/data/mock-students";
 import { mockServices, type Service } from "@/data/mock-services";
-import { type QueueData } from "./login-page";
 
 // Simulate fetching student data based on ID
 const getStudentDataById = (id: string): StudentData => {
@@ -21,55 +20,15 @@ const getStudentDataById = (id: string): StudentData => {
     return mockStudent;
 };
 
-export default function StudentDashboard({
-    studentId,
-    initialQueueData,
-    onLogout
-}: {
-    studentId: string;
-    initialQueueData?: QueueData;
-    onLogout: () => void;
-}) {
-    const [studentData, setStudentData] = useState<StudentData>(() => {
-        const baseData = getStudentDataById(studentId);
-
-        // If there's initial queue data from login, set it up
-        if (initialQueueData) {
-            const initialQueueEntry = {
-                service: initialQueueData.service,
-                queueNumber: initialQueueData.queueNumber,
-                estimatedWaitTime: initialQueueData.estimatedWaitTime,
-                servicePoint: initialQueueData.servicePoint,
-            };
-
-            const initialHistoryEntry: QueueHistoryEntry = {
-                id: String(Date.now()),
-                service: initialQueueData.service,
-                queueNumber: initialQueueData.queueNumber,
-                status: "In Progress",
-                timestamp: new Date().toLocaleString(),
-            };
-
-            return {
-                ...baseData,
-                currentQueue: initialQueueEntry,
-                queueHistory: [initialHistoryEntry, ...baseData.queueHistory],
-            };
-        }
-
-        return baseData;
-    });
-
+export default function StudentDashboard({ studentId, onLogout }: { studentId: string; onLogout: () => void }) {
+    const [studentData, setStudentData] = useState<StudentData>(() => getStudentDataById(studentId));
     const [selectedService, setSelectedService] = useState<string>("");
     const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false);
     const [isCancellingQueue, setIsCancellingQueue] = useState<boolean>(false);
 
     useEffect(() => {
-        // Only update if there's no initial queue data to preserve
-        if (!initialQueueData) {
-            setStudentData(getStudentDataById(studentId));
-        }
-    }, [studentId, initialQueueData]);
+        setStudentData(getStudentDataById(studentId));
+    }, [studentId]);
 
     const handleJoinQueue = async () => {
         if (!selectedService) {
@@ -91,7 +50,6 @@ export default function StudentDashboard({
             const serviceInfo = mockServices.find((s: Service) => s.id === selectedService);
             if (serviceInfo) {
                 const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
-
                 const newQueueEntry = {
                     service: serviceInfo.name,
                     queueNumber: newQueueNumber,
@@ -104,7 +62,7 @@ export default function StudentDashboard({
                     currentQueue: newQueueEntry,
                     queueHistory: [
                         {
-                            id: String(Date.now()),
+                            id: String(Date.now()), // Use timestamp for unique ID
                             service: serviceInfo.name,
                             queueNumber: newQueueNumber,
                             status: "In Progress",
@@ -138,7 +96,6 @@ export default function StudentDashboard({
             await new Promise((resolve) => setTimeout(resolve, 1500));
 
             const currentQueueNumber = studentData.currentQueue.queueNumber;
-
             setStudentData((prev: StudentData) => {
                 const updatedHistory: QueueHistoryEntry[] = prev.queueHistory.map((entry: QueueHistoryEntry) =>
                     entry.queueNumber === currentQueueNumber && entry.status === "In Progress"
@@ -211,11 +168,6 @@ export default function StudentDashboard({
                                         <p className="text-sm text-muted-foreground">
                                             Service Point: {studentData.currentQueue.servicePoint}
                                         </p>
-                                        {initialQueueData && (
-                                            <p className="text-xs text-green-600 bg-green-50 p-2 rounded-md mt-2">
-                                                ✓ SMS notifications sent to +63{initialQueueData.phoneNumber}
-                                            </p>
-                                        )}
                                         <Button
                                             variant="destructive"
                                             className="mt-4 w-full"
@@ -234,45 +186,48 @@ export default function StudentDashboard({
                             </CardContent>
                         </Card>
 
-                        {/* Join New Queue Card - Only show if not currently in queue */}
-                        {!studentData.currentQueue && (
-                            <Card className="lg:col-span-1">
-                                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                                    <CardTitle className="text-sm font-medium">Join Additional Queue</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="grid gap-4">
-                                        <Select
-                                            value={selectedService}
-                                            onValueChange={setSelectedService}
-                                            disabled={isJoiningQueue || isCancellingQueue}
-                                        >
-                                            <SelectTrigger className="w-full">
-                                                <SelectValue placeholder="Select a service point" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {mockServices.map((service: Service) => (
-                                                    <SelectItem key={service.id} value={service.id}>
-                                                        {service.name} (Est. Wait: {service.estimatedWaitTime})
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                        <Button
-                                            onClick={handleJoinQueue}
-                                            disabled={!canJoinQueue}
-                                        >
-                                            {isJoiningQueue ? "Joining..." : "Join Queue"}
-                                        </Button>
-                                        {(isJoiningQueue || isCancellingQueue) && (
-                                            <p className="text-sm text-muted-foreground text-center">
-                                                Please wait while processing your request...
-                                            </p>
-                                        )}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        )}
+                        {/* Join New Queue Card */}
+                        <Card className="lg:col-span-1">
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Join New Queue</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="grid gap-4">
+                                    <Select
+                                        value={selectedService}
+                                        onValueChange={setSelectedService}
+                                        disabled={!!studentData.currentQueue || isJoiningQueue || isCancellingQueue}
+                                    >
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="Select a service point" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {mockServices.map((service: Service) => (
+                                                <SelectItem key={service.id} value={service.id}>
+                                                    {service.name} (Est. Wait: {service.estimatedWaitTime})
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <Button
+                                        onClick={handleJoinQueue}
+                                        disabled={!canJoinQueue}
+                                    >
+                                        {isJoiningQueue ? "Joining..." : "Join Queue"}
+                                    </Button>
+                                    {studentData.currentQueue && (
+                                        <p className="text-sm text-muted-foreground text-center">
+                                            You are already in a queue. Please cancel your current queue to join a new one.
+                                        </p>
+                                    )}
+                                    {(isJoiningQueue || isCancellingQueue) && !studentData.currentQueue && (
+                                        <p className="text-sm text-muted-foreground text-center">
+                                            Please wait while processing your request...
+                                        </p>
+                                    )}
+                                </div>
+                            </CardContent>
+                        </Card>
                     </div>
 
                     {/* Queue History Table */}

@@ -26,14 +26,14 @@ export function NavMain({
           <SidebarMenuItem className="flex items-center gap-2">
             <SidebarMenuButton
               tooltip="Join New Queue"
-              className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground min-w-8 duration-200 ease-linear"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground min-w-8 duration-200 ease-linear cursor-pointer"
             >
               <IconPlus />
               <span>Join New Queue</span>
             </SidebarMenuButton>
             <Button
               size="icon"
-              className="size-8 group-data-[collapsible=icon]:opacity-0"
+              className="size-8 group-data-[collapsible=icon]:opacity-0 cursor-pointer"
               variant="outline"
             >
               <IconBell />
@@ -52,7 +52,7 @@ export function NavMain({
                     ? 'bg-blue-100 text-blue-900 border-l-4 border-blue-600 font-semibold dark:bg-blue-900 dark:text-blue-100 dark:border-blue-400'
                     : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                   }
-                  transition-all duration-200
+                  transition-all duration-200 cursor-pointer
                 `}
               >
                 {item.icon && <item.icon />}
