@@ -7,10 +7,13 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { MessageSquare } from 'lucide-react';
 import { mockStudent, type StudentData, type QueueHistoryEntry } from "@/data/mock-students";
 import { mockServices, type Service } from "@/data/mock-services";
 
@@ -23,6 +26,7 @@ const getStudentDataById = (id: string): StudentData => {
 export default function StudentDashboard({ studentId, onLogout }: { studentId: string; onLogout: () => void }) {
     const [studentData, setStudentData] = useState<StudentData>(() => getStudentDataById(studentId));
     const [selectedService, setSelectedService] = useState<string>("");
+    const [phoneNumber, setPhoneNumber] = useState<string>("");
     const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false);
     const [isCancellingQueue, setIsCancellingQueue] = useState<boolean>(false);
 
@@ -36,6 +40,11 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
             return;
         }
 
+        if (!phoneNumber) {
+            toast.error("Please provide your mobile number for SMS notifications.");
+            return;
+        }
+
         // Prevent joining if already in queue or currently processing
         if (studentData.currentQueue || isJoiningQueue || isCancellingQueue) {
             toast.error("Cannot join queue at this time.");
@@ -46,7 +55,6 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
         try {
             // Simulate API call to join queue
             await new Promise((resolve) => setTimeout(resolve, 2000));
-
             const serviceInfo = mockServices.find((s: Service) => s.id === selectedService);
             if (serviceInfo) {
                 const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
@@ -55,6 +63,7 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                     queueNumber: newQueueNumber,
                     estimatedWaitTime: serviceInfo.estimatedWaitTime,
                     servicePoint: serviceInfo.name,
+                    phoneNumber: phoneNumber
                 };
 
                 setStudentData((prev: StudentData) => ({
@@ -72,9 +81,10 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                     ],
                 }));
 
-                // Clear the selected service after successful join
+                // Clear the selected service and phone number after successful join
                 setSelectedService("");
-                toast.success(`Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}.`);
+                setPhoneNumber("");
+                toast.success(`Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}. SMS notification sent to +63${phoneNumber}.`);
             } else {
                 toast.error("Failed to join queue. Service not found.");
             }
@@ -94,7 +104,6 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
         try {
             // Simulate API call to cancel queue
             await new Promise((resolve) => setTimeout(resolve, 1500));
-
             const currentQueueNumber = studentData.currentQueue.queueNumber;
             setStudentData((prev: StudentData) => {
                 const updatedHistory: QueueHistoryEntry[] = prev.queueHistory.map((entry: QueueHistoryEntry) =>
@@ -102,14 +111,12 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                         ? { ...entry, status: "Cancelled" }
                         : entry
                 );
-
                 return {
                     ...prev,
                     currentQueue: null, // Clear current queue
                     queueHistory: updatedHistory,
                 };
             });
-
             toast.info("Your current queue has been cancelled.");
         } catch (error) {
             toast.error("Failed to cancel queue. Please try again.");
@@ -119,7 +126,7 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
     };
 
     // Check if user can join a new queue
-    const canJoinQueue = !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService;
+    const canJoinQueue = !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService && phoneNumber;
 
     return (
         <SidebarProvider>
@@ -193,28 +200,60 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                             </CardHeader>
                             <CardContent>
                                 <div className="grid gap-4">
-                                    <Select
-                                        value={selectedService}
-                                        onValueChange={setSelectedService}
-                                        disabled={!!studentData.currentQueue || isJoiningQueue || isCancellingQueue}
-                                    >
-                                        <SelectTrigger className="w-full">
-                                            <SelectValue placeholder="Select a service point" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {mockServices.map((service: Service) => (
-                                                <SelectItem key={service.id} value={service.id}>
-                                                    {service.name} (Est. Wait: {service.estimatedWaitTime})
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="service-select" className="text-sm font-medium">
+                                            Select Service Point <span className="text-red-500">*</span>
+                                        </Label>
+                                        <Select
+                                            value={selectedService}
+                                            onValueChange={setSelectedService}
+                                            disabled={!!studentData.currentQueue || isJoiningQueue || isCancellingQueue}
+                                        >
+                                            <SelectTrigger className="w-full">
+                                                <SelectValue placeholder="Select a service point" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {mockServices.map((service: Service) => (
+                                                    <SelectItem key={service.id} value={service.id}>
+                                                        {service.name} (Est. Wait: {service.estimatedWaitTime})
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <Label htmlFor="phone" className="text-sm font-medium">
+                                            Mobile Number <span className="text-red-500">*</span>
+                                        </Label>
+                                        <div className="flex">
+                                            <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md">
+                                                +63
+                                            </span>
+                                            <Input
+                                                id="phone"
+                                                type="tel"
+                                                placeholder="9XX XXX XXXX"
+                                                value={phoneNumber}
+                                                onChange={(e) => setPhoneNumber(e.target.value)}
+                                                disabled={!!studentData.currentQueue || isJoiningQueue || isCancellingQueue}
+                                                className="rounded-l-none"
+                                            />
+                                        </div>
+                                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                            <MessageSquare className="h-3 w-3" />
+                                            SMS notifications will be sent to this number
+                                        </p>
+                                    </div>
+
                                     <Button
                                         onClick={handleJoinQueue}
                                         disabled={!canJoinQueue}
+                                        className="w-full"
                                     >
                                         {isJoiningQueue ? "Joining..." : "Join Queue"}
                                     </Button>
+
                                     {studentData.currentQueue && (
                                         <p className="text-sm text-muted-foreground text-center">
                                             You are already in a queue. Please cancel your current queue to join a new one.
