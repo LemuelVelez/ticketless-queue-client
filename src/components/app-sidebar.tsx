@@ -17,7 +17,6 @@ import {
   IconUser,
   IconUsers,
 } from "@tabler/icons-react"
-
 import { NavDocuments } from "@/components/nav-documents"
 import { NavMain } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
@@ -41,17 +40,17 @@ const data = {
   navMain: [
     {
       title: "Dashboard",
-      url: "#",
+      url: "/student",
       icon: IconDashboard,
     },
     {
       title: "My Queue",
-      url: "#",
+      url: "/my-queue",
       icon: IconList,
     },
     {
       title: "Join Queue",
-      url: "#",
+      url: "/student",
       icon: IconTicket,
     },
     {
@@ -212,6 +211,8 @@ export function AppSidebar({
     switch (currentPage) {
       case "dashboard":
         return "Dashboard"
+      case "my-queue":
+        return "My Queue"
       default:
         return "Dashboard"
     }
