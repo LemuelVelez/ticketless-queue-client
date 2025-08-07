@@ -286,7 +286,7 @@ export default function StudentDashboard() {
                                             />
                                         </div>
                                         <p className="text-xs text-muted-foreground flex items-center gap-1">
-                                            <MessageSquare className="h-3 w-3" />
+                                            <MessageSquare className="h-4 w-4" />
                                             SMS notifications will be sent to this number
                                         </p>
                                     </div>

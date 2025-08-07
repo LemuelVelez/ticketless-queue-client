@@ -171,7 +171,7 @@ export default function LoginPage() {
                                     />
                                 </div>
                                 <p className="text-xs text-gray-500 flex items-center gap-1">
-                                    <MessageSquare className="h-3 w-3" />
+                                    <MessageSquare className="h-4 w-4" />
                                     SMS notifications will be sent to this number
                                 </p>
                             </div>
@@ -216,11 +216,11 @@ export default function LoginPage() {
                                 </p>
                                 <div className="flex items-center justify-center gap-4 text-xs text-gray-400">
                                     <span className="flex items-center gap-1">
-                                        <Phone className="h-3 w-3" />
+                                        <Phone className="h-4 w-4" />
                                         SMS Updates
                                     </span>
                                     <span className="flex items-center gap-1">
-                                        <MessageSquare className="h-3 w-3" />
+                                        <MessageSquare className="h-4 w-4" />
                                         Real-time Status
                                     </span>
                                 </div>
