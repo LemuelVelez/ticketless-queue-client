@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react"; // Added useEffect
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import { useState, useEffect } from "react";
 import { IconClock, IconTicket, IconUserCircle } from "@tabler/icons-react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
@@ -14,21 +15,17 @@ import { mockStudent, type StudentData, type QueueHistoryEntry } from "@/data/mo
 import { mockServices, type Service } from "@/data/mock-services";
 
 // Simulate fetching student data based on ID
-// In a real application, this would be an API call
 const getStudentDataById = (id: string): StudentData => {
-    // For now, we'll just return the mockStudent, but in a real app
-    // you'd fetch data specific to the 'id'
-    console.log(`Fetching data for student ID: ${id}`); // Log to show it's being used
+    console.log(`Fetching data for student ID: ${id}`);
     return mockStudent;
 };
 
 export default function StudentDashboard({ studentId, onLogout }: { studentId: string; onLogout: () => void }) {
-    // Initialize studentData using the studentId prop
     const [studentData, setStudentData] = useState<StudentData>(() => getStudentDataById(studentId));
     const [selectedService, setSelectedService] = useState<string>("");
     const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false);
+    const [isCancellingQueue, setIsCancellingQueue] = useState<boolean>(false);
 
-    // Optional: If studentId could change and you need to re-fetch data
     useEffect(() => {
         setStudentData(getStudentDataById(studentId));
     }, [studentId]);
@@ -38,63 +35,99 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
             toast.error("Please select a service to join the queue.");
             return;
         }
-        setIsJoiningQueue(true);
-        // Simulate API call to join queue
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        const serviceInfo = mockServices.find((s: Service) => s.id === selectedService);
-        if (serviceInfo) {
-            const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
-            const newQueueEntry = {
-                service: serviceInfo.name,
-                queueNumber: newQueueNumber,
-                estimatedWaitTime: serviceInfo.estimatedWaitTime,
-                servicePoint: serviceInfo.name,
-            };
-            setStudentData((prev: StudentData) => ({
-                ...prev,
-                currentQueue: newQueueEntry,
-                queueHistory: [
-                    {
-                        id: String(prev.queueHistory.length + 1),
-                        service: serviceInfo.name,
-                        queueNumber: newQueueNumber,
-                        status: "In Progress",
-                        timestamp: new Date().toLocaleString(),
-                    },
-                    ...prev.queueHistory,
-                ],
-            }));
-            toast.success(`Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}.`);
-        } else {
-            toast.error("Failed to join queue. Service not found.");
+
+        // Prevent joining if already in queue or currently processing
+        if (studentData.currentQueue || isJoiningQueue || isCancellingQueue) {
+            toast.error("Cannot join queue at this time.");
+            return;
         }
-        setIsJoiningQueue(false);
+
+        setIsJoiningQueue(true);
+
+        try {
+            // Simulate API call to join queue
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+
+            const serviceInfo = mockServices.find((s: Service) => s.id === selectedService);
+
+            if (serviceInfo) {
+                const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
+                const newQueueEntry = {
+                    service: serviceInfo.name,
+                    queueNumber: newQueueNumber,
+                    estimatedWaitTime: serviceInfo.estimatedWaitTime,
+                    servicePoint: serviceInfo.name,
+                };
+
+                setStudentData((prev: StudentData) => ({
+                    ...prev,
+                    currentQueue: newQueueEntry,
+                    queueHistory: [
+                        {
+                            id: String(Date.now()), // Use timestamp for unique ID
+                            service: serviceInfo.name,
+                            queueNumber: newQueueNumber,
+                            status: "In Progress",
+                            timestamp: new Date().toLocaleString(),
+                        },
+                        ...prev.queueHistory,
+                    ],
+                }));
+
+                // Clear the selected service after successful join
+                setSelectedService("");
+                toast.success(`Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}.`);
+            } else {
+                toast.error("Failed to join queue. Service not found.");
+            }
+        } catch (error) {
+            toast.error("Failed to join queue. Please try again.");
+        } finally {
+            setIsJoiningQueue(false);
+        }
     };
 
     const handleCancelQueue = async () => {
-        setIsJoiningQueue(true); // Reusing for loading state
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        if (studentData.currentQueue) {
+        if (!studentData.currentQueue || isCancellingQueue || isJoiningQueue) {
+            return;
+        }
+
+        setIsCancellingQueue(true);
+
+        try {
+            // Simulate API call to cancel queue
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+
+            const currentQueueNumber = studentData.currentQueue.queueNumber;
+
             setStudentData((prev: StudentData) => {
                 const updatedHistory: QueueHistoryEntry[] = prev.queueHistory.map((entry: QueueHistoryEntry) =>
-                    entry.queueNumber === prev.currentQueue?.queueNumber && entry.status === "In Progress"
+                    entry.queueNumber === currentQueueNumber && entry.status === "In Progress"
                         ? { ...entry, status: "Cancelled" }
                         : entry
                 );
+
                 return {
                     ...prev,
-                    currentQueue: null,
+                    currentQueue: null, // Clear current queue
                     queueHistory: updatedHistory,
                 };
             });
+
             toast.info("Your current queue has been cancelled.");
+        } catch (error) {
+            toast.error("Failed to cancel queue. Please try again.");
+        } finally {
+            setIsCancellingQueue(false);
         }
-        setIsJoiningQueue(false);
     };
+
+    // Check if user can join a new queue
+    const canJoinQueue = !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService;
 
     return (
         <SidebarProvider>
-            <AppSidebar />
+            <AppSidebar onLogout={onLogout} />
             <SidebarInset>
                 <SiteHeader />
                 <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
@@ -117,11 +150,9 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                         <p className="text-sm text-muted-foreground">{studentData.email}</p>
                                     </div>
                                 </div>
-                                <Button variant="outline" className="mt-4 w-full" onClick={onLogout}>
-                                    Logout
-                                </Button>
                             </CardContent>
                         </Card>
+
                         {/* Current Queue Status Card */}
                         <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -145,9 +176,9 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                             variant="destructive"
                                             className="mt-4 w-full"
                                             onClick={handleCancelQueue}
-                                            disabled={isJoiningQueue}
+                                            disabled={isCancellingQueue || isJoiningQueue}
                                         >
-                                            {isJoiningQueue ? "Cancelling..." : "Cancel Queue"}
+                                            {isCancellingQueue ? "Cancelling..." : "Cancel Queue"}
                                         </Button>
                                     </div>
                                 ) : (
@@ -158,6 +189,7 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                 )}
                             </CardContent>
                         </Card>
+
                         {/* Join New Queue Card */}
                         <Card className="lg:col-span-1">
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -165,7 +197,11 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                             </CardHeader>
                             <CardContent>
                                 <div className="grid gap-4">
-                                    <Select value={selectedService} onValueChange={setSelectedService}>
+                                    <Select
+                                        value={selectedService}
+                                        onValueChange={setSelectedService}
+                                        disabled={!!studentData.currentQueue || isJoiningQueue || isCancellingQueue}
+                                    >
                                         <SelectTrigger className="w-full">
                                             <SelectValue placeholder="Select a service point" />
                                         </SelectTrigger>
@@ -179,7 +215,7 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                     </Select>
                                     <Button
                                         onClick={handleJoinQueue}
-                                        disabled={!selectedService || isJoiningQueue || !!studentData.currentQueue}
+                                        disabled={!canJoinQueue}
                                     >
                                         {isJoiningQueue ? "Joining..." : "Join Queue"}
                                     </Button>
@@ -188,10 +224,16 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                             You are already in a queue. Please cancel your current queue to join a new one.
                                         </p>
                                     )}
+                                    {(isJoiningQueue || isCancellingQueue) && !studentData.currentQueue && (
+                                        <p className="text-sm text-muted-foreground text-center">
+                                            Please wait while processing your request...
+                                        </p>
+                                    )}
                                 </div>
                             </CardContent>
                         </Card>
                     </div>
+
                     {/* Queue History Table */}
                     <Card>
                         <CardHeader>
