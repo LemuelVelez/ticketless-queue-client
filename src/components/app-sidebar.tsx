@@ -201,10 +201,22 @@ const data = {
 
 export function AppSidebar({
   onLogout,
+  currentPage = "dashboard",
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   onLogout?: () => void
+  currentPage?: string
 }) {
+  // Map current page to active nav items
+  const getActiveNavItem = () => {
+    switch (currentPage) {
+      case "dashboard":
+        return "Dashboard"
+      default:
+        return "Dashboard"
+    }
+  }
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
@@ -223,7 +235,7 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={data.navMain} />
+        <NavMain items={data.navMain} activeItem={getActiveNavItem()} />
         <NavDocuments items={data.documents} />
         <NavSecondary items={data.navSecondary} className="mt-auto" />
       </SidebarContent>

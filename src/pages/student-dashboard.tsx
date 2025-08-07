@@ -43,13 +43,11 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
         }
 
         setIsJoiningQueue(true);
-
         try {
             // Simulate API call to join queue
             await new Promise((resolve) => setTimeout(resolve, 2000));
 
             const serviceInfo = mockServices.find((s: Service) => s.id === selectedService);
-
             if (serviceInfo) {
                 const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
                 const newQueueEntry = {
@@ -93,13 +91,11 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
         }
 
         setIsCancellingQueue(true);
-
         try {
             // Simulate API call to cancel queue
             await new Promise((resolve) => setTimeout(resolve, 1500));
 
             const currentQueueNumber = studentData.currentQueue.queueNumber;
-
             setStudentData((prev: StudentData) => {
                 const updatedHistory: QueueHistoryEntry[] = prev.queueHistory.map((entry: QueueHistoryEntry) =>
                     entry.queueNumber === currentQueueNumber && entry.status === "In Progress"
@@ -127,7 +123,7 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
 
     return (
         <SidebarProvider>
-            <AppSidebar onLogout={onLogout} />
+            <AppSidebar onLogout={onLogout} currentPage="dashboard" />
             <SidebarInset>
                 <SiteHeader />
                 <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">

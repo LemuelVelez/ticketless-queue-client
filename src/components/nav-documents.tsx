@@ -27,12 +27,14 @@ import {
 
 export function NavDocuments({
   items,
+  activeItem,
 }: {
   items: {
     name: string
     url: string
     icon: Icon
   }[]
+  activeItem?: string
 }) {
   const { isMobile } = useSidebar()
 
@@ -42,7 +44,17 @@ export function NavDocuments({
       <SidebarMenu>
         {items.map((item) => (
           <SidebarMenuItem key={item.name}>
-            <SidebarMenuButton asChild>
+            <SidebarMenuButton
+              asChild
+              isActive={activeItem === item.name}
+              className={`
+                ${activeItem === item.name
+                  ? 'bg-green-100 text-green-900 border-l-4 border-green-600 font-semibold dark:bg-green-900 dark:text-green-100 dark:border-green-400'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                }
+                transition-all duration-200
+              `}
+            >
               <a href={item.url}>
                 <item.icon />
                 <span>{item.name}</span>

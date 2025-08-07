@@ -13,6 +13,7 @@ import {
 
 export function NavSecondary({
   items,
+  activeItem,
   ...props
 }: {
   items: {
@@ -20,6 +21,7 @@ export function NavSecondary({
     url: string
     icon: Icon
   }[]
+  activeItem?: string
 } & React.ComponentPropsWithoutRef<typeof SidebarGroup>) {
   return (
     <SidebarGroup {...props}>
@@ -27,7 +29,17 @@ export function NavSecondary({
         <SidebarMenu>
           {items.map((item) => (
             <SidebarMenuItem key={item.title}>
-              <SidebarMenuButton asChild>
+              <SidebarMenuButton
+                asChild
+                isActive={activeItem === item.title}
+                className={`
+                  ${activeItem === item.title
+                    ? 'bg-purple-100 text-purple-900 border-l-4 border-purple-600 font-semibold dark:bg-purple-900 dark:text-purple-100 dark:border-purple-400'
+                    : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                  }
+                  transition-all duration-200
+                `}
+              >
                 <a href={item.url}>
                   <item.icon />
                   <span>{item.title}</span>
