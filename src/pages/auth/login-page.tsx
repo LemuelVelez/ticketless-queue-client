@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,68 +18,63 @@ const servicePoints = [
     { id: "rotc", name: "ROTC Office", description: "ROTC Processing, Requirements", icon: "🎖️", estimatedWait: "10-15 min" }
 ];
 
-export interface QueueData {
-    service: string;
-    queueNumber: string;
-    estimatedWaitTime: string;
-    servicePoint: string;
-    phoneNumber: string;
-}
-
-export default function LoginPage({ onLoginSuccess, onBack }: {
-    onLoginSuccess: (studentId: string, queueData: QueueData) => void;
-    onBack?: () => void;
-}) {
+export default function LoginPage() {
+    const navigate = useNavigate();
+    const { login } = useAuth();
     const [studentId, setStudentId] = useState("");
     const [selectedService, setSelectedService] = useState("");
     const [phoneNumber, setPhoneNumber] = useState("");
     const [loading, setLoading] = useState(false);
 
+    const handleBack = () => {
+        navigate('/');
+    };
+
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
-        
+
         if (!selectedService) {
             toast.error("Please select a service point.");
             return;
         }
-        
+
         if (!phoneNumber) {
             toast.error("Please provide your mobile number for SMS notifications.");
             return;
         }
 
         setLoading(true);
-        
+
         // Simulate API call for student verification and queue generation
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        
+
         // Simulate student ID validation (in real implementation, this would check against JRMSU database)
         const isValidStudentId = /^\d{4}-\d{4}$/.test(studentId) || studentId === "12345";
-        
+
         if (isValidStudentId) {
             const selectedServicePoint = servicePoints.find(sp => sp.id === selectedService);
             if (selectedServicePoint) {
                 const queueNumber = `${selectedServicePoint.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
-                
-                const queueData: QueueData = {
+                const queueData = {
                     service: selectedServicePoint.name,
                     queueNumber: queueNumber,
                     estimatedWaitTime: selectedServicePoint.estimatedWait,
                     servicePoint: selectedServicePoint.name,
                     phoneNumber: phoneNumber
                 };
-                
+
                 toast.success(
                     `Queue number generated successfully! Your number is ${queueNumber} for ${selectedServicePoint.name}. SMS notification sent to +63${phoneNumber}.`
                 );
-                
-                // Pass both student ID and queue data to the dashboard
-                onLoginSuccess(studentId, queueData);
+
+                // Use auth context to login and navigate to dashboard
+                login(studentId, queueData);
+                navigate('/student');
             }
         } else {
             toast.error("Invalid Student ID format. Please use format: YYYY-NNNN (e.g., 2021-0001)");
         }
-        
+
         setLoading(false);
     };
 
@@ -87,16 +84,14 @@ export default function LoginPage({ onLoginSuccess, onBack }: {
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50 p-4">
             {/* Header */}
             <div className="max-w-md mx-auto pt-4 mb-6">
-                {onBack && (
-                    <Button
-                        variant="ghost"
-                        onClick={onBack}
-                        className="mb-4 text-gray-600 hover:text-gray-900"
-                    >
-                        <ArrowLeft className="h-4 w-4 mr-2" />
-                        Back to Welcome
-                    </Button>
-                )}
+                <Button
+                    variant="ghost"
+                    onClick={handleBack}
+                    className="mb-4 text-gray-600 hover:text-gray-900"
+                >
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Back to Welcome
+                </Button>
                 <div className="text-center">
                     <h1 className="text-xl font-bold text-gray-900">JRMSU Queue Management</h1>
                     <p className="text-sm text-gray-600">Generate Your Queue Number</p>

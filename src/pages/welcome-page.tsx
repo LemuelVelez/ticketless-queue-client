@@ -1,8 +1,15 @@
+import { useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Clock, Users, MessageSquare, Volume2, Building2, GraduationCap } from 'lucide-react';
 
-export default function WelcomePage({ onGetStarted }: { onGetStarted: () => void }) {
+export default function WelcomePage() {
+    const navigate = useNavigate();
+
+    const handleGetStarted = () => {
+        navigate('/login');
+    };
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50 p-4">
             {/* Header Section */}
@@ -61,6 +68,7 @@ export default function WelcomePage({ onGetStarted }: { onGetStarted: () => void
                                 <p className="text-sm font-medium text-gray-700">ROTC</p>
                             </div>
                         </div>
+
                         {/* Features */}
                         <div className="grid md:grid-cols-2 gap-4 mb-6">
                             <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
@@ -92,11 +100,12 @@ export default function WelcomePage({ onGetStarted }: { onGetStarted: () => void
                                 </div>
                             </div>
                         </div>
+
                         {/* CTA Button */}
                         <div className="text-center">
                             <Button
                                 size="lg"
-                                onClick={onGetStarted}
+                                onClick={handleGetStarted}
                                 className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-8 py-3 text-base sm:text-lg font-semibold"
                             >
                                 <span className="hidden sm:inline">Get Started - Generate Queue Number</span>

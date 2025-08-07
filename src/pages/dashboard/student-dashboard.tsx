@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { useState, useEffect } from "react";
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 import { IconClock, IconTicket, IconUserCircle } from "@tabler/icons-react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
@@ -23,23 +25,61 @@ const getStudentDataById = (id: string): StudentData => {
     return mockStudent;
 };
 
-export default function StudentDashboard({ studentId, onLogout }: { studentId: string; onLogout: () => void }) {
-    const [studentData, setStudentData] = useState<StudentData>(() => getStudentDataById(studentId));
+export default function StudentDashboard() {
+    const navigate = useNavigate();
+    const { studentId, queueData, logout, isAuthenticated } = useAuth();
+    const [studentData, setStudentData] = useState<StudentData>(() =>
+        studentId ? getStudentDataById(studentId) : mockStudent
+    );
     const [selectedService, setSelectedService] = useState<string>("");
     const [phoneNumber, setPhoneNumber] = useState<string>("");
     const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false);
     const [isCancellingQueue, setIsCancellingQueue] = useState<boolean>(false);
 
+    // Redirect to login if not authenticated
     useEffect(() => {
-        setStudentData(getStudentDataById(studentId));
-    }, [studentId]);
+        if (!isAuthenticated || !studentId) {
+            navigate('/login');
+            return;
+        }
+    }, [isAuthenticated, studentId, navigate]);
+
+    // Initialize student data with queue data from login
+    useEffect(() => {
+        if (studentId) {
+            const data = getStudentDataById(studentId);
+
+            // If we have queue data from login, add it to current queue and history
+            if (queueData) {
+                const newQueueEntry: QueueHistoryEntry = {
+                    id: String(Date.now()),
+                    service: queueData.service,
+                    queueNumber: queueData.queueNumber,
+                    status: "In Progress",
+                    timestamp: new Date().toLocaleString(),
+                };
+
+                setStudentData({
+                    ...data,
+                    currentQueue: queueData,
+                    queueHistory: [newQueueEntry, ...data.queueHistory],
+                });
+            } else {
+                setStudentData(data);
+            }
+        }
+    }, [studentId, queueData]);
+
+    const handleLogout = () => {
+        logout();
+        navigate('/');
+    };
 
     const handleJoinQueue = async () => {
         if (!selectedService) {
             toast.error("Please select a service to join the queue.");
             return;
         }
-
         if (!phoneNumber) {
             toast.error("Please provide your mobile number for SMS notifications.");
             return;
@@ -111,6 +151,7 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                         ? { ...entry, status: "Cancelled" }
                         : entry
                 );
+
                 return {
                     ...prev,
                     currentQueue: null, // Clear current queue
@@ -128,9 +169,14 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
     // Check if user can join a new queue
     const canJoinQueue = !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService && phoneNumber;
 
+    // Don't render if not authenticated
+    if (!isAuthenticated || !studentId) {
+        return null;
+    }
+
     return (
         <SidebarProvider>
-            <AppSidebar onLogout={onLogout} currentPage="dashboard" />
+            <AppSidebar onLogout={handleLogout} currentPage="dashboard" />
             <SidebarInset>
                 <SiteHeader />
                 <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
@@ -221,7 +267,6 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                             </SelectContent>
                                         </Select>
                                     </div>
-
                                     <div className="space-y-2">
                                         <Label htmlFor="phone" className="text-sm font-medium">
                                             Mobile Number <span className="text-red-500">*</span>
@@ -245,7 +290,6 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                             SMS notifications will be sent to this number
                                         </p>
                                     </div>
-
                                     <Button
                                         onClick={handleJoinQueue}
                                         disabled={!canJoinQueue}
@@ -253,7 +297,6 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                     >
                                         {isJoiningQueue ? "Joining..." : "Join Queue"}
                                     </Button>
-
                                     {studentData.currentQueue && (
                                         <p className="text-sm text-muted-foreground text-center">
                                             You are already in a queue. Please cancel your current queue to join a new one.
