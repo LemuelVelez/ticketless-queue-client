@@ -7,7 +7,7 @@ export default function WelcomePage({ onGetStarted }: { onGetStarted: () => void
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50 p-4">
             {/* Header Section */}
             <div className="text-center mb-8 pt-8">
-                <div className="flex items-center justify-center gap-3 mb-4">
+                <div className="flex flex-col items-center justify-center gap-3 mb-4">
                     <GraduationCap className="h-12 w-12 text-blue-600" />
                     <div>
                         <h1 className="text-3xl font-bold text-gray-900">JRMSU</h1>
@@ -61,7 +61,6 @@ export default function WelcomePage({ onGetStarted }: { onGetStarted: () => void
                                 <p className="text-sm font-medium text-gray-700">ROTC</p>
                             </div>
                         </div>
-
                         {/* Features */}
                         <div className="grid md:grid-cols-2 gap-4 mb-6">
                             <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
@@ -93,15 +92,15 @@ export default function WelcomePage({ onGetStarted }: { onGetStarted: () => void
                                 </div>
                             </div>
                         </div>
-
                         {/* CTA Button */}
                         <div className="text-center">
                             <Button
                                 size="lg"
                                 onClick={onGetStarted}
-                                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 text-lg font-semibold"
+                                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-8 py-3 text-base sm:text-lg font-semibold"
                             >
-                                Get Started - Generate Queue Number
+                                <span className="hidden sm:inline">Get Started - Generate Queue Number</span>
+                                <span className="sm:hidden">Generate Queue Number</span>
                             </Button>
                             <p className="text-sm text-gray-500 mt-2">
                                 Use your Student ID to join the queue
