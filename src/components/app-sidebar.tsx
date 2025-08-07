@@ -1,19 +1,20 @@
 import * as React from "react"
 import {
-  IconCamera,
-  IconChartBar,
+  IconBook,
+  IconCalendarEvent,
+  IconCash,
+  IconClipboardList,
   IconDashboard,
-  IconDatabase,
-  IconFileAi,
-  IconFileDescription,
-  IconFileWord,
-  IconFolder,
+  IconFileText,
   IconHelp,
-  IconInnerShadowTop,
-  IconListDetails,
-  IconReport,
-  IconSearch,
+  IconHistory,
+  IconList,
+  IconMedicalCross,
+  IconNotification,
+  IconSchool,
   IconSettings,
+  IconTicket,
+  IconUser,
   IconUsers,
 } from "@tabler/icons-react"
 
@@ -33,9 +34,9 @@ import {
 
 const data = {
   user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
+    name: "Juan Dela Cruz",
+    email: "juan.delacruz@jrmsu.edu.ph",
+    avatar: "/avatars/student.jpg",
   },
   navMain: [
     {
@@ -44,69 +45,119 @@ const data = {
       icon: IconDashboard,
     },
     {
-      title: "Lifecycle",
+      title: "My Queue",
       url: "#",
-      icon: IconListDetails,
+      icon: IconList,
     },
     {
-      title: "Analytics",
+      title: "Join Queue",
       url: "#",
-      icon: IconChartBar,
+      icon: IconTicket,
     },
     {
-      title: "Projects",
+      title: "Queue History",
       url: "#",
-      icon: IconFolder,
+      icon: IconHistory,
     },
     {
-      title: "Team",
+      title: "Notifications",
       url: "#",
-      icon: IconUsers,
+      icon: IconNotification,
     },
   ],
-  navClouds: [
+  navServices: [
     {
-      title: "Capture",
-      icon: IconCamera,
-      isActive: true,
+      title: "Registrar Office",
+      icon: IconFileText,
+      isActive: false,
       url: "#",
       items: [
         {
-          title: "Active Proposals",
+          title: "Transcript Request",
           url: "#",
         },
         {
-          title: "Archived",
+          title: "Enrollment Services",
+          url: "#",
+        },
+        {
+          title: "Certificate Request",
           url: "#",
         },
       ],
     },
     {
-      title: "Proposal",
-      icon: IconFileDescription,
+      title: "Cashier",
+      icon: IconCash,
       url: "#",
       items: [
         {
-          title: "Active Proposals",
+          title: "Tuition Payment",
           url: "#",
         },
         {
-          title: "Archived",
+          title: "Miscellaneous Fees",
+          url: "#",
+        },
+        {
+          title: "Payment History",
           url: "#",
         },
       ],
     },
     {
-      title: "Prompts",
-      icon: IconFileAi,
+      title: "Library",
+      icon: IconBook,
       url: "#",
       items: [
         {
-          title: "Active Proposals",
+          title: "Book Borrowing",
           url: "#",
         },
         {
-          title: "Archived",
+          title: "Book Return",
+          url: "#",
+        },
+        {
+          title: "Research Assistance",
+          url: "#",
+        },
+      ],
+    },
+    {
+      title: "Campus Clinic",
+      icon: IconMedicalCross,
+      url: "#",
+      items: [
+        {
+          title: "Medical Consultation",
+          url: "#",
+        },
+        {
+          title: "Health Certificate",
+          url: "#",
+        },
+        {
+          title: "Medical Records",
+          url: "#",
+        },
+      ],
+    },
+    {
+      title: "NSTP/ROTC",
+      icon: IconUsers,
+      url: "#",
+      items: [
+        {
+          title: "NSTP Registration",
+          url: "#",
+        },
+        {
+          title: "ROTC Processing",
+          url: "#",
+        },
+        {
+          title: "Community Service",
           url: "#",
         },
       ],
@@ -114,36 +165,36 @@ const data = {
   ],
   navSecondary: [
     {
-      title: "Settings",
+      title: "Profile Settings",
       url: "#",
-      icon: IconSettings,
+      icon: IconUser,
     },
     {
-      title: "Get Help",
+      title: "Help & Support",
       url: "#",
       icon: IconHelp,
     },
     {
-      title: "Search",
+      title: "SMS Settings",
       url: "#",
-      icon: IconSearch,
+      icon: IconSettings,
     },
   ],
   documents: [
     {
-      name: "Data Library",
+      name: "Student Handbook",
       url: "#",
-      icon: IconDatabase,
+      icon: IconBook,
     },
     {
-      name: "Reports",
+      name: "Service Directory",
       url: "#",
-      icon: IconReport,
+      icon: IconClipboardList,
     },
     {
-      name: "Word Assistant",
+      name: "Academic Calendar",
       url: "#",
-      icon: IconFileWord,
+      icon: IconCalendarEvent,
     },
   ],
 }
@@ -159,8 +210,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               className="data-[slot=sidebar-menu-button]:!p-1.5"
             >
               <a href="#">
-                <IconInnerShadowTop className="!size-5" />
-                <span className="text-base font-semibold">Acme Inc.</span>
+                <IconSchool className="!size-5" />
+                <span className="text-base font-semibold">JRMSU Queue</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>

@@ -153,7 +153,7 @@ export default function StudentDashboard({ studentId, onLogout }: { studentId: s
                                 ) : (
                                     <div className="text-muted-foreground text-center">
                                         <p>You are not currently in a queue.</p>
-                                        <p className="mt-2 text-sm">Select a service below to join a new queue.</p>
+                                        <p className="mt-2 text-sm">Select a service point to join a new queue.</p>
                                     </div>
                                 )}
                             </CardContent>
