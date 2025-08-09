@@ -1,11 +1,9 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { useState, useEffect } from "react";
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-    IconClock,
     IconTicket,
-    IconMapPin,
-    IconPhone,
     IconRefresh,
     IconX,
     IconCheck

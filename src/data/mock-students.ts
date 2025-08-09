@@ -1,4 +1,5 @@
 export interface QueueEntry {
+  phoneNumber: ReactNode;
   service: string;
   queueNumber: string;
   estimatedWaitTime: string;
