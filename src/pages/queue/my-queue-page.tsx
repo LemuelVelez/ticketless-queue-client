@@ -8,7 +8,7 @@ import {
     IconX,
     IconCheck
 } from "@tabler/icons-react";
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppSidebar } from "@/components/student-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";

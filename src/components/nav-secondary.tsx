@@ -2,7 +2,6 @@
 
 import * as React from "react"
 import { type Icon } from "@tabler/icons-react"
-
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -10,6 +9,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { Link } from "react-router-dom"
 
 export function NavSecondary({
   items,
@@ -32,18 +32,15 @@ export function NavSecondary({
               <SidebarMenuButton
                 asChild
                 isActive={activeItem === item.title}
-                className={`
-                  ${activeItem === item.title
-                    ? 'bg-purple-100 text-purple-900 border-l-4 border-purple-600 font-semibold dark:bg-purple-900 dark:text-purple-100 dark:border-purple-400'
-                    : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                  }
-                  transition-all duration-200
-                `}
+                className={`${activeItem === item.title
+                    ? "bg-purple-100 text-purple-900 border-l-4 border-purple-600 font-semibold dark:bg-purple-900 dark:text-purple-100 dark:border-purple-400"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-800"
+                  } transition-all duration-200`}
               >
-                <a href={item.url}>
+                <Link to={item.url}>
                   <item.icon />
                   <span>{item.title}</span>
-                </a>
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           ))}
