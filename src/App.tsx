@@ -1,10 +1,11 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import WelcomePage from './pages/welcome-page';
-import LoginPage from './pages/auth/login-page';
-import StudentDashboard from './pages/dashboard/student-dashboard';
-import MyQueuePage from './pages/queue/my-queue-page';
-import { Toaster } from 'sonner';
-import { AuthProvider } from './contexts/AuthContext';
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
+import WelcomePage from "./pages/welcome-page"
+import LoginPage from "./pages/auth/login-page"
+import StudentDashboard from "./pages/dashboard/student-dashboard"
+import MyQueuePage from "./pages/queue/my-queue-page"
+import JoinQueuePage from "./pages/queue/join-queue-page"
+import { Toaster } from "sonner"
+import { AuthProvider } from "./contexts/AuthContext"
 
 function App() {
   return (
@@ -15,11 +16,12 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/student" element={<StudentDashboard />} />
           <Route path="/my-queue" element={<MyQueuePage />} />
+          <Route path="/join-queue" element={<JoinQueuePage />} />
         </Routes>
         <Toaster richColors position="top-center" />
       </Router>
     </AuthProvider>
-  );
+  )
 }
 
-export default App;
+export default App

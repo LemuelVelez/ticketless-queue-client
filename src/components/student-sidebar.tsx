@@ -50,7 +50,7 @@ const data = {
     },
     {
       title: "Join Queue",
-      url: "#",
+      url: "/join-queue",
       icon: IconTicket,
     },
     {
