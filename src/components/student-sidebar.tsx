@@ -17,7 +17,6 @@ import {
   IconUser,
   IconUsers,
 } from "@tabler/icons-react"
-
 import { NavDocuments } from "@/components/nav-documents"
 import { NavMain } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
@@ -56,7 +55,7 @@ const data = {
     },
     {
       title: "Queue History",
-      url: "#",
+      url: "/queue-history", // updated to real route
       icon: IconHistory,
     },
     {
@@ -216,6 +215,8 @@ export function AppSidebar({
         return "My Queue"
       case "join-queue":
         return "Join Queue"
+      case "queue-history":
+        return "Queue History"
       default:
         return "Dashboard"
     }
