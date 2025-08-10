@@ -1,54 +1,55 @@
+"use client"
+
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { useState, useEffect } from "react";
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
-import { IconClock, IconTicket, IconUserCircle } from "@tabler/icons-react";
-import { AppSidebar } from "@/components/student-sidebar";
-import { SiteHeader } from "@/components/site-header";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
-import { MessageSquare } from 'lucide-react';
-import { mockStudent, type StudentData, type QueueHistoryEntry } from "@/data/mock-students";
-import { mockServices, type Service } from "@/data/mock-services";
+import { useState, useEffect } from "react"
+import { useNavigate } from "react-router-dom"
+import { useAuth } from "@/contexts/AuthContext"
+import { IconClock, IconTicket, IconUserCircle } from "@tabler/icons-react"
+import { AppSidebar } from "@/components/student-sidebar"
+import { SiteHeader } from "@/components/site-header"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
+import { toast } from "sonner"
+import { MessageSquare } from "lucide-react"
+import { mockStudent, type StudentData, type QueueHistoryEntry } from "@/data/mock-students"
+import { mockServices, type Service } from "@/data/mock-services"
 
 // Simulate fetching student data based on ID
 const getStudentDataById = (id: string): StudentData => {
-    console.log(`Fetching data for student ID: ${id}`);
-    return mockStudent;
-};
+    console.log(`Fetching data for student ID: ${id}`)
+    return mockStudent
+}
 
 export default function StudentDashboard() {
-    const navigate = useNavigate();
-    const { studentId, queueData, logout, isAuthenticated } = useAuth();
+    const navigate = useNavigate()
+    const { studentId, queueData, logout, isAuthenticated } = useAuth()
     const [studentData, setStudentData] = useState<StudentData>(() =>
-        studentId ? getStudentDataById(studentId) : mockStudent
-    );
-    const [selectedService, setSelectedService] = useState<string>("");
-    const [phoneNumber, setPhoneNumber] = useState<string>("");
-    const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false);
-    const [isCancellingQueue, setIsCancellingQueue] = useState<boolean>(false);
+        studentId ? getStudentDataById(studentId) : mockStudent,
+    )
+    const [selectedService, setSelectedService] = useState<string>("")
+    const [phoneNumber, setPhoneNumber] = useState<string>("")
+    const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false)
+    const [isCancellingQueue, setIsCancellingQueue] = useState<boolean>(false)
 
     // Redirect to login if not authenticated
     useEffect(() => {
         if (!isAuthenticated || !studentId) {
-            navigate('/login');
-            return;
+            navigate("/login")
+            return
         }
-    }, [isAuthenticated, studentId, navigate]);
+    }, [isAuthenticated, studentId, navigate])
 
     // Initialize student data with queue data from login
     useEffect(() => {
         if (studentId) {
-            const data = getStudentDataById(studentId);
-
+            const data = getStudentDataById(studentId)
             // If we have queue data from login, add it to current queue and history
             if (queueData) {
                 const newQueueEntry: QueueHistoryEntry = {
@@ -57,54 +58,54 @@ export default function StudentDashboard() {
                     queueNumber: queueData.queueNumber,
                     status: "In Progress",
                     timestamp: new Date().toLocaleString(),
-                };
-
+                }
                 setStudentData({
                     ...data,
                     currentQueue: queueData,
                     queueHistory: [newQueueEntry, ...data.queueHistory],
-                });
+                })
             } else {
-                setStudentData(data);
+                setStudentData(data)
             }
         }
-    }, [studentId, queueData]);
+    }, [studentId, queueData])
 
     const handleLogout = () => {
-        logout();
-        navigate('/');
-    };
+        logout()
+        navigate("/")
+    }
 
     const handleJoinQueue = async () => {
         if (!selectedService) {
-            toast.error("Please select a service to join the queue.");
-            return;
+            toast.error("Please select a service to join the queue.")
+            return
         }
         if (!phoneNumber) {
-            toast.error("Please provide your mobile number for SMS notifications.");
-            return;
+            toast.error("Please provide your mobile number for SMS notifications.")
+            return
         }
 
         // Prevent joining if already in queue or currently processing
         if (studentData.currentQueue || isJoiningQueue || isCancellingQueue) {
-            toast.error("Cannot join queue at this time.");
-            return;
+            toast.error("Cannot join queue at this time.")
+            return
         }
 
-        setIsJoiningQueue(true);
+        setIsJoiningQueue(true)
         try {
             // Simulate API call to join queue
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-            const serviceInfo = mockServices.find((s: Service) => s.id === selectedService);
+            await new Promise((resolve) => setTimeout(resolve, 2000))
+
+            const serviceInfo = mockServices.find((s: Service) => s.id === selectedService)
             if (serviceInfo) {
-                const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
+                const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`
                 const newQueueEntry = {
                     service: serviceInfo.name,
                     queueNumber: newQueueNumber,
                     estimatedWaitTime: serviceInfo.estimatedWaitTime,
                     servicePoint: serviceInfo.name,
-                    phoneNumber: phoneNumber
-                };
+                    phoneNumber: phoneNumber,
+                }
 
                 setStudentData((prev: StudentData) => ({
                     ...prev,
@@ -119,63 +120,70 @@ export default function StudentDashboard() {
                         },
                         ...prev.queueHistory,
                     ],
-                }));
+                }))
 
                 // Clear the selected service and phone number after successful join
-                setSelectedService("");
-                setPhoneNumber("");
-                toast.success(`Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}. SMS notification sent to +63${phoneNumber}.`);
+                setSelectedService("")
+                setPhoneNumber("")
+                toast.success(
+                    `Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}. SMS notification sent to +63${phoneNumber}.`,
+                )
             } else {
-                toast.error("Failed to join queue. Service not found.");
+                toast.error("Failed to join queue. Service not found.")
             }
         } catch (error) {
-            toast.error("Failed to join queue. Please try again.");
+            toast.error("Failed to join queue. Please try again.")
         } finally {
-            setIsJoiningQueue(false);
+            setIsJoiningQueue(false)
         }
-    };
+    }
 
     const handleCancelQueue = async () => {
         if (!studentData.currentQueue || isCancellingQueue || isJoiningQueue) {
-            return;
+            return
         }
 
-        setIsCancellingQueue(true);
+        setIsCancellingQueue(true)
         try {
             // Simulate API call to cancel queue
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            const currentQueueNumber = studentData.currentQueue.queueNumber;
+            await new Promise((resolve) => setTimeout(resolve, 1500))
+
+            const currentQueueNumber = studentData.currentQueue.queueNumber
+
             setStudentData((prev: StudentData) => {
                 const updatedHistory: QueueHistoryEntry[] = prev.queueHistory.map((entry: QueueHistoryEntry) =>
                     entry.queueNumber === currentQueueNumber && entry.status === "In Progress"
                         ? { ...entry, status: "Cancelled" }
-                        : entry
-                );
+                        : entry,
+                )
 
                 return {
                     ...prev,
                     currentQueue: null, // Clear current queue
                     queueHistory: updatedHistory,
-                };
-            });
-            toast.info("Your current queue has been cancelled.");
+                }
+            })
+
+            toast.info("Your current queue has been cancelled.")
         } catch (error) {
-            toast.error("Failed to cancel queue. Please try again.");
+            toast.error("Failed to cancel queue. Please try again.")
         } finally {
-            setIsCancellingQueue(false);
+            setIsCancellingQueue(false)
         }
-    };
+    }
 
     // Check if user can join a new queue
-    const canJoinQueue = !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService && phoneNumber;
+    const canJoinQueue =
+        !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService && phoneNumber
 
     // Don't render if not authenticated
     if (!isAuthenticated || !studentId) {
-        return null;
+        return null
     }
 
     return (
         <SidebarProvider>
+            {/* Sidebar is responsive (off-canvas on mobile) via the shadcn sidebar primitives. [^1] */}
             <AppSidebar onLogout={handleLogout} currentPage="dashboard" />
             <SidebarInset>
                 <SiteHeader />
@@ -188,10 +196,15 @@ export default function StudentDashboard() {
                                 <IconUserCircle className="h-4 w-4 text-muted-foreground" />
                             </CardHeader>
                             <CardContent>
-                                <div className="flex items-center gap-4">
+                                <div className="flex flex-col items-center sm:flex-row sm:items-center gap-4 text-center sm:text-left">
                                     <Avatar className="h-16 w-16">
                                         <AvatarImage src={studentData.avatar || "/placeholder.svg"} alt={studentData.name} />
-                                        <AvatarFallback>{studentData.name.split(" ").map((n: string) => n[0]).join("")}</AvatarFallback>
+                                        <AvatarFallback>
+                                            {studentData.name
+                                                .split(" ")
+                                                .map((n: string) => n[0])
+                                                .join("")}
+                                        </AvatarFallback>
                                     </Avatar>
                                     <div>
                                         <p className="text-2xl font-bold">{studentData.name}</p>
@@ -212,9 +225,7 @@ export default function StudentDashboard() {
                                 {studentData.currentQueue ? (
                                     <div className="grid gap-2">
                                         <p className="text-2xl font-bold">{studentData.currentQueue.queueNumber}</p>
-                                        <p className="text-sm text-muted-foreground">
-                                            Service: {studentData.currentQueue.service}
-                                        </p>
+                                        <p className="text-sm text-muted-foreground">Service: {studentData.currentQueue.service}</p>
                                         <p className="text-sm text-muted-foreground flex items-center gap-1">
                                             <IconClock className="h-4 w-4" /> Estimated Wait: {studentData.currentQueue.estimatedWaitTime}
                                         </p>
@@ -267,6 +278,7 @@ export default function StudentDashboard() {
                                             </SelectContent>
                                         </Select>
                                     </div>
+
                                     <div className="space-y-2">
                                         <Label htmlFor="phone" className="text-sm font-medium">
                                             Mobile Number <span className="text-red-500">*</span>
@@ -290,13 +302,11 @@ export default function StudentDashboard() {
                                             SMS notifications will be sent to this number
                                         </p>
                                     </div>
-                                    <Button
-                                        onClick={handleJoinQueue}
-                                        disabled={!canJoinQueue}
-                                        className="w-full"
-                                    >
+
+                                    <Button onClick={handleJoinQueue} disabled={!canJoinQueue} className="w-full">
                                         {isJoiningQueue ? "Joining..." : "Join Queue"}
                                     </Button>
+
                                     {studentData.currentQueue && (
                                         <p className="text-sm text-muted-foreground text-center">
                                             You are already in a queue. Please cancel your current queue to join a new one.
@@ -367,5 +377,5 @@ export default function StudentDashboard() {
                 </main>
             </SidebarInset>
         </SidebarProvider>
-    );
+    )
 }

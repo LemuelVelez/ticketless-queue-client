@@ -1,11 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 "use client"
-
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { Building2, Clock, MessageSquare, ArrowLeft, Phone } from "lucide-react"
-
 import { useAuth } from "@/contexts/AuthContext"
 import { AppSidebar } from "@/components/student-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -15,13 +13,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-
 import { mockServices, type Service } from "@/data/mock-services"
 
 export default function JoinQueuePage() {
     const navigate = useNavigate()
     const { isAuthenticated, studentId, login, queueData } = useAuth()
-
     const [selectedService, setSelectedService] = useState<string>("")
     const [phoneNumber, setPhoneNumber] = useState<string>("")
     const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false)
@@ -57,7 +53,6 @@ export default function JoinQueuePage() {
             navigate("/login")
             return
         }
-
         // Optional: prevent if already in an active queue per context state
         if (queueData) {
             toast.info("You already have an active queue. Redirecting to My Queue...")
@@ -107,13 +102,14 @@ export default function JoinQueuePage() {
 
     return (
         <SidebarProvider>
+            {/* Sidebar responsiveness is handled by the primitives; no changes needed here. [^1] */}
             <AppSidebar currentPage="join-queue" />
             <SidebarInset>
                 <SiteHeader />
                 <main className="flex flex-1 flex-col gap-6 p-4 lg:gap-8 lg:p-6">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex items-center gap-3">
-                            <Button variant="ghost" onClick={handleBack} className="gap-2">
+                            <Button variant="ghost" onClick={handleBack} className="gap-2 w-full sm:w-auto">
                                 <ArrowLeft className="h-4 w-4" />
                                 Back to Dashboard
                             </Button>
@@ -153,7 +149,7 @@ export default function JoinQueuePage() {
                                     <Label htmlFor="phone" className="text-sm font-medium">
                                         Mobile Number <span className="text-red-500">*</span>
                                     </Label>
-                                    <div className="flex">
+                                    <div className="flex w-full">
                                         <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md">
                                             +63
                                         </span>
@@ -174,14 +170,14 @@ export default function JoinQueuePage() {
 
                                 {selectedServicePoint && (
                                     <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                                        <div className="flex items-center gap-3 mb-2">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3 mb-2">
                                             <Building2 className="h-5 w-5 text-blue-600" />
                                             <div>
                                                 <p className="font-medium text-blue-900">{selectedServicePoint.name}</p>
                                                 <p className="text-sm text-blue-700">{selectedServicePoint.description}</p>
                                             </div>
                                         </div>
-                                        <div className="flex items-center gap-2 text-sm text-blue-600">
+                                        <div className="flex items-start sm:items-center gap-2 text-sm text-blue-600">
                                             <Clock className="h-4 w-4" />
                                             <span>Estimated wait time: {selectedServicePoint.estimatedWaitTime}</span>
                                         </div>
@@ -203,7 +199,7 @@ export default function JoinQueuePage() {
                                     <p className="text-xs text-muted-foreground">
                                         You will receive SMS notifications about your queue status.
                                     </p>
-                                    <div className="flex items-center justify-center gap-4 text-xs text-muted-foreground">
+                                    <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-4 text-xs text-muted-foreground">
                                         <span className="flex items-center gap-1">
                                             <Phone className="h-4 w-4" />
                                             SMS Updates
