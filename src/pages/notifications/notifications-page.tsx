@@ -28,6 +28,7 @@ import {
   Settings,
   Megaphone,
   Filter,
+  Search,
 } from "lucide-react"
 
 import { mockNotifications, type NotificationItem, type NotificationCategory } from "@/data/mock-notifications"
@@ -160,12 +161,12 @@ export default function NotificationsPage() {
 
   return (
     <SidebarProvider>
-      {/* Sidebar uses shadcn/ui primitives that automatically switch to an off-canvas Sheet on mobile for responsiveness. [^4] */}
+      {/* Sidebar collapses to a sheet on mobile; main content uses a vertical flow on small screens. */}
       <AppSidebar currentPage="notifications" />
       <SidebarInset>
         <SiteHeader />
         <main className="flex flex-1 flex-col gap-6 p-4 lg:gap-8 lg:p-6">
-          {/* Page header */}
+          {/* Page header - vertical on mobile, horizontal on sm+ */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Notifications</h1>
@@ -173,7 +174,7 @@ export default function NotificationsPage() {
                 Stay updated with queue changes, SMS reminders, voiceover events, and system notices.
               </p>
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
               <Button
                 variant="outline"
                 className="gap-2 bg-transparent"
@@ -190,7 +191,7 @@ export default function NotificationsPage() {
             </div>
           </div>
 
-          {/* Filters and search */}
+          {/* Filters and search - stacks vertically on mobile */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2">
@@ -237,12 +238,22 @@ export default function NotificationsPage() {
                   onClick={() => setFilter("system")}
                 />
               </div>
+
+              {/* Search with Lucide icon */}
               <div className="w-full md:w-80">
-                <Input
-                  placeholder="Search by service, queue number, or message..."
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
+                <div className="relative">
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <Input
+                    aria-label="Search notifications"
+                    placeholder="Search by service, queue number, or message..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -260,8 +271,8 @@ export default function NotificationsPage() {
             </CardHeader>
             <CardContent className="space-y-2">
               {filtered.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
-                  <div className="p-4 bg-gray-100 rounded-full">
+                <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                  <div className="rounded-full bg-gray-100 p-4">
                     <Bell className="h-10 w-10 text-gray-400" />
                   </div>
                   <div>
@@ -275,25 +286,26 @@ export default function NotificationsPage() {
                   return (
                     <div
                       key={n.id}
-                      className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border rounded-md p-4 ${n.read ? "bg-background" : "bg-blue-50/40 dark:bg-blue-900/10"}`}
+                      className={`flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-md border p-4 ${n.read ? "bg-background" : "bg-blue-50/40 dark:bg-blue-900/10"}`}
                       role="article"
                       aria-live="polite"
                     >
-                      <div className="flex items-start gap-3">
+                      {/* LEFT: icon + text */}
+                      <div className="flex flex-1 items-start gap-3">
                         <div
-                          className={`p-2 rounded-full ${n.category === "queue"
-                              ? "bg-blue-100 text-blue-700"
-                              : n.category === "sms"
-                                ? "bg-green-100 text-green-700"
-                                : n.category === "voiceover"
-                                  ? "bg-purple-100 text-purple-700"
-                                  : "bg-gray-100 text-gray-700"
+                          className={`rounded-full p-2 ${n.category === "queue"
+                            ? "bg-blue-100 text-blue-700"
+                            : n.category === "sms"
+                              ? "bg-green-100 text-green-700"
+                              : n.category === "voiceover"
+                                ? "bg-purple-100 text-purple-700"
+                                : "bg-gray-100 text-gray-700"
                             }`}
                         >
-                          <Icon className="h-4 w-4" />
+                          <Icon className="h-4 w-4" aria-hidden="true" />
                         </div>
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
                             <p className="font-medium">{n.title}</p>
                             <Badge variant="outline" className="capitalize">
                               {n.category}
@@ -302,7 +314,7 @@ export default function NotificationsPage() {
                               <span className="inline-flex h-2 w-2 rounded-full bg-blue-600" aria-label="unread" />
                             )}
                           </div>
-                          <p className="text-sm text-muted-foreground mt-0.5">{n.message}</p>
+                          <p className="mt-0.5 line-clamp-3 text-sm text-muted-foreground">{n.message}</p>
                           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                             {n.meta?.service && (
                               <Badge variant="secondary" className="bg-gray-100 text-gray-700">
@@ -318,24 +330,26 @@ export default function NotificationsPage() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+
+                      {/* RIGHT: actions - FULL WIDTH on mobile, inline on sm+ */}
+                      <div className="flex w-full flex-wrap items-stretch gap-2 sm:w-auto sm:flex-nowrap sm:items-center sm:justify-end">
                         <Button
                           variant="outline"
-                          className="gap-2 bg-transparent"
+                          className="flex-1 gap-2 bg-transparent sm:flex-none"
                           onClick={() => toggleRead(n.id)}
                           title={n.read ? "Mark as unread" : "Mark as read"}
                         >
                           {n.read ? <Undo2 className="h-4 w-4" /> : <CheckCheck className="h-4 w-4" />}
-                          <span className="hidden sm:inline">{n.read ? "Mark unread" : "Mark read"}</span>
+                          <span className="sm:inline">{n.read ? "Mark unread" : "Mark read"}</span>
                         </Button>
                         <Button
                           variant="ghost"
-                          className="gap-2 text-red-600 hover:text-red-700"
+                          className="flex-1 gap-2 text-red-600 hover:text-red-700 sm:flex-none"
                           onClick={() => removeOne(n.id)}
                           title="Remove notification"
                         >
                           <Trash2 className="h-4 w-4" />
-                          <span className="hidden sm:inline">Remove</span>
+                          <span className="sm:inline">Remove</span>
                         </Button>
                       </div>
                     </div>
@@ -345,7 +359,7 @@ export default function NotificationsPage() {
             </CardContent>
           </Card>
 
-          {/* Preferences */}
+          {/* Preferences - single column on mobile, two columns on md+ */}
           <Card className="border-2 border-blue-100">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -403,9 +417,7 @@ export default function NotificationsPage() {
                 <div className="flex items-start justify-between gap-4 rounded-md border p-4">
                   <div className="space-y-1">
                     <Label className="text-sm font-medium">Test Voiceover</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Play a sample announcement using your browser’s TTS.
-                    </p>
+                    <p className="text-sm text-muted-foreground">Play a sample announcement using your browser’s TTS.</p>
                   </div>
                   <Button variant="outline" className="gap-2 bg-transparent" onClick={testVoiceover}>
                     <Megaphone className="h-4 w-4" />
@@ -416,7 +428,7 @@ export default function NotificationsPage() {
 
               <Separator />
 
-              <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                 <Button
                   variant="outline"
                   className="gap-2 bg-transparent"
@@ -443,7 +455,7 @@ export default function NotificationsPage() {
 
           {/* Info */}
           <div className="flex items-start gap-2 text-sm text-muted-foreground">
-            <EyeOff className="h-4 w-4 mt-0.5" />
+            <EyeOff className="mt-0.5 h-4 w-4" />
             <p>Unread notifications are highlighted. Mark them as read to dim the highlight.</p>
           </div>
         </main>
