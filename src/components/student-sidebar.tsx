@@ -55,12 +55,12 @@ const data = {
     },
     {
       title: "Queue History",
-      url: "/queue-history", // updated to real route
+      url: "/queue-history",
       icon: IconHistory,
     },
     {
       title: "Notifications",
-      url: "#",
+      url: "/notifications",
       icon: IconNotification,
     },
   ],
@@ -217,6 +217,8 @@ export function AppSidebar({
         return "Join Queue"
       case "queue-history":
         return "Queue History"
+      case "notifications":
+        return "Notifications"
       default:
         return "Dashboard"
     }

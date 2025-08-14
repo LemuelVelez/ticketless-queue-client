@@ -1,3 +1,5 @@
+"use client"
+
 import { IconPlus, IconBell, type Icon } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -21,7 +23,6 @@ export function NavMain({
   activeItem?: string
 }) {
   const navigate = useNavigate()
-
   return (
     <SidebarGroup>
       <SidebarGroupContent className="flex flex-col gap-2">
@@ -37,9 +38,9 @@ export function NavMain({
             </SidebarMenuButton>
             <Button
               size="icon"
-              className="size-8 group-data-[collapsible=icon]:opacity-0 cursor-pointer"
+              className="size-8 group-data-[collapsible=icon]:opacity-0 cursor-pointer bg-transparent"
               variant="outline"
-              onClick={() => navigate("/my-queue")}
+              onClick={() => navigate("/notifications")}
               aria-label="Notifications"
               title="Notifications"
             >
@@ -48,7 +49,6 @@ export function NavMain({
             </Button>
           </SidebarMenuItem>
         </SidebarMenu>
-
         <SidebarMenu>
           {items.map((item) => (
             <SidebarMenuItem key={item.title}>

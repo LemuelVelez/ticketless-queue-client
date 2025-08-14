@@ -1,3 +1,6 @@
+// src/data/mock-students.ts
+import type { ReactNode } from "react";
+
 export interface QueueEntry {
   phoneNumber: ReactNode;
   service: string;
