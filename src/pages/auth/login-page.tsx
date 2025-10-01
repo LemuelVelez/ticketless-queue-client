@@ -23,11 +23,46 @@ export default function LoginPage() {
     const { login } = useAuth();
     const [studentId, setStudentId] = useState("");
     const [selectedService, setSelectedService] = useState("");
-    const [phoneNumber, setPhoneNumber] = useState("");
+    // Phone input ALWAYS starts with '9' and keeps up to 10 digits total (9 + 9 more)
+    const [phoneNumber, setPhoneNumber] = useState("9");
     const [loading, setLoading] = useState(false);
 
     const handleBack = () => {
         navigate('/');
+    };
+
+    // Normalize to a 10-digit number starting with 9.
+    // Handles pastes like "+639123456789", "09123456789", "9123456789", etc.
+    const normalizeWithLeading9 = (value: string) => {
+        let d = value.replace(/\D/g, "");
+        if (d.startsWith("63")) d = d.slice(2);
+        if (d.startsWith("0")) d = d.slice(1);
+        if (!d.startsWith("9")) d = "9" + d;
+        if (d.length > 10) d = d.slice(0, 10);
+        if (d.length < 1) d = "9"; // ensure the leading 9 remains
+        return d;
+    };
+
+    const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setPhoneNumber(normalizeWithLeading9(e.target.value));
+    };
+
+    // Prevent deleting the first '9'
+    const handlePhoneKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        const input = e.currentTarget;
+        const start = input.selectionStart ?? 0;
+        const end = input.selectionEnd ?? 0;
+
+        // Block backspace that would remove the first char,
+        // and block delete when caret is at position 0,
+        // and block typing over the first char when selection includes index 0.
+        if (
+            (e.key === "Backspace" && start <= 1 && end <= 1) ||
+            (e.key === "Delete" && start === 0) ||
+            (start === 0 && end > 0 && (e.key === "Backspace" || e.key === "Delete" || e.key.length === 1))
+        ) {
+            e.preventDefault();
+        }
     };
 
     const handleLogin = async (e: React.FormEvent) => {
@@ -38,8 +73,17 @@ export default function LoginPage() {
             return;
         }
 
-        if (!phoneNumber) {
-            toast.error("Please provide your mobile number for SMS notifications.");
+        // Validate Student ID: TC-20-A-00123 (pattern: AA-YY-A-#####)
+        const studentIdPattern = /^[A-Z]{2}-\d{2}-[A-Z]-\d{5}$/;
+        if (!studentIdPattern.test(studentId)) {
+            toast.error("Invalid Student ID format. Please use format: TC-20-A-00123");
+            return;
+        }
+
+        // Validate phone: must be exactly 10 digits and start with 9
+        const phonePattern = /^9\d{9}$/;
+        if (!phonePattern.test(phoneNumber)) {
+            toast.error("Invalid mobile number. It should be 10 digits after +63 (starts with 9).");
             return;
         }
 
@@ -48,37 +92,32 @@ export default function LoginPage() {
         // Simulate API call for student verification and queue generation
         await new Promise((resolve) => setTimeout(resolve, 2000));
 
-        // Simulate student ID validation (in real implementation, this would check against JRMSU database)
-        const isValidStudentId = /^\d{4}-\d{4}$/.test(studentId) || studentId === "12345";
+        const selectedServicePoint = servicePoints.find(sp => sp.id === selectedService);
+        if (selectedServicePoint) {
+            const queueNumber = `${selectedServicePoint.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
+            const fullE164 = `+63${phoneNumber}`;
+            const queueData = {
+                service: selectedServicePoint.name,
+                queueNumber: queueNumber,
+                estimatedWaitTime: selectedServicePoint.estimatedWait,
+                servicePoint: selectedServicePoint.name,
+                phoneNumber: fullE164,
+            };
 
-        if (isValidStudentId) {
-            const selectedServicePoint = servicePoints.find(sp => sp.id === selectedService);
-            if (selectedServicePoint) {
-                const queueNumber = `${selectedServicePoint.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
-                const queueData = {
-                    service: selectedServicePoint.name,
-                    queueNumber: queueNumber,
-                    estimatedWaitTime: selectedServicePoint.estimatedWait,
-                    servicePoint: selectedServicePoint.name,
-                    phoneNumber: phoneNumber
-                };
+            toast.success(
+                `Queue number generated successfully! Your number is ${queueNumber} for ${selectedServicePoint.name}. SMS notification sent to ${fullE164}.`
+            );
 
-                toast.success(
-                    `Queue number generated successfully! Your number is ${queueNumber} for ${selectedServicePoint.name}. SMS notification sent to +63${phoneNumber}.`
-                );
-
-                // Use auth context to login and navigate to dashboard
-                login(studentId, queueData);
-                navigate('/student');
-            }
-        } else {
-            toast.error("Invalid Student ID format. Please use format: YYYY-NNNN (e.g., 2021-0001)");
+            // Use auth context to login and navigate to dashboard
+            login(studentId, queueData);
+            navigate('/student');
         }
 
         setLoading(false);
     };
 
     const selectedServicePoint = servicePoints.find(sp => sp.id === selectedService);
+    const year = new Date(Date.now()).getFullYear();
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50 p-4">
@@ -87,7 +126,7 @@ export default function LoginPage() {
                 <Button
                     variant="ghost"
                     onClick={handleBack}
-                    className="mb-4 text-gray-600 hover:text-gray-900"
+                    className="mb-4 text-gray-600 hover:text-gray-900 cursor-pointer"
                 >
                     <ArrowLeft className="h-4 w-4 mr-2" />
                     Back to Welcome
@@ -117,13 +156,16 @@ export default function LoginPage() {
                                 <Input
                                     id="studentId"
                                     type="text"
-                                    placeholder="e.g., 2021-0001"
+                                    placeholder="TC-20-A-00123"
                                     value={studentId}
-                                    onChange={(e) => setStudentId(e.target.value)}
+                                    onChange={(e) => setStudentId(e.target.value.toUpperCase())}
                                     required
                                     className="text-center font-mono text-lg"
+                                    pattern="^[A-Z]{2}-\d{2}-[A-Z]-\d{5}$"
+                                    title="Use this exact format: TC-20-A-00123"
+                                    autoCapitalize="characters"
                                 />
-                                <p className="text-xs text-gray-500">Format: YYYY-NNNN</p>
+                                <p className="text-xs text-gray-500">Format: <span className="font-mono">TC-20-A-00123</span></p>
                             </div>
 
                             {/* Service Point Selection */}
@@ -132,13 +174,13 @@ export default function LoginPage() {
                                     Select Service Point <span className="text-red-500">*</span>
                                 </Label>
                                 <Select value={selectedService} onValueChange={setSelectedService} required>
-                                    <SelectTrigger>
+                                    <SelectTrigger className="cursor-pointer">
                                         <SelectValue placeholder="Choose your service point" />
                                     </SelectTrigger>
                                     <SelectContent>
                                         {servicePoints.map((service) => (
                                             <SelectItem key={service.id} value={service.id}>
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex items-center gap-2 cursor-pointer">
                                                     <span>{service.icon}</span>
                                                     <div>
                                                         <p className="font-medium">{service.name}</p>
@@ -157,17 +199,23 @@ export default function LoginPage() {
                                     Mobile Number <span className="text-red-500">*</span>
                                 </Label>
                                 <div className="flex">
-                                    <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md">
+                                    <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md select-none">
                                         +63
                                     </span>
                                     <Input
                                         id="phone"
                                         type="tel"
+                                        inputMode="numeric"
+                                        maxLength={10}
+                                        pattern="^9\d{9}$"
                                         placeholder="9XX XXX XXXX"
                                         value={phoneNumber}
-                                        onChange={(e) => setPhoneNumber(e.target.value)}
+                                        onChange={handlePhoneChange}
+                                        onKeyDown={handlePhoneKeyDown}
                                         required
                                         className="rounded-l-none"
+                                        aria-label="Philippine mobile number starting with 9"
+                                        title="+63 followed by 10 digits starting with 9"
                                     />
                                 </div>
                                 <p className="text-xs text-gray-500 flex items-center gap-1">
@@ -196,7 +244,7 @@ export default function LoginPage() {
                             {/* Submit Button */}
                             <Button
                                 type="submit"
-                                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 text-lg font-semibold"
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 text-lg font-semibold cursor-pointer"
                                 disabled={loading}
                             >
                                 {loading ? (
@@ -232,9 +280,9 @@ export default function LoginPage() {
 
             {/* Footer */}
             <div className="text-center mt-8 text-xs text-gray-500">
-                <p>© 2025 Jose Rizal Memorial State University</p>
+                <p>© {year} Jose Rizal Memorial State University</p>
                 <p>Ticketless Queue Management System</p>
             </div>
-        </div>
+        </div >
     );
 }

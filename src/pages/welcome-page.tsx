@@ -10,6 +10,8 @@ export default function WelcomePage() {
         navigate('/login');
     };
 
+    const year = new Date(Date.now()).getFullYear();
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50 p-4">
             {/* Header Section */}
@@ -106,7 +108,7 @@ export default function WelcomePage() {
                             <Button
                                 size="lg"
                                 onClick={handleGetStarted}
-                                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-8 py-3 text-base sm:text-lg font-semibold"
+                                className="w-full cursor-pointer sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-8 py-3 text-base sm:text-lg font-semibold"
                             >
                                 <span className="hidden sm:inline">Get Started - Generate Queue Number</span>
                                 <span className="sm:hidden">Generate Queue Number</span>
@@ -121,7 +123,7 @@ export default function WelcomePage() {
 
             {/* Footer */}
             <div className="text-center text-sm text-gray-500">
-                <p>© 2025 Jose Rizal Memorial State University</p>
+                <p>© {year} Jose Rizal Memorial State University</p>
                 <p>ZNAC, Tampilisan, Zamboanga del Norte</p>
             </div>
         </div>
