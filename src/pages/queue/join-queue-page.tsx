@@ -1,3 +1,4 @@
+// src/pages/queue/join-queue-page.tsx
 /* eslint-disable @typescript-eslint/no-unused-vars */
 "use client"
 import { useEffect, useMemo, useState } from "react"
@@ -18,8 +19,10 @@ import { mockServices, type Service } from "@/data/mock-services"
 export default function JoinQueuePage() {
     const navigate = useNavigate()
     const { isAuthenticated, studentId, login, queueData } = useAuth()
+
     const [selectedService, setSelectedService] = useState<string>("")
-    const [phoneNumber, setPhoneNumber] = useState<string>("")
+    // Phone input MUST start with '9' and be 10 digits total (9 + 9 more)
+    const [phoneNumber, setPhoneNumber] = useState<string>("9")
     const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false)
 
     useEffect(() => {
@@ -33,10 +36,45 @@ export default function JoinQueuePage() {
         [selectedService],
     )
 
-    const canJoin = Boolean(selectedService && phoneNumber && !isJoiningQueue)
+    const isPhoneValid = /^9\d{9}$/.test(phoneNumber)
+    const canJoin = Boolean(selectedService && isPhoneValid && !isJoiningQueue)
 
     const handleBack = () => {
         navigate("/student")
+    }
+
+    // Normalize to a 10-digit number starting with 9.
+    // Handles pastes like "+639123456789", "09123456789", "9123456789", etc.
+    const normalizeWithLeading9 = (value: string) => {
+        let d = value.replace(/\D/g, "")
+        if (d.startsWith("63")) d = d.slice(2)
+        if (d.startsWith("0")) d = d.slice(1)
+        if (!d.startsWith("9")) d = "9" + d
+        if (d.length > 10) d = d.slice(0, 10)
+        if (d.length < 1) d = "9" // ensure the leading 9 remains
+        return d
+    }
+
+    const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setPhoneNumber(normalizeWithLeading9(e.target.value))
+    }
+
+    // Prevent deleting or overwriting the first '9'
+    const handlePhoneKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        const input = e.currentTarget
+        const start = input.selectionStart ?? 0
+        const end = input.selectionEnd ?? 0
+
+        // Block backspace that would remove the first char,
+        // block delete when caret is at position 0,
+        // and block typing over the first char when selection includes index 0.
+        if (
+            (e.key === "Backspace" && start <= 1 && end <= 1) ||
+            (e.key === "Delete" && start === 0) ||
+            (start === 0 && end > 0 && (e.key === "Backspace" || e.key === "Delete" || e.key.length === 1))
+        ) {
+            e.preventDefault()
+        }
     }
 
     const handleJoinQueue = async () => {
@@ -44,8 +82,8 @@ export default function JoinQueuePage() {
             toast.error("Please select a service point.")
             return
         }
-        if (!phoneNumber) {
-            toast.error("Please provide your mobile number for SMS notifications.")
+        if (!isPhoneValid) {
+            toast.error("Invalid mobile number. Enter 10 digits after +63 (must start with 9).")
             return
         }
         if (!studentId) {
@@ -72,19 +110,20 @@ export default function JoinQueuePage() {
             }
 
             const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`
+            const fullE164 = `+63${phoneNumber}`
             const newQueueData = {
                 service: serviceInfo.name,
                 queueNumber: newQueueNumber,
                 estimatedWaitTime: serviceInfo.estimatedWaitTime,
                 servicePoint: serviceInfo.name,
-                phoneNumber,
+                phoneNumber: fullE164,
             }
 
             // Reuse login() to update auth context with the new queue data
             login(studentId, newQueueData)
 
             toast.success(
-                `Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}. SMS notification sent to +63${phoneNumber}.`,
+                `Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}. SMS notification sent to ${fullE164}.`,
             )
 
             // Navigate to My Queue page
@@ -102,7 +141,6 @@ export default function JoinQueuePage() {
 
     return (
         <SidebarProvider>
-            {/* Sidebar responsiveness is handled by the primitives; no changes needed here. [^1] */}
             <AppSidebar currentPage="join-queue" />
             <SidebarInset>
                 <SiteHeader />
@@ -129,15 +167,15 @@ export default function JoinQueuePage() {
                                         Select Service Point <span className="text-red-500">*</span>
                                     </Label>
                                     <Select value={selectedService} onValueChange={setSelectedService}>
-                                        <SelectTrigger className="w-full">
+                                        <SelectTrigger className="w-full cursor-pointer">
                                             <SelectValue placeholder="Select a service point" />
                                         </SelectTrigger>
                                         <SelectContent>
                                             {mockServices.map((service: Service) => (
-                                                <SelectItem key={service.id} value={service.id}>
+                                                <SelectItem key={service.id} value={service.id} className="cursor-pointer">
                                                     <div className="flex items-center justify-between w-full">
                                                         <span>{service.name}</span>
-                                                        <span className="text-xs text-muted-foreground">{service.estimatedWaitTime}</span>
+                                                        <span className="text-xs text-muted-foreground ml-2">{service.estimatedWaitTime}</span>
                                                     </div>
                                                 </SelectItem>
                                             ))}
@@ -150,16 +188,23 @@ export default function JoinQueuePage() {
                                         Mobile Number <span className="text-red-500">*</span>
                                     </Label>
                                     <div className="flex w-full">
-                                        <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md">
+                                        <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md select-none">
                                             +63
                                         </span>
                                         <Input
                                             id="phone"
                                             type="tel"
+                                            inputMode="numeric"
+                                            maxLength={10}
+                                            pattern="^9\d{9}$"
                                             placeholder="9XX XXX XXXX"
                                             value={phoneNumber}
-                                            onChange={(e) => setPhoneNumber(e.target.value)}
+                                            onChange={handlePhoneChange}
+                                            onKeyDown={handlePhoneKeyDown}
+                                            required
                                             className="rounded-l-none"
+                                            aria-label="Philippine mobile number starting with 9"
+                                            title="+63 followed by 10 digits starting with 9"
                                         />
                                     </div>
                                     <p className="text-xs text-muted-foreground flex items-center gap-1">
