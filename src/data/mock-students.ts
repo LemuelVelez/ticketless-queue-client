@@ -27,7 +27,7 @@ export interface StudentData {
 }
 
 export const mockStudent: StudentData = {
-  id: "2021-0001",
+  id: "TC-25-A-00123",
   name: "Juan Dela Cruz",
   email: "juan.delacruz@jrmsu.edu.ph",
   avatar: "/placeholder.svg?height=128&width=128",

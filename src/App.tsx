@@ -1,6 +1,9 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
 import WelcomePage from "./pages/welcome-page"
 import LoginPage from "./pages/auth/login-page"
+import RegisterPage from "./pages/auth/register-page"
+import ForgotPasswordPage from "./pages/auth/forgot-password-page"
+import ResetPasswordPage from "./pages/auth/reset-password-page"
 import StudentDashboard from "./pages/dashboard/student-dashboard"
 import MyQueuePage from "./pages/queue/my-queue-page"
 import JoinQueuePage from "./pages/queue/join-queue-page"
@@ -15,7 +18,13 @@ function App() {
       <Router>
         <Routes>
           <Route path="/" element={<WelcomePage />} />
+          {/* Auth */}
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+          {/* Student side (only dashboard currently implemented) */}
           <Route path="/student" element={<StudentDashboard />} />
           <Route path="/my-queue" element={<MyQueuePage />} />
           <Route path="/join-queue" element={<JoinQueuePage />} />
