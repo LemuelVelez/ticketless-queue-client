@@ -124,7 +124,7 @@ const data = {
     },
     {
       title: "Help & Support",
-      url: "#",
+      url: "/help",
       icon: IconHelp,
     },
   ],

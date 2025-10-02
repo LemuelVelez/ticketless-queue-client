@@ -306,7 +306,7 @@ export default function StudentDashboard() {
                                         </p>
                                         <Button
                                             variant="destructive"
-                                            className="mt-4 w-full"
+                                            className="mt-4 w-full cursor-pointer"
                                             onClick={handleCancelQueue}
                                             disabled={isCancellingQueue || isJoiningQueue}
                                         >
@@ -338,12 +338,12 @@ export default function StudentDashboard() {
                                             onValueChange={setSelectedService}
                                             disabled={!!studentData.currentQueue || isJoiningQueue || isCancellingQueue}
                                         >
-                                            <SelectTrigger className="w-full">
+                                            <SelectTrigger className="w-full cursor-pointer">
                                                 <SelectValue placeholder="Select a service point" />
                                             </SelectTrigger>
                                             <SelectContent>
                                                 {mockServices.map((service: Service) => (
-                                                    <SelectItem key={service.id} value={service.id}>
+                                                    <SelectItem key={service.id} value={service.id} className="cursor-pointer">
                                                         {service.name} (Est. Wait: {service.estimatedWaitTime})
                                                     </SelectItem>
                                                 ))}
@@ -382,7 +382,7 @@ export default function StudentDashboard() {
                                         </p>
                                     </div>
 
-                                    <Button onClick={handleJoinQueue} disabled={!canJoinQueue} className="w-full">
+                                    <Button onClick={handleJoinQueue} disabled={!canJoinQueue} className="w-full cursor-pointer">
                                         {isJoiningQueue ? "Joining..." : "Join Queue"}
                                     </Button>
 
