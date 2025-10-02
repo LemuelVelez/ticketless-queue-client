@@ -513,13 +513,6 @@ export default function HelpSupportPage() {
                             )}
                         </CardContent>
                     </Card>
-
-                    <div className="flex items-start gap-2 text-xs text-muted-foreground">
-                        <Separator className="hidden sm:block w-6" />
-                        <p>
-                            Tips: Keep your phone nearby for SMS alerts. For urgent matters, call the hotline.
-                        </p>
-                    </div>
                 </main>
             </SidebarInset>
         </SidebarProvider>
