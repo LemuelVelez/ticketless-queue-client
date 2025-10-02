@@ -1,9 +1,6 @@
 import {
-  IconBell,
   IconDotsVertical,
   IconLogout,
-  IconPhone,
-  IconSettings,
   IconUser,
 } from "@tabler/icons-react"
 
@@ -98,18 +95,6 @@ export function NavUser({
               <DropdownMenuItem>
                 <IconUser />
                 My Profile
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <IconPhone />
-                Contact Settings
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <IconBell />
-                Notification Preferences
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <IconSettings />
-                Account Settings
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

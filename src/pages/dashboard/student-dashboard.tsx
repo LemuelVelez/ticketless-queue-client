@@ -1,6 +1,7 @@
 "use client"
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
+import type React from "react"
 import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/contexts/AuthContext"
@@ -71,7 +72,10 @@ export default function StudentDashboard() {
         studentId ? getStudentDataById(studentId) : mockStudent,
     )
     const [selectedService, setSelectedService] = useState<string>("")
-    const [phoneNumber, setPhoneNumber] = useState<string>("")
+
+    // Phone input MUST start with '9' and be 10 digits total (9 + 9 more)
+    const [phoneNumber, setPhoneNumber] = useState<string>("9")
+
     const [isJoiningQueue, setIsJoiningQueue] = useState<boolean>(false)
     const [isCancellingQueue, setIsCancellingQueue] = useState<boolean>(false)
 
@@ -112,13 +116,42 @@ export default function StudentDashboard() {
         navigate("/")
     }
 
+    // ---------- Phone helpers: keep leading '9' immovable (same as join-queue-page) ----------
+    const normalizeWithLeading9 = (value: string) => {
+        let d = value.replace(/\D/g, "")
+        if (d.startsWith("63")) d = d.slice(2)
+        if (d.startsWith("0")) d = d.slice(1)
+        if (!d.startsWith("9")) d = "9" + d
+        if (d.length > 10) d = d.slice(0, 10)
+        if (d.length < 1) d = "9" // ensure leading 9 remains
+        return d
+    }
+    const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setPhoneNumber(normalizeWithLeading9(e.target.value))
+    }
+    const handlePhoneKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        const input = e.currentTarget
+        const start = input.selectionStart ?? 0
+        const end = input.selectionEnd ?? 0
+
+        if (
+            (e.key === "Backspace" && start <= 1 && end <= 1) ||
+            (e.key === "Delete" && start === 0) ||
+            (start === 0 && end > 0 && (e.key === "Backspace" || e.key === "Delete" || e.key.length === 1))
+        ) {
+            e.preventDefault()
+        }
+    }
+    const isPhoneValid = /^9\d{9}$/.test(phoneNumber)
+    // -----------------------------------------------------------------------------------------
+
     const handleJoinQueue = async () => {
         if (!selectedService) {
             toast.error("Please select a service to join the queue.")
             return
         }
-        if (!phoneNumber) {
-            toast.error("Please provide your mobile number for SMS notifications.")
+        if (!isPhoneValid) {
+            toast.error("Invalid mobile number. Enter 10 digits after +63 (must start with 9).")
             return
         }
 
@@ -137,12 +170,13 @@ export default function StudentDashboard() {
             if (serviceInfo) {
                 // >>> ORDERLY (SEQUENTIAL) NUMBER INSTEAD OF RANDOM
                 const newQueueNumber = getNextQueueNumber(selectedService, serviceInfo.name)
+                const fullE164 = `+63${phoneNumber}`
                 const newQueueEntry = {
                     service: serviceInfo.name,
                     queueNumber: newQueueNumber,
                     estimatedWaitTime: serviceInfo.estimatedWaitTime,
                     servicePoint: serviceInfo.name,
-                    phoneNumber: phoneNumber,
+                    phoneNumber: fullE164,
                 }
 
                 setStudentData((prev: StudentData) => ({
@@ -160,11 +194,11 @@ export default function StudentDashboard() {
                     ],
                 }))
 
-                // Clear the selected service and phone number after successful join
+                // Clear the selected service and reset phone to leading '9'
                 setSelectedService("")
-                setPhoneNumber("")
+                setPhoneNumber("9")
                 toast.success(
-                    `Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}. SMS notification sent to +63${phoneNumber}.`,
+                    `Successfully joined queue for ${serviceInfo.name}! Your number is ${newQueueNumber}. SMS notification sent to ${fullE164}.`,
                 )
             } else {
                 toast.error("Failed to join queue. Service not found.")
@@ -212,7 +246,7 @@ export default function StudentDashboard() {
 
     // Check if user can join a new queue
     const canJoinQueue =
-        !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService && phoneNumber
+        !studentData.currentQueue && !isJoiningQueue && !isCancellingQueue && selectedService && isPhoneValid
 
     // Don't render if not authenticated
     if (!isAuthenticated || !studentId) {
@@ -322,17 +356,24 @@ export default function StudentDashboard() {
                                             Mobile Number <span className="text-red-500">*</span>
                                         </Label>
                                         <div className="flex">
-                                            <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md">
+                                            <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md select-none">
                                                 +63
                                             </span>
                                             <Input
                                                 id="phone"
                                                 type="tel"
+                                                inputMode="numeric"
+                                                maxLength={10}
+                                                pattern="^9\d{9}$"
                                                 placeholder="9XX XXX XXXX"
                                                 value={phoneNumber}
-                                                onChange={(e) => setPhoneNumber(e.target.value)}
+                                                onChange={handlePhoneChange}
+                                                onKeyDown={handlePhoneKeyDown}
+                                                required
                                                 disabled={!!studentData.currentQueue || isJoiningQueue || isCancellingQueue}
                                                 className="rounded-l-none"
+                                                aria-label="Philippine mobile number starting with 9"
+                                                title="+63 followed by 10 digits starting with 9"
                                             />
                                         </div>
                                         <p className="text-xs text-muted-foreground flex items-center gap-1">
