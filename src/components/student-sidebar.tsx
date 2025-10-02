@@ -12,7 +12,6 @@ import {
   IconMedicalCross,
   IconNotification,
   IconSchool,
-  IconSettings,
   IconTicket,
   IconUser,
   IconUsers,
@@ -63,6 +62,7 @@ const data = {
       icon: IconNotification,
     },
   ],
+  // (Optional reference lists; not rendered by default components here)
   navServices: [
     {
       title: "Registrar Office",
@@ -70,18 +70,9 @@ const data = {
       isActive: false,
       url: "#",
       items: [
-        {
-          title: "Transcript Request",
-          url: "#",
-        },
-        {
-          title: "Enrollment Services",
-          url: "#",
-        },
-        {
-          title: "Certificate Request",
-          url: "#",
-        },
+        { title: "Transcript Request", url: "#" },
+        { title: "Enrollment Services", url: "#" },
+        { title: "Certificate Request", url: "#" },
       ],
     },
     {
@@ -89,18 +80,9 @@ const data = {
       icon: IconCash,
       url: "#",
       items: [
-        {
-          title: "Tuition Payment",
-          url: "#",
-        },
-        {
-          title: "Miscellaneous Fees",
-          url: "#",
-        },
-        {
-          title: "Payment History",
-          url: "#",
-        },
+        { title: "Tuition Payment", url: "#" },
+        { title: "Miscellaneous Fees", url: "#" },
+        { title: "Payment History", url: "#" },
       ],
     },
     {
@@ -108,18 +90,9 @@ const data = {
       icon: IconBook,
       url: "#",
       items: [
-        {
-          title: "Book Borrowing",
-          url: "#",
-        },
-        {
-          title: "Book Return",
-          url: "#",
-        },
-        {
-          title: "Research Assistance",
-          url: "#",
-        },
+        { title: "Book Borrowing", url: "#" },
+        { title: "Book Return", url: "#" },
+        { title: "Research Assistance", url: "#" },
       ],
     },
     {
@@ -127,18 +100,9 @@ const data = {
       icon: IconMedicalCross,
       url: "#",
       items: [
-        {
-          title: "Medical Consultation",
-          url: "#",
-        },
-        {
-          title: "Health Certificate",
-          url: "#",
-        },
-        {
-          title: "Medical Records",
-          url: "#",
-        },
+        { title: "Medical Consultation", url: "#" },
+        { title: "Health Certificate", url: "#" },
+        { title: "Medical Records", url: "#" },
       ],
     },
     {
@@ -146,25 +110,16 @@ const data = {
       icon: IconUsers,
       url: "#",
       items: [
-        {
-          title: "NSTP Registration",
-          url: "#",
-        },
-        {
-          title: "ROTC Processing",
-          url: "#",
-        },
-        {
-          title: "Community Service",
-          url: "#",
-        },
+        { title: "NSTP Registration", url: "#" },
+        { title: "ROTC Processing", url: "#" },
+        { title: "Community Service", url: "#" },
       ],
     },
   ],
   navSecondary: [
     {
       title: "Account Settings",
-      url: "#",
+      url: "/settings",
       icon: IconUser,
     },
     {
@@ -172,28 +127,11 @@ const data = {
       url: "#",
       icon: IconHelp,
     },
-    {
-      title: "SMS Settings",
-      url: "#",
-      icon: IconSettings,
-    },
   ],
   documents: [
-    {
-      name: "Student Handbook",
-      url: "#",
-      icon: IconBook,
-    },
-    {
-      name: "Service Directory",
-      url: "#",
-      icon: IconClipboardList,
-    },
-    {
-      name: "Academic Calendar",
-      url: "#",
-      icon: IconCalendarEvent,
-    },
+    { name: "Student Handbook", url: "#", icon: IconBook },
+    { name: "Service Directory", url: "#", icon: IconClipboardList },
+    { name: "Academic Calendar", url: "#", icon: IconCalendarEvent },
   ],
 }
 
@@ -205,7 +143,7 @@ export function AppSidebar({
   onLogout?: () => void
   currentPage?: string
 }) {
-  // Map current page to active nav items
+  // Active label for main nav
   const getActiveNavItem = () => {
     switch (currentPage) {
       case "dashboard":
@@ -219,7 +157,19 @@ export function AppSidebar({
       case "notifications":
         return "Notifications"
       default:
-        return "Dashboard"
+        return undefined
+    }
+  }
+
+  // Active label for secondary nav (settings/help)
+  const getActiveSecondaryItem = () => {
+    switch (currentPage) {
+      case "settings":
+        return "Account Settings"
+      case "help":
+        return "Help & Support"
+      default:
+        return undefined
     }
   }
 
@@ -229,7 +179,7 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild className="data-[slot=sidebar-menu-button]:!p-1.5">
-              <a href="#">
+              <a href="/student">
                 <IconSchool className="!size-5" />
                 <span className="text-base font-semibold">JRMSU Queue</span>
               </a>
@@ -237,10 +187,16 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
+
       <SidebarContent>
         <NavMain items={data.navMain} activeItem={getActiveNavItem()} />
-        <NavSecondary items={data.navSecondary} className="mt-auto" />
+        <NavSecondary
+          items={data.navSecondary}
+          activeItem={getActiveSecondaryItem()}
+          className="mt-auto"
+        />
       </SidebarContent>
+
       <SidebarFooter>
         <NavUser user={data.user} onLogout={onLogout} />
       </SidebarFooter>

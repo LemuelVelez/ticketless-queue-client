@@ -9,6 +9,7 @@ import MyQueuePage from "./pages/queue/my-queue-page"
 import JoinQueuePage from "./pages/queue/join-queue-page"
 import QueueHistoryPage from "./pages/queue/queue-history-page"
 import NotificationsPage from "./pages/notifications/notifications-page"
+import AccountSettingsPage from "./pages/settings/account-settings-page"
 import { Toaster } from "sonner"
 import { AuthProvider } from "./contexts/AuthContext"
 
@@ -30,6 +31,9 @@ function App() {
           <Route path="/join-queue" element={<JoinQueuePage />} />
           <Route path="/queue-history" element={<QueueHistoryPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
+
+          {/* Settings */}
+          <Route path="/settings" element={<AccountSettingsPage />} />
         </Routes>
         <Toaster richColors position="top-center" />
       </Router>
