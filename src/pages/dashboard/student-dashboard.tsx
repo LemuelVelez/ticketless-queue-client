@@ -21,6 +21,43 @@ import { MessageSquare } from "lucide-react"
 import { mockStudent, type StudentData, type QueueHistoryEntry } from "@/data/mock-students"
 import { mockServices, type Service } from "@/data/mock-services"
 
+/** ---------------- Orderly Queue Helpers (per-service, resets daily) ---------------- */
+const QUEUE_DATE_KEY = "queue_counter_date";
+const COUNTER_PREFIX = "queue_counter_";
+
+function todayISO(): string {
+    return new Date().toISOString().slice(0, 10);
+}
+function ensureCounterDateFresh() {
+    try {
+        const today = todayISO();
+        const saved = localStorage.getItem(QUEUE_DATE_KEY);
+        if (saved !== today) {
+            const keysToClear: string[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith(COUNTER_PREFIX)) keysToClear.push(k);
+            }
+            keysToClear.forEach((k) => localStorage.removeItem(k));
+            localStorage.setItem(QUEUE_DATE_KEY, today);
+        }
+    } catch { /* empty */ }
+}
+function getNextQueueNumber(serviceId: string, serviceName: string): string {
+    ensureCounterDateFresh();
+    const prefix = (serviceName?.[0] || "Q").toUpperCase();
+    const key = `${COUNTER_PREFIX}${serviceId}`;
+    try {
+        const current = parseInt(localStorage.getItem(key) || "0", 10);
+        const next = current + 1;
+        localStorage.setItem(key, String(next));
+        return `${prefix}-${String(next).padStart(3, "0")}`;
+    } catch {
+        return `${prefix}-001`;
+    }
+}
+/** ------------------------------------------------------------------------------- */
+
 // Simulate fetching student data based on ID
 const getStudentDataById = (id: string): StudentData => {
     console.log(`Fetching data for student ID: ${id}`)
@@ -98,7 +135,8 @@ export default function StudentDashboard() {
 
             const serviceInfo = mockServices.find((s: Service) => s.id === selectedService)
             if (serviceInfo) {
-                const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`
+                // >>> ORDERLY (SEQUENTIAL) NUMBER INSTEAD OF RANDOM
+                const newQueueNumber = getNextQueueNumber(selectedService, serviceInfo.name)
                 const newQueueEntry = {
                     service: serviceInfo.name,
                     queueNumber: newQueueNumber,

@@ -18,6 +18,49 @@ const servicePoints = [
     { id: "rotc", name: "ROTC Office", description: "ROTC Processing, Requirements", icon: "🎖️", estimatedWait: "10-15 min" }
 ];
 
+/** ---------------- Orderly Queue Helpers (per-service, resets daily) ---------------- */
+const QUEUE_DATE_KEY = "queue_counter_date";
+const COUNTER_PREFIX = "queue_counter_";
+
+function todayISO(): string {
+    return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+function ensureCounterDateFresh() {
+    try {
+        const today = todayISO();
+        const saved = localStorage.getItem(QUEUE_DATE_KEY);
+        if (saved !== today) {
+            // Clear all service counters when the date changes
+            const keysToClear: string[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith(COUNTER_PREFIX)) keysToClear.push(k);
+            }
+            keysToClear.forEach((k) => localStorage.removeItem(k));
+            localStorage.setItem(QUEUE_DATE_KEY, today);
+        }
+    } catch {
+        // Fallback: if localStorage not available, do nothing (still returns formatted number starting from 1 each run)
+    }
+}
+
+function getNextQueueNumber(serviceId: string, serviceName: string): string {
+    ensureCounterDateFresh();
+    const prefix = (serviceName?.[0] || "Q").toUpperCase();
+    const key = `${COUNTER_PREFIX}${serviceId}`;
+    try {
+        const current = parseInt(localStorage.getItem(key) || "0", 10);
+        const next = current + 1;
+        localStorage.setItem(key, String(next));
+        return `${prefix}-${String(next).padStart(3, "0")}`;
+    } catch {
+        // If localStorage fails, just return first in sequence
+        return `${prefix}-001`;
+    }
+}
+/** ------------------------------------------------------------------------------- */
+
 export default function LoginPage() {
     const navigate = useNavigate();
     const { login } = useAuth();
@@ -53,9 +96,6 @@ export default function LoginPage() {
         const start = input.selectionStart ?? 0;
         const end = input.selectionEnd ?? 0;
 
-        // Block backspace that would remove the first char,
-        // and block delete when caret is at position 0,
-        // and block typing over the first char when selection includes index 0.
         if (
             (e.key === "Backspace" && start <= 1 && end <= 1) ||
             (e.key === "Delete" && start === 0) ||
@@ -94,7 +134,8 @@ export default function LoginPage() {
 
         const selectedServicePoint = servicePoints.find(sp => sp.id === selectedService);
         if (selectedServicePoint) {
-            const queueNumber = `${selectedServicePoint.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`;
+            // >>> ORDERLY (SEQUENTIAL) NUMBER INSTEAD OF RANDOM
+            const queueNumber = getNextQueueNumber(selectedServicePoint.id, selectedServicePoint.name);
             const fullE164 = `+63${phoneNumber}`;
             const queueData = {
                 service: selectedServicePoint.name,

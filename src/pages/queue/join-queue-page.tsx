@@ -16,6 +16,43 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { mockServices, type Service } from "@/data/mock-services"
 
+/** ---------------- Orderly Queue Helpers (per-service, resets daily) ---------------- */
+const QUEUE_DATE_KEY = "queue_counter_date";
+const COUNTER_PREFIX = "queue_counter_";
+
+function todayISO(): string {
+    return new Date().toISOString().slice(0, 10);
+}
+function ensureCounterDateFresh() {
+    try {
+        const today = todayISO();
+        const saved = localStorage.getItem(QUEUE_DATE_KEY);
+        if (saved !== today) {
+            const keysToClear: string[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith(COUNTER_PREFIX)) keysToClear.push(k);
+            }
+            keysToClear.forEach((k) => localStorage.removeItem(k));
+            localStorage.setItem(QUEUE_DATE_KEY, today);
+        }
+    } catch { /* empty */ }
+}
+function getNextQueueNumber(serviceId: string, serviceName: string): string {
+    ensureCounterDateFresh();
+    const prefix = (serviceName?.[0] || "Q").toUpperCase();
+    const key = `${COUNTER_PREFIX}${serviceId}`;
+    try {
+        const current = parseInt(localStorage.getItem(key) || "0", 10);
+        const next = current + 1;
+        localStorage.setItem(key, String(next));
+        return `${prefix}-${String(next).padStart(3, "0")}`;
+    } catch {
+        return `${prefix}-001`;
+    }
+}
+/** ------------------------------------------------------------------------------- */
+
 export default function JoinQueuePage() {
     const navigate = useNavigate()
     const { isAuthenticated, studentId, login, queueData } = useAuth()
@@ -65,9 +102,6 @@ export default function JoinQueuePage() {
         const start = input.selectionStart ?? 0
         const end = input.selectionEnd ?? 0
 
-        // Block backspace that would remove the first char,
-        // block delete when caret is at position 0,
-        // and block typing over the first char when selection includes index 0.
         if (
             (e.key === "Backspace" && start <= 1 && end <= 1) ||
             (e.key === "Delete" && start === 0) ||
@@ -109,7 +143,8 @@ export default function JoinQueuePage() {
                 return
             }
 
-            const newQueueNumber = `${serviceInfo.name.substring(0, 1)}-${Math.floor(Math.random() * 100) + 1}`
+            // >>> ORDERLY (SEQUENTIAL) NUMBER INSTEAD OF RANDOM
+            const newQueueNumber = getNextQueueNumber(selectedService, serviceInfo.name)
             const fullE164 = `+63${phoneNumber}`
             const newQueueData = {
                 service: serviceInfo.name,
@@ -267,7 +302,7 @@ export default function JoinQueuePage() {
                             <CardContent className="space-y-4 text-sm text-muted-foreground">
                                 <ol className="list-decimal pl-5 space-y-2">
                                     <li>Choose a service point and enter your mobile number.</li>
-                                    <li>Receive your queue number and estimated wait time.</li>
+                                    <li>Receive your orderly queue number and estimated wait time.</li>
                                     <li>Track your position and get SMS reminders as your turn approaches.</li>
                                     <li>Proceed to the service point when called.</li>
                                 </ol>
