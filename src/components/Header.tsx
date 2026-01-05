@@ -14,7 +14,9 @@ import {
     SheetTrigger,
 } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
-import { Menu, QrCode } from "lucide-react"
+import { Menu } from "lucide-react"
+
+import logo from "@/assets/images/logo.svg"
 
 const navItems: Array<{ label: string; href: string }> = [
     { label: "Why", href: "#why" },
@@ -30,7 +32,11 @@ export default function Header() {
             <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
                 <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg border">
-                        <QrCode className="h-5 w-5" />
+                        <img
+                            src={logo}
+                            alt="QueuePass logo"
+                            className="h-5 w-5"
+                        />
                     </div>
                     <div className="leading-tight">
                         <div className="flex items-center gap-2">
@@ -81,6 +87,11 @@ export default function Header() {
                         <SheetContent side="right" className="w-[320px]">
                             <SheetHeader>
                                 <SheetTitle className="flex items-center gap-2">
+                                    <img
+                                        src={logo}
+                                        alt="QueuePass logo"
+                                        className="h-5 w-5"
+                                    />
                                     <span className="font-semibold">QueuePass</span>
                                     <Badge variant="secondary">QR Queue</Badge>
                                 </SheetTitle>

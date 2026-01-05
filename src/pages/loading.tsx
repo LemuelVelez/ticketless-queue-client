@@ -3,6 +3,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 
+import logo from "@/assets/images/logo.svg"
+
 export default function LoadingPage() {
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -10,7 +12,14 @@ export default function LoadingPage() {
                 <Card className="w-full">
                     <CardHeader>
                         <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-                            <span>Loading QueuePass</span>
+                            <div className="flex items-center gap-2">
+                                <img
+                                    src={logo}
+                                    alt="QueuePass logo"
+                                    className="h-6 w-6"
+                                />
+                                <span>Loading QueuePass</span>
+                            </div>
                             <Badge variant="secondary">Please wait</Badge>
                         </CardTitle>
                         <CardDescription>

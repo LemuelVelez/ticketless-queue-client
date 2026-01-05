@@ -4,6 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator"
 import { BellRing, Mic, QrCode, Tv2, Volume2 } from "lucide-react"
 
+import heroImage from "@/assets/images/heroImage.svg"
+
 export default function Hero() {
     return (
         <section className="py-12 md:py-16">
@@ -57,42 +59,52 @@ export default function Hero() {
                     </div>
                 </div>
 
-                <Card className="overflow-hidden">
-                    <CardHeader>
-                        <CardTitle>Live display preview</CardTitle>
-                        <CardDescription>Now Serving + Up Next (privacy-friendly: queue # only)</CardDescription>
-                    </CardHeader>
-                    <CardContent className="grid gap-4">
-                        <div className="grid gap-2 rounded-lg border p-4">
-                            <div className="flex items-center justify-between">
-                                <span className="text-sm font-medium">Now Serving</span>
-                                <Badge>Window 3</Badge>
-                            </div>
-                            <div className="text-3xl font-semibold">Queue #14</div>
-                            <p className="text-xs text-muted-foreground">
-                                Voice announcement example: “Queue number 14, please proceed to Window 3.”
-                            </p>
-                        </div>
+                <div className="grid gap-4">
+                    <div className="flex items-center justify-center">
+                        <img
+                            src={heroImage}
+                            alt="QueuePass hero illustration"
+                            className="w-full max-w-md"
+                        />
+                    </div>
 
-                        <div className="grid gap-2 rounded-lg border p-4">
-                            <div className="flex items-center justify-between">
-                                <span className="text-sm font-medium">Up Next</span>
-                                <Badge variant="secondary">Next 5</Badge>
+                    <Card className="overflow-hidden">
+                        <CardHeader>
+                            <CardTitle>Live display preview</CardTitle>
+                            <CardDescription>Now Serving + Up Next (privacy-friendly: queue # only)</CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid gap-4">
+                            <div className="grid gap-2 rounded-lg border p-4">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-sm font-medium">Now Serving</span>
+                                    <Badge>Window 3</Badge>
+                                </div>
+                                <div className="text-3xl font-semibold">Queue #14</div>
+                                <p className="text-xs text-muted-foreground">
+                                    Voice announcement example: “Queue number 14, please proceed to Window 3.”
+                                </p>
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                                {["#15", "#16", "#17", "#18", "#19"].map((q) => (
-                                    <Badge key={q} variant="outline">
-                                        {q}
-                                    </Badge>
-                                ))}
+
+                            <div className="grid gap-2 rounded-lg border p-4">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-sm font-medium">Up Next</span>
+                                    <Badge variant="secondary">Next 5</Badge>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {["#15", "#16", "#17", "#18", "#19"].map((q) => (
+                                        <Badge key={q} variant="outline">
+                                            {q}
+                                        </Badge>
+                                    ))}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <Mic className="h-4 w-4" />
+                                    Voice runs on the display browser (Web Speech API).
+                                </div>
                             </div>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <Mic className="h-4 w-4" />
-                                Voice runs on the display browser (Web Speech API).
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
+                        </CardContent>
+                    </Card>
+                </div>
             </div>
         </section>
     )
