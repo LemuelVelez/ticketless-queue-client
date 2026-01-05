@@ -30,12 +30,13 @@ export default function Header() {
     return (
         <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
             <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-                <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg border">
+                {/* Brand (clickable to /) */}
+                <a href="/" className="flex items-center gap-3">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-lg border">
                         <img
                             src={logo}
                             alt="QueuePass logo"
-                            className="h-5 w-5"
+                            className="h-12 w-12"
                         />
                     </div>
                     <div className="leading-tight">
@@ -49,7 +50,7 @@ export default function Header() {
                             Student ID queue management with SMS, voice, and public display
                         </p>
                     </div>
-                </div>
+                </a>
 
                 {/* Desktop nav */}
                 <div className="hidden items-center gap-3 md:flex">
@@ -90,7 +91,7 @@ export default function Header() {
                                     <img
                                         src={logo}
                                         alt="QueuePass logo"
-                                        className="h-5 w-5"
+                                        className="h-7 w-7"
                                     />
                                     <span className="font-semibold">QueuePass</span>
                                     <Badge variant="secondary">QR Queue</Badge>

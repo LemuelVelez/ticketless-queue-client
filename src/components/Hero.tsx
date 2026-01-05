@@ -9,7 +9,7 @@ import heroImage from "@/assets/images/heroImage.svg"
 export default function Hero() {
     return (
         <section className="py-12 md:py-16">
-            <div className="grid gap-8 md:grid-cols-2 md:items-center">
+            <div className="grid gap-8 md:grid-cols-2 md:items-start">
                 <div>
                     <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary" className="gap-1">
@@ -59,13 +59,16 @@ export default function Hero() {
                     </div>
                 </div>
 
-                <div className="grid gap-4">
-                    <div className="flex items-center justify-center">
-                        <img
-                            src={heroImage}
-                            alt="QueuePass hero illustration"
-                            className="w-full max-w-md"
-                        />
+                {/* Right column: portrait image + preview card laid out nicely */}
+                <div className="grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
+                    <div className="flex items-start justify-center lg:justify-start">
+                        <div className="w-full max-w-70 rounded-xl border bg-card p-3">
+                            <img
+                                src={heroImage}
+                                alt="QueuePass hero illustration"
+                                className="h-full w-full object-contain rounded-circle"
+                            />
+                        </div>
                     </div>
 
                     <Card className="overflow-hidden">

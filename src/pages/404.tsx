@@ -3,6 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 
+import logo from "@/assets/images/logo.svg"
+
 export default function NotFoundPage() {
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -10,7 +12,14 @@ export default function NotFoundPage() {
                 <Card className="w-full">
                     <CardHeader>
                         <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-                            <span>Page not found</span>
+                            <div className="flex items-center gap-2">
+                                <img
+                                    src={logo}
+                                    alt="QueuePass logo"
+                                    className="h-7 w-7"
+                                />
+                                <span>Page not found</span>
+                            </div>
                             <Badge variant="secondary">404</Badge>
                         </CardTitle>
                         <CardDescription>
