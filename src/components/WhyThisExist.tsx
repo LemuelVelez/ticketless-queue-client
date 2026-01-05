@@ -45,12 +45,12 @@ export default function WhyThisExist() {
                         <Card key={p.title}>
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2">
-                                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border">
+                                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border">
                                         <Icon className="h-4 w-4" />
                                     </span>
-                                    {p.title}
+                                    <span className="wrap-break-word">{p.title}</span>
                                 </CardTitle>
-                                <CardDescription>{p.desc}</CardDescription>
+                                <CardDescription className="wrap-break-word">{p.desc}</CardDescription>
                             </CardHeader>
                         </Card>
                     )
@@ -65,14 +65,20 @@ export default function WhyThisExist() {
                         <Badge variant="secondary">Outcome</Badge>
                         What you get
                     </CardTitle>
-                    <CardDescription>
+                    <CardDescription className="wrap-break-word">
                         Focused on must-have features: no kiosks, no complex scheduling—just a clean queue flow.
                     </CardDescription>
                 </CardHeader>
-                <CardContent className="flex flex-wrap gap-2">
+
+                {/* Mobile: vertical list + wrap text; Desktop unchanged */}
+                <CardContent className="grid gap-2 sm:flex sm:flex-wrap sm:gap-2">
                     {outcomes.map((o) => (
-                        <Badge key={o} variant="outline" className="gap-1">
-                            <CheckCircle2 className="h-3.5 w-3.5" />
+                        <Badge
+                            key={o}
+                            variant="outline"
+                            className="w-full justify-start gap-1 whitespace-normal wrap-break-word text-left leading-snug sm:w-auto sm:whitespace-nowrap"
+                        >
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                             {o}
                         </Badge>
                     ))}

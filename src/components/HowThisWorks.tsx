@@ -52,19 +52,22 @@ export default function HowThisWorks() {
                     return (
                         <Card key={s.step}>
                             <CardHeader>
-                                <CardTitle className="flex items-center justify-between gap-3">
-                                    <span className="flex items-center gap-2">
-                                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border text-sm font-semibold">
+                                {/* Mobile: stack; Desktop unchanged */}
+                                <CardTitle className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                                    <span className="flex min-w-0 items-start gap-2 sm:items-center">
+                                        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border text-sm font-semibold">
                                             {s.step}
                                         </span>
-                                        {s.title}
+                                        <span className="min-w-0 wrap-break-word leading-snug">
+                                            {s.title}
+                                        </span>
                                     </span>
-                                    <Badge variant="secondary" className="gap-1">
-                                        <Icon className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="w-fit gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <Icon className="h-3.5 w-3.5 shrink-0" />
                                         Step
                                     </Badge>
                                 </CardTitle>
-                                <CardDescription>{s.desc}</CardDescription>
+                                <CardDescription className="wrap-break-word">{s.desc}</CardDescription>
                             </CardHeader>
                             <CardContent />
                         </Card>
@@ -77,7 +80,7 @@ export default function HowThisWorks() {
             <Card>
                 <CardHeader>
                     <CardTitle>HOLD rule (no-show handling)</CardTitle>
-                    <CardDescription>
+                    <CardDescription className="wrap-break-word">
                         If a student misses a call, staff marks the ticket as HOLD. The student can return later and be placed at
                         the end of the WAITING line. Attempts increment only on HOLD, and at 4 attempts the ticket becomes OUT.
                     </CardDescription>

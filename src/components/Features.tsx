@@ -1,13 +1,34 @@
+"use client"
+
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
 import { BellRing, ClipboardCheck, KeyRound, QrCode, ShieldCheck, Tv2, Volume2 } from "lucide-react"
 
+type FeatureTabValue = "student" | "staff" | "admin" | "display"
+
+const featureTabs: Array<{
+    value: FeatureTabValue
+    label: string
+    icon: React.ComponentType<{ className?: string }>
+}> = [
+        { value: "student", label: "Student", icon: QrCode },
+        { value: "staff", label: "Staff", icon: ClipboardCheck },
+        { value: "admin", label: "Admin", icon: ShieldCheck },
+        { value: "display", label: "Display", icon: Tv2 },
+    ]
+
 const bullet = (items: string[]) => (
-    <div className="flex flex-wrap gap-2">
+    <div className="grid gap-2 sm:flex sm:flex-wrap sm:gap-2">
         {items.map((i) => (
-            <Badge key={i} variant="outline">
+            <Badge
+                key={i}
+                variant="outline"
+                className="w-full justify-start whitespace-normal wrap-break-word text-left leading-snug sm:w-auto sm:whitespace-nowrap"
+            >
                 {i}
             </Badge>
         ))}
@@ -15,6 +36,8 @@ const bullet = (items: string[]) => (
 )
 
 export default function Features() {
+    const [tab, setTab] = useState<FeatureTabValue>("student")
+
     return (
         <section id="features" className="scroll-mt-24">
             <div className="flex flex-col gap-2">
@@ -25,8 +48,44 @@ export default function Features() {
             </div>
 
             <div className="mt-8">
-                <Tabs defaultValue="student">
-                    <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
+                <Tabs value={tab} onValueChange={(v) => setTab(v as FeatureTabValue)}>
+                    {/* Dedicated MOBILE UI (xs): horizontal, swipeable chips */}
+                    <div className="sm:hidden">
+                        <div className="rounded-xl border bg-card p-2">
+                            <div className="px-2 pb-2 text-xs font-medium text-muted-foreground">
+                                Choose a view
+                            </div>
+
+                            <div className="flex gap-2 overflow-x-auto pb-1">
+                                {featureTabs.map((t) => {
+                                    const Icon = t.icon
+                                    const active = tab === t.value
+
+                                    return (
+                                        <Button
+                                            key={t.value}
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => setTab(t.value)}
+                                            aria-pressed={active}
+                                            className={[
+                                                "shrink-0 rounded-lg px-3 py-2",
+                                                "flex items-center gap-2",
+                                                "whitespace-nowrap",
+                                                active ? "border-primary bg-primary/10 text-primary" : "",
+                                            ].join(" ")}
+                                        >
+                                            <Icon className="h-4 w-4 shrink-0" />
+                                            <span className="text-sm font-medium">{t.label}</span>
+                                        </Button>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* DESKTOP / TABLET TABS (unchanged behavior & layout; hidden on xs) */}
+                    <TabsList className="hidden w-full sm:grid sm:grid-cols-2 sm:gap-0 md:grid-cols-4">
                         <TabsTrigger value="student" className="gap-2">
                             <QrCode className="h-4 w-4" />
                             Student
@@ -62,12 +121,12 @@ export default function Features() {
                                 ])}
                                 <Separator />
                                 <div className="flex flex-wrap gap-2">
-                                    <Badge variant="secondary" className="gap-1">
-                                        <QrCode className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <QrCode className="h-3.5 w-3.5 shrink-0" />
                                         No kiosk required
                                     </Badge>
-                                    <Badge variant="secondary" className="gap-1">
-                                        <BellRing className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <BellRing className="h-3.5 w-3.5 shrink-0" />
                                         SMS-ready events
                                     </Badge>
                                 </div>
@@ -93,12 +152,12 @@ export default function Features() {
                                 ])}
                                 <Separator />
                                 <div className="flex flex-wrap gap-2">
-                                    <Badge variant="secondary" className="gap-1">
-                                        <BellRing className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <BellRing className="h-3.5 w-3.5 shrink-0" />
                                         SMS on call/next
                                     </Badge>
-                                    <Badge variant="secondary" className="gap-1">
-                                        <Volume2 className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <Volume2 className="h-3.5 w-3.5 shrink-0" />
                                         Voice on call
                                     </Badge>
                                 </div>
@@ -123,12 +182,12 @@ export default function Features() {
                                 ])}
                                 <Separator />
                                 <div className="flex flex-wrap gap-2">
-                                    <Badge variant="secondary" className="gap-1">
-                                        <KeyRound className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <KeyRound className="h-3.5 w-3.5 shrink-0" />
                                         Role-based access
                                     </Badge>
-                                    <Badge variant="secondary" className="gap-1">
-                                        <ShieldCheck className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
                                         Logged actions
                                     </Badge>
                                 </div>
@@ -153,12 +212,12 @@ export default function Features() {
                                 ])}
                                 <Separator />
                                 <div className="flex flex-wrap gap-2">
-                                    <Badge variant="secondary" className="gap-1">
-                                        <Tv2 className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <Tv2 className="h-3.5 w-3.5 shrink-0" />
                                         Live updates
                                     </Badge>
-                                    <Badge variant="secondary" className="gap-1">
-                                        <Volume2 className="h-3.5 w-3.5" />
+                                    <Badge variant="secondary" className="gap-1 whitespace-normal sm:whitespace-nowrap">
+                                        <Volume2 className="h-3.5 w-3.5 shrink-0" />
                                         Voice via browser
                                     </Badge>
                                 </div>
