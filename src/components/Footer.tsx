@@ -1,9 +1,68 @@
+import { useEffect, useState } from "react"
+import { cn } from "@/lib/utils"
+
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { QrCode } from "lucide-react"
 
+const exploreItems: Array<{ label: string; href: string }> = [
+    { label: "Why this exists", href: "#why" },
+    { label: "How it works", href: "#how" },
+    { label: "Features", href: "#features" },
+    { label: "Roles", href: "#roles" },
+    { label: "FAQ", href: "#faq" },
+]
+
+const sectionIds = exploreItems
+    .map((item) => item.href)
+    .filter((href) => href.startsWith("#"))
+    .map((href) => href.slice(1))
+
 export default function Footer() {
+    const [activeHref, setActiveHref] = useState<string>("")
+
+    // Keep active state in sync with URL hash (clicks, back/forward)
+    useEffect(() => {
+        const syncFromHash = () => setActiveHref(window.location.hash || "")
+        syncFromHash()
+
+        window.addEventListener("hashchange", syncFromHash)
+        return () => window.removeEventListener("hashchange", syncFromHash)
+    }, [])
+
+    // Scroll-spy using IntersectionObserver
+    useEffect(() => {
+        const sections = sectionIds
+            .map((id) => document.getElementById(id))
+            .filter(Boolean) as HTMLElement[]
+
+        if (!sections.length) return
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                const visible = entries
+                    .filter((e) => e.isIntersecting)
+                    .sort(
+                        (a, b) =>
+                            (b.intersectionRatio ?? 0) - (a.intersectionRatio ?? 0)
+                    )[0]
+
+                if (visible?.target?.id) {
+                    setActiveHref(`#${visible.target.id}`)
+                }
+            },
+            {
+                root: null,
+                threshold: [0.2, 0.35, 0.5, 0.65],
+                rootMargin: "-20% 0px -60% 0px",
+            }
+        )
+
+        sections.forEach((el) => observer.observe(el))
+        return () => observer.disconnect()
+    }, [])
+
     return (
         <footer className="mt-14 border-t bg-background">
             <div className="mx-auto max-w-6xl px-4 py-10">
@@ -41,21 +100,30 @@ export default function Footer() {
 
                     <div className="grid gap-2">
                         <p className="text-sm font-medium">Explore</p>
-                        <Button variant="link" className="h-auto justify-start p-0" asChild>
-                            <a href="#why">Why this exists</a>
-                        </Button>
-                        <Button variant="link" className="h-auto justify-start p-0" asChild>
-                            <a href="#how">How it works</a>
-                        </Button>
-                        <Button variant="link" className="h-auto justify-start p-0" asChild>
-                            <a href="#features">Features</a>
-                        </Button>
-                        <Button variant="link" className="h-auto justify-start p-0" asChild>
-                            <a href="#roles">Roles</a>
-                        </Button>
-                        <Button variant="link" className="h-auto justify-start p-0" asChild>
-                            <a href="#faq">FAQ</a>
-                        </Button>
+
+                        {exploreItems.map((item) => {
+                            const isActive = activeHref === item.href
+
+                            return (
+                                <Button
+                                    key={item.href}
+                                    variant="link"
+                                    className={cn(
+                                        "h-auto justify-start p-0",
+                                        isActive && "font-semibold underline"
+                                    )}
+                                    asChild
+                                >
+                                    <a
+                                        href={item.href}
+                                        aria-current={isActive ? "page" : undefined}
+                                        onClick={() => setActiveHref(item.href)}
+                                    >
+                                        {item.label}
+                                    </a>
+                                </Button>
+                            )
+                        })}
                     </div>
                 </div>
 

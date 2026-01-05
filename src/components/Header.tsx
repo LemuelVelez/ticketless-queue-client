@@ -1,3 +1,6 @@
+import { useEffect, useRef, useState } from "react"
+import { cn } from "@/lib/utils"
+
 import { Button } from "@/components/ui/button"
 import {
     NavigationMenu,
@@ -26,9 +29,89 @@ const navItems: Array<{ label: string; href: string }> = [
     { label: "FAQ", href: "#faq" },
 ]
 
+const sectionIds = navItems
+    .map((item) => item.href)
+    .filter((href) => href.startsWith("#"))
+    .map((href) => href.slice(1))
+
 export default function Header() {
+    const [activeHref, setActiveHref] = useState<string>("")
+    const [sheetOpen, setSheetOpen] = useState(false)
+    const headerRef = useRef<HTMLElement | null>(null)
+
+    // Keep active state in sync with URL hash (clicks, back/forward)
+    useEffect(() => {
+        const syncFromHash = () => setActiveHref(window.location.hash || "")
+        syncFromHash()
+
+        window.addEventListener("hashchange", syncFromHash)
+        return () => window.removeEventListener("hashchange", syncFromHash)
+    }, [])
+
+    // ✅ Scroll-spy (deterministic): fixes "How it works" being skipped while scrolling
+    useEffect(() => {
+        const sections = sectionIds
+            .map((id) => document.getElementById(id))
+            .filter(Boolean) as HTMLElement[]
+
+        if (!sections.length) return
+
+        let ticking = false
+
+        const computeActive = () => {
+            const headerH = headerRef.current?.getBoundingClientRect().height ?? 0
+
+            // buffer to match your sections' scroll-mt-24 (~96px)
+            // header + small cushion so boundary cases don't skip
+            const offset = headerH + 24
+
+            const y = window.scrollY + offset + 1
+
+            // Default to first section if user is above it
+            let currentId = sections[0].id
+
+            for (const sec of sections) {
+                const top = sec.offsetTop
+                const bottom = top + sec.offsetHeight
+
+                if (y >= top && y < bottom) {
+                    currentId = sec.id
+                    break
+                }
+
+                // If we passed this section, keep it as current until we enter the next
+                if (y >= top) currentId = sec.id
+            }
+
+            setActiveHref(`#${currentId}`)
+        }
+
+        const onScroll = () => {
+            if (ticking) return
+            ticking = true
+            window.requestAnimationFrame(() => {
+                ticking = false
+                computeActive()
+            })
+        }
+
+        computeActive()
+        window.addEventListener("scroll", onScroll, { passive: true })
+        window.addEventListener("resize", onScroll)
+
+        return () => {
+            window.removeEventListener("scroll", onScroll)
+            window.removeEventListener("resize", onScroll)
+        }
+    }, [])
+
+    const handleNavClick = (href: string) => {
+        setActiveHref(href)
+        setSheetOpen(false) // ✅ auto close sheet on mobile nav click
+    }
+
     return (
-        <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
+        <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
             <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
                 {/* Brand (clickable to /) */}
                 <a href="/" className="flex items-center gap-3">
@@ -56,13 +139,32 @@ export default function Header() {
                 <div className="hidden items-center gap-3 md:flex">
                     <NavigationMenu>
                         <NavigationMenuList>
-                            {navItems.map((item) => (
-                                <NavigationMenuItem key={item.href}>
-                                    <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
-                                        <a href={item.href}>{item.label}</a>
-                                    </NavigationMenuLink>
-                                </NavigationMenuItem>
-                            ))}
+                            {navItems.map((item) => {
+                                const isActive = activeHref === item.href
+
+                                return (
+                                    <NavigationMenuItem key={item.href}>
+                                        <NavigationMenuLink
+                                            asChild
+                                            className={cn(
+                                                navigationMenuTriggerStyle(),
+                                                "relative",
+                                                isActive &&
+                                                "bg-accent text-accent-foreground " +
+                                                "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary"
+                                            )}
+                                        >
+                                            <a
+                                                href={item.href}
+                                                aria-current={isActive ? "page" : undefined}
+                                                onClick={() => setActiveHref(item.href)}
+                                            >
+                                                {item.label}
+                                            </a>
+                                        </NavigationMenuLink>
+                                    </NavigationMenuItem>
+                                )
+                            })}
                         </NavigationMenuList>
                     </NavigationMenu>
 
@@ -78,7 +180,7 @@ export default function Header() {
 
                 {/* Mobile nav */}
                 <div className="md:hidden">
-                    <Sheet>
+                    <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
                         <SheetTrigger asChild>
                             <Button variant="outline" size="icon" aria-label="Open menu">
                                 <Menu className="h-5 w-5" />
@@ -114,26 +216,66 @@ export default function Header() {
                             </SheetHeader>
 
                             <div className="mt-6 flex flex-col gap-2">
-                                {navItems.map((item) => (
+                                {navItems.map((item) => {
+                                    const isActive = activeHref === item.href
+
+                                    return (
+                                        <Button
+                                            key={item.href}
+                                            variant="ghost"
+                                            className={cn(
+                                                "relative w-full justify-start",
+                                                isActive &&
+                                                "bg-accent text-accent-foreground " +
+                                                "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary"
+                                            )}
+                                            asChild
+                                        >
+                                            <a
+                                                href={item.href}
+                                                aria-current={isActive ? "page" : undefined}
+                                                onClick={() => handleNavClick(item.href)}
+                                            >
+                                                {item.label}
+                                            </a>
+                                        </Button>
+                                    )
+                                })}
+
+                                <div className="mt-4 flex flex-col gap-2 border-t pt-4">
                                     <Button
-                                        key={item.href}
+                                        variant="outline"
+                                        className="w-full"
+                                        asChild
+                                    >
+                                        <a
+                                            href="/staff/login"
+                                            onClick={() => setSheetOpen(false)}
+                                        >
+                                            Staff Login
+                                        </a>
+                                    </Button>
+
+                                    <Button className="w-full" asChild>
+                                        <a
+                                            href="/join"
+                                            onClick={() => setSheetOpen(false)}
+                                        >
+                                            Join Queue
+                                        </a>
+                                    </Button>
+
+                                    <Button
                                         variant="ghost"
                                         className="w-full justify-start"
                                         asChild
                                     >
-                                        <a href={item.href}>{item.label}</a>
-                                    </Button>
-                                ))}
-
-                                <div className="mt-4 flex flex-col gap-2 border-t pt-4">
-                                    <Button variant="outline" className="w-full" asChild>
-                                        <a href="/staff/login">Staff Login</a>
-                                    </Button>
-                                    <Button className="w-full" asChild>
-                                        <a href="/join">Join Queue</a>
-                                    </Button>
-                                    <Button variant="ghost" className="w-full justify-start" asChild>
-                                        <a href="/admin/login">Admin Login</a>
+                                        <a
+                                            href="/admin/login"
+                                            onClick={() => setSheetOpen(false)}
+                                        >
+                                            Admin Login
+                                        </a>
                                     </Button>
                                 </div>
                             </div>
