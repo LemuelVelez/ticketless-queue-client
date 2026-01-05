@@ -1,45 +1,35 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
-import WelcomePage from "./pages/welcome-page"
-import LoginPage from "./pages/auth/login-page"
-import RegisterPage from "./pages/auth/register-page"
-import ForgotPasswordPage from "./pages/auth/forgot-password-page"
-import ResetPasswordPage from "./pages/auth/reset-password-page"
-import StudentDashboard from "./pages/dashboard/student/student-dashboard"
-import MyQueuePage from "./pages/dashboard/student/queue/my-queue-page"
-import JoinQueuePage from "./pages/dashboard/student/queue/join-queue-page"
-import QueueHistoryPage from "./pages/dashboard/student/queue/queue-history-page"
-import NotificationsPage from "./pages/dashboard/student/notifications/notifications-page"
-import AccountSettingsPage from "./pages/dashboard/student/settings/account-settings-page"
-import HelpSupportPage from "./pages/dashboard/student/help/help-support-page"
-import { Toaster } from "sonner"
-import { AuthProvider } from "./contexts/AuthContext"
+import { useState } from 'react'
+import reactLogo from './assets/react.svg'
+import viteLogo from '/vite.svg'
+import './App.css'
 
 function App() {
+  const [count, setCount] = useState(0)
+
   return (
-    <AuthProvider>
-      <Router>
-        <Routes>
-          <Route path="/" element={<WelcomePage />} />
-          {/* Auth */}
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-
-          {/* Student side (only dashboard currently implemented) */}
-          <Route path="/student" element={<StudentDashboard />} />
-          <Route path="/my-queue" element={<MyQueuePage />} />
-          <Route path="/join-queue" element={<JoinQueuePage />} />
-          <Route path="/queue-history" element={<QueueHistoryPage />} />
-          <Route path="/notifications" element={<NotificationsPage />} />
-
-          {/* Settings & Help */}
-          <Route path="/settings" element={<AccountSettingsPage />} />
-          <Route path="/help" element={<HelpSupportPage />} />
-        </Routes>
-        <Toaster richColors position="top-center" />
-      </Router>
-    </AuthProvider>
+    <>
+      <div>
+        <a href="https://vite.dev" target="_blank">
+          <img src={viteLogo} className="logo" alt="Vite logo" />
+        </a>
+        <a href="https://react.dev" target="_blank">
+          <img src={reactLogo} className="logo react" alt="React logo" />
+        </a>
+      </div>
+      <h1>Vite + React</h1>
+      <div className="card">
+        <button onClick={() => setCount((count) => count + 1)}>
+          count is {count}
+        </button>
+        <p>
+          Edit <code>src/App.tsx</code> and save to test HMR
+        </p>
+      </div>
+      <p className="read-the-docs">
+        Click on the Vite and React logos to learn more
+      </p>
+    </>
   )
 }
+
 export default App
