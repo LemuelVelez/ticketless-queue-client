@@ -7,6 +7,7 @@ import LoginPage from "@/pages/authentication/login"
 import NotFoundPage from "@/pages/404"
 
 import AdminDashboardPage from "@/pages/dashboard/admin/dashboard"
+import AdminAccountsPage from "@/pages/dashboard/admin/accounts"
 
 import { SessionProvider, useSession } from "@/hooks/use-session"
 import { RoleGuard } from "@/lib/roleguard"
@@ -51,6 +52,7 @@ export default function App() {
             }
           >
             <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
+            <Route path="/admin/accounts" element={<AdminAccountsPage />} />
           </Route>
 
           <Route path="*" element={<NotFoundPage />} />
