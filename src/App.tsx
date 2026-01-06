@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Outlet } from "react-router-dom"
+import { BrowserRouter, Routes, Route, Outlet, Navigate } from "react-router-dom"
 
 import { Toaster } from "@/components/ui/sonner"
 import LandingPage from "@/pages/landing"
@@ -8,8 +8,22 @@ import NotFoundPage from "@/pages/404"
 
 import AdminDashboardPage from "@/pages/dashboard/admin/dashboard"
 
-import { SessionProvider } from "@/hooks/use-session"
+import { SessionProvider, useSession } from "@/hooks/use-session"
 import { RoleGuard } from "@/lib/roleguard"
+
+function LoadingRedirect() {
+  const { user, loading } = useSession()
+
+  // Show loading screen ONLY while resolving session / redirecting
+  if (loading) return <LoadingPage />
+
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  const to = user.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
+  return <Navigate to={to} replace />
+}
 
 export default function App() {
   return (
@@ -17,13 +31,21 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LandingPage />} />
-          <Route path="/loading" element={<LoadingPage />} />
+
+          {/* ✅ Used only during redirect/session resolve */}
+          <Route path="/loading" element={<LoadingRedirect />} />
+
           <Route path="/login" element={<LoginPage />} />
 
           {/* Admin Routes */}
           <Route
             element={
-              <RoleGuard allow="ADMIN" redirectTo="/login" unauthorizedTo="/login">
+              <RoleGuard
+                allow="ADMIN"
+                redirectTo="/login"
+                unauthorizedTo="/login"
+                loadingFallback={<LoadingPage />}
+              >
                 <Outlet />
               </RoleGuard>
             }

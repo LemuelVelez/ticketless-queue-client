@@ -4,10 +4,8 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import { Bell } from "lucide-react"
 
 type DashboardHeaderProps = {
     title?: string
@@ -35,10 +33,6 @@ export function DashboardHeader({ title = "Dashboard", className, children }: Da
                 <div className="hidden w-70 md:block">
                     <Input placeholder="Search…" />
                 </div>
-
-                <Button variant="outline" size="icon" aria-label="Notifications">
-                    <Bell className="h-4 w-4" />
-                </Button>
 
                 {children ? <div className="ml-1 flex items-center gap-2">{children}</div> : null}
             </div>

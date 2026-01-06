@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { cn } from "@/lib/utils"
+
+import { useSession } from "@/hooks/use-session"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -30,6 +32,9 @@ const sectionIds = navItems
     .map((href) => href.slice(1))
 
 export default function Header() {
+    const { user, loading } = useSession()
+    const dashboardPath = useMemo(() => (user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"), [user])
+
     const [activeHref, setActiveHref] = useState<string>("")
     const [sheetOpen, setSheetOpen] = useState(false)
     const headerRef = useRef<HTMLElement | null>(null)
@@ -98,6 +103,10 @@ export default function Header() {
         setSheetOpen(false)
     }
 
+    const showDashboard = !loading && !!user
+    const authLabel = showDashboard ? "Dashboard" : "Login"
+    const authTo = showDashboard ? dashboardPath : "/login"
+
     return (
         <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
             <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
@@ -153,9 +162,8 @@ export default function Header() {
                     </NavigationMenu>
 
                     <div className="flex items-center gap-2">
-                        {/* ✅ Unified Login */}
                         <Button variant="outline" asChild>
-                            <Link to="/login">Login</Link>
+                            <Link to={authTo}>{authLabel}</Link>
                         </Button>
 
                         <Button asChild>
@@ -220,14 +228,14 @@ export default function Header() {
                                 })}
 
                                 <div className="mt-4 flex flex-col gap-2 border-t pt-4">
-                                    {/* ✅ Unified Login */}
                                     <Button
                                         variant="outline"
                                         className="w-full"
                                         asChild
                                         onClick={() => setSheetOpen(false)}
+                                        disabled={loading}
                                     >
-                                        <Link to="/login">Login</Link>
+                                        <Link to={authTo}>{authLabel}</Link>
                                     </Button>
 
                                     <Button className="w-full" asChild>

@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom"
 
+import { useSession } from "@/hooks/use-session"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
@@ -8,6 +10,13 @@ import { Badge } from "@/components/ui/badge"
 import logo from "@/assets/images/logo.svg"
 
 export default function NotFoundPage() {
+    const { user, loading } = useSession()
+    const dashboardPath = user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
+
+    const showDashboard = !loading && !!user
+    const authLabel = showDashboard ? "Dashboard" : "Login"
+    const authTo = showDashboard ? dashboardPath : "/login"
+
     return (
         <div className="min-h-screen bg-background text-foreground">
             <main className="mx-auto flex max-w-3xl items-center justify-center px-4 py-16">
@@ -39,11 +48,13 @@ export default function NotFoundPage() {
                             <Button asChild>
                                 <Link to="/">Go to Landing</Link>
                             </Button>
+
                             <Button variant="outline" asChild>
                                 <a href="/join">Join Queue</a>
                             </Button>
-                            <Button variant="ghost" asChild>
-                                <Link to="/login">Login</Link>
+
+                            <Button variant="ghost" asChild disabled={loading}>
+                                <Link to={authTo}>{authLabel}</Link>
                             </Button>
                         </div>
 

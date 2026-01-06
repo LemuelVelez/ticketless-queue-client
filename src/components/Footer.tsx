@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { cn } from "@/lib/utils"
+
+import { useSession } from "@/hooks/use-session"
 
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
@@ -21,6 +23,9 @@ const sectionIds = exploreItems
     .map((href) => href.slice(1))
 
 export default function Footer() {
+    const { user, loading } = useSession()
+    const dashboardPath = useMemo(() => (user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"), [user])
+
     const [activeHref, setActiveHref] = useState<string>("")
 
     // Keep active state in sync with URL hash (clicks, back/forward)
@@ -61,6 +66,10 @@ export default function Footer() {
         return () => observer.disconnect()
     }, [])
 
+    const showDashboard = !loading && !!user
+    const authLabel = showDashboard ? "Dashboard" : "Login"
+    const authTo = showDashboard ? dashboardPath : "/login"
+
     return (
         <footer className="mt-14 border-t bg-background">
             <div className="mx-auto max-w-6xl px-4 py-10">
@@ -85,9 +94,8 @@ export default function Footer() {
                         <Separator className="my-5" />
 
                         <div className="flex flex-wrap gap-2">
-                            {/* ✅ Unified Login */}
                             <Button variant="outline" asChild>
-                                <Link to="/login">Login</Link>
+                                <Link to={authTo}>{authLabel}</Link>
                             </Button>
 
                             <Button asChild>

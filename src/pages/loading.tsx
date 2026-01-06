@@ -16,7 +16,7 @@ export default function LoadingPage() {
                                 <img
                                     src={logo}
                                     alt="QueuePass logo"
-                                    className="h-6 w-6"
+                                    className="h-15 w-15"
                                 />
                                 <span>Loading QueuePass</span>
                             </div>
