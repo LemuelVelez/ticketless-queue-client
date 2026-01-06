@@ -30,7 +30,7 @@ import {
 import { LogOut, Settings } from "lucide-react"
 
 import { useSession } from "@/hooks/use-session"
-import { clearAuthUser } from "@/lib/auth"
+import { clearAuthUser, getAuthUser, type StoredAuthUser } from "@/lib/auth"
 
 export type DashboardUser = {
     name: string
@@ -70,6 +70,10 @@ function initials(name: string) {
     return (a + b).toUpperCase() || "U"
 }
 
+function pickNonEmptyString(v: unknown): string {
+    return typeof v === "string" && v.trim().length > 0 ? v : ""
+}
+
 export function NavUser({
     user,
     className,
@@ -90,6 +94,29 @@ export function NavUser({
 
     const [logoutOpen, setLogoutOpen] = React.useState(false)
 
+    /**
+     * Fix: on refresh some apps re-hydrate `user` without email (e.g. from /me).
+     * We fall back to auth storage so email doesn't "disappear" after refresh.
+     */
+    const [storedUser, setStoredUser] = React.useState<StoredAuthUser | null>(null)
+
+    React.useEffect(() => {
+        try {
+            setStoredUser(getAuthUser())
+        } catch {
+            setStoredUser(null)
+        }
+    }, [])
+
+    const propName = pickNonEmptyString((user as unknown as { name?: unknown })?.name)
+    const propEmail = pickNonEmptyString((user as unknown as { email?: unknown })?.email)
+
+    const storedName = pickNonEmptyString(storedUser?.name)
+    const storedEmail = pickNonEmptyString(storedUser?.email)
+
+    const displayName = propName || storedName || "User"
+    const displayEmail = propEmail || storedEmail || "—"
+
     const handleLogout = () => {
         // Clear session context + token
         logout()
@@ -105,7 +132,7 @@ export function NavUser({
                 <SidebarMenuItem>
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                            <SidebarMenuButton asChild size="lg" tooltip={user.name}>
+                            <SidebarMenuButton asChild size="lg" tooltip={displayName}>
                                 <Button
                                     variant="ghost"
                                     className={cn(
@@ -119,8 +146,10 @@ export function NavUser({
                                     )}
                                 >
                                     <Avatar className="h-8 w-8">
-                                        {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={user.name} /> : null}
-                                        <AvatarFallback>{initials(user.name)}</AvatarFallback>
+                                        {user.avatarUrl ? (
+                                            <AvatarImage src={user.avatarUrl} alt={displayName} />
+                                        ) : null}
+                                        <AvatarFallback>{initials(displayName)}</AvatarFallback>
                                     </Avatar>
 
                                     <div
@@ -131,8 +160,8 @@ export function NavUser({
                                             compactOnMobile && "hidden md:block",
                                         )}
                                     >
-                                        <div className="truncate text-sm font-medium">{user.name}</div>
-                                        <div className="truncate text-xs text-muted-foreground">{user.email}</div>
+                                        <div className="truncate text-sm font-medium">{displayName}</div>
+                                        <div className="truncate text-xs text-muted-foreground">{displayEmail}</div>
                                     </div>
                                 </Button>
                             </SidebarMenuButton>
@@ -147,8 +176,8 @@ export function NavUser({
                             {/* Always show name + email inside the dropdown (so email is never "lost") */}
                             <DropdownMenuLabel>
                                 <div className="flex flex-col">
-                                    <span className="truncate text-sm font-medium">{user.name}</span>
-                                    <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+                                    <span className="truncate text-sm font-medium">{displayName}</span>
+                                    <span className="truncate text-xs text-muted-foreground">{displayEmail}</span>
                                 </div>
                             </DropdownMenuLabel>
 

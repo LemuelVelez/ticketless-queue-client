@@ -21,6 +21,7 @@ export type MeResponse = {
         id: string
         role: UserRole
         name?: string
+        email?: string
         assignedDepartment?: string
         assignedWindow?: string
     } | null
