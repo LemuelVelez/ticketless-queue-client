@@ -1,9 +1,18 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { Eye, EyeOff } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardFooter,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,7 +32,10 @@ export default function LoginPage() {
 
         try {
             // TODO: Replace with real auth call
+            toast.success("Signed in successfully")
             navigate("/loading")
+        } catch (err) {
+            toast.error("Sign in failed")
         } finally {
             setIsSubmitting(false)
         }
@@ -40,7 +52,9 @@ export default function LoginPage() {
                         </div>
                         <div className="leading-tight">
                             <div className="text-sm font-semibold">QueuePass</div>
-                            <div className="text-muted-foreground text-xs">Ticketless QR Queue</div>
+                            <div className="text-muted-foreground text-xs">
+                                Ticketless QR Queue
+                            </div>
                         </div>
                     </Link>
                 </div>
@@ -50,7 +64,9 @@ export default function LoginPage() {
                         <Card>
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-2xl">Sign in</CardTitle>
-                                <CardDescription>Welcome back. Enter your details to continue.</CardDescription>
+                                <CardDescription>
+                                    Welcome back. Enter your details to continue.
+                                </CardDescription>
                             </CardHeader>
 
                             <CardContent>
@@ -93,10 +109,16 @@ export default function LoginPage() {
                                                 size="icon"
                                                 disabled={isSubmitting}
                                                 onClick={() => setShowPassword((s) => !s)}
-                                                aria-label={showPassword ? "Hide password" : "Show password"}
+                                                aria-label={
+                                                    showPassword ? "Hide password" : "Show password"
+                                                }
                                                 className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
                                             >
-                                                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                                {showPassword ? (
+                                                    <EyeOff className="h-4 w-4" />
+                                                ) : (
+                                                    <Eye className="h-4 w-4" />
+                                                )}
                                             </Button>
                                         </div>
                                     </div>
@@ -109,12 +131,17 @@ export default function LoginPage() {
                                                 onCheckedChange={(v) => setRememberMe(v === true)}
                                                 disabled={isSubmitting}
                                             />
-                                            <Label htmlFor="remember" className="text-sm font-normal">
+                                            <Label
+                                                htmlFor="remember"
+                                                className="text-sm font-normal"
+                                            >
                                                 Remember me
                                             </Label>
                                         </div>
 
-                                        <span className="text-muted-foreground text-xs">{rememberMe ? "Keeps you signed in" : ""}</span>
+                                        <span className="text-muted-foreground text-xs">
+                                            {rememberMe ? "Keeps you signed in" : ""}
+                                        </span>
                                     </div>
 
                                     <Button className="w-full" type="submit" disabled={isSubmitting}>
@@ -126,7 +153,10 @@ export default function LoginPage() {
                             <CardFooter className="flex flex-col gap-3">
                                 <p className="text-muted-foreground text-center text-sm">
                                     Don&apos;t have an account?{" "}
-                                    <Link to="/signup" className="text-foreground underline-offset-4 hover:underline">
+                                    <Link
+                                        to="/signup"
+                                        className="text-foreground underline-offset-4 hover:underline"
+                                    >
                                         Create one
                                     </Link>
                                 </p>
@@ -137,7 +167,10 @@ export default function LoginPage() {
                                         Terms
                                     </Link>{" "}
                                     and{" "}
-                                    <Link to="/privacy" className="underline-offset-4 hover:underline">
+                                    <Link
+                                        to="/privacy"
+                                        className="underline-offset-4 hover:underline"
+                                    >
                                         Privacy Policy
                                     </Link>
                                     .
@@ -157,7 +190,8 @@ export default function LoginPage() {
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-xl">Manage queues with ease</CardTitle>
                                 <CardDescription>
-                                    QR-based entry, SMS updates, voice announcements, and a public display—built for student-facing offices.
+                                    QR-based entry, SMS updates, voice announcements, and a public
+                                    display—built for student-facing offices.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>

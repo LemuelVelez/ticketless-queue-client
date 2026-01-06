@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom"
 
+import { Toaster } from "@/components/ui/sonner"
 import LandingPage from "@/pages/landing"
 import LoadingPage from "@/pages/loading"
 import LoginPage from "@/pages/authentication/login"
@@ -14,6 +15,8 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+
+      <Toaster />
     </BrowserRouter>
   )
 }
