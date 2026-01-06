@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom"
+
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -5,8 +7,13 @@ import { Separator } from "@/components/ui/separator"
 import { BellRing, Mic, QrCode, Tv2, Volume2 } from "lucide-react"
 
 import heroImage from "@/assets/images/heroImage.svg"
+import { useSession } from "@/hooks/use-session"
 
 export default function Hero() {
+    const { user, loading } = useSession()
+
+    const dashboardPath = user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
+
     return (
         <section className="py-12 md:py-16">
             <div className="grid gap-8 md:grid-cols-2 md:items-start">
@@ -34,27 +41,29 @@ export default function Hero() {
                         QueuePass: ticketless student ID queueing for school offices
                     </h1>
                     <p className="mt-4 text-pretty text-muted-foreground">
-                        Students scan a QR code, enter their Student ID, and get a virtual queue number.
-                        Staff can call next, recall, serve, and HOLD no-shows—while the public display updates in real time
-                        with SMS + voice announcements.
+                        Students scan a QR code, enter their Student ID, and get a virtual queue number. Staff can call
+                        next, recall, serve, and HOLD no-shows—while the public display updates in real time with SMS +
+                        voice announcements.
                     </p>
 
                     <div className="mt-6 flex flex-wrap gap-2">
                         <Button asChild>
                             <a href="/join">Join Queue</a>
                         </Button>
-                        <Button variant="outline" asChild>
-                            <a href="/staff/login">Staff Dashboard</a>
-                        </Button>
-                        <Button variant="ghost" asChild>
-                            <a href="/admin/login">Admin Panel</a>
-                        </Button>
+
+                        {/* ✅ Show Dashboard only when session user exists (and not while loading) */}
+                        {!loading && user ? (
+                            <Button variant="outline" asChild>
+                                <Link to={dashboardPath}>Dashboard</Link>
+                            </Button>
+                        ) : null}
                     </div>
 
                     <div className="mt-6">
                         <Separator className="my-4" />
                         <p className="text-sm text-muted-foreground">
-                            Designed for Registrar, Cashier, Library, Clinic, NSTP/ROTC, and other student-facing departments.
+                            Designed for Registrar, Cashier, Library, Clinic, NSTP/ROTC, and other student-facing
+                            departments.
                         </p>
                     </div>
                 </div>

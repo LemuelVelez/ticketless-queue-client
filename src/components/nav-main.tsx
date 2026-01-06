@@ -77,7 +77,7 @@ const ADMIN_NAV_ITEMS: NavMainItem[] = [
     { title: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
     { title: "Departments", href: "/admin/departments", icon: Building2 },
     { title: "Windows", href: "/admin/windows", icon: LayoutGrid },
-    { title: "Staff Accounts", href: "/admin/staff", icon: Users },
+    { title: "Accounts", href: "/admin/accounts", icon: Users },
     { title: "Reports", href: "/admin/reports", icon: BarChart3 },
     { title: "Audit Logs", href: "/admin/audit-logs", icon: ShieldCheck },
     { title: "Settings", href: "/admin/settings", icon: Settings },

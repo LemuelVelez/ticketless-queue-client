@@ -37,7 +37,7 @@ const ADMIN_NAV: NavMainItem[] = [
     { title: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
     { title: "Departments", href: "/admin/departments", icon: Building2 },
     { title: "Windows", href: "/admin/windows", icon: LayoutGrid },
-    { title: "Staff Accounts", href: "/admin/staff", icon: Users },
+    { title: "Accounts", href: "/admin/accounts", icon: Users },
     { title: "Settings", href: "/admin/settings", icon: SettingsIcon },
 ]
 
@@ -232,7 +232,7 @@ export default function AdminDashboardPage() {
                 />
 
                 <StatCard
-                    title="Staff Accounts"
+                    title="Accounts"
                     value={loading ? <Skeleton className="h-9 w-20" /> : staff.length}
                     hint={
                         loading ? (
@@ -456,7 +456,7 @@ export default function AdminDashboardPage() {
                                             {staff.length === 0 ? (
                                                 <TableRow>
                                                     <TableCell colSpan={3} className="text-center text-muted-foreground">
-                                                        No staff accounts found.
+                                                        No accounts found.
                                                     </TableCell>
                                                 </TableRow>
                                             ) : null}
@@ -498,7 +498,7 @@ export default function AdminDashboardPage() {
                         <Button asChild className="w-full justify-start" variant="outline">
                             <Link to="/admin/staff">
                                 <Users className="mr-2 h-4 w-4" />
-                                Manage Staff Accounts
+                                Manage User Accounts
                             </Link>
                         </Button>
 
