@@ -28,6 +28,14 @@ type NavUserProps = {
     accountHref?: string
     settingsHref?: string
     logoutHref?: string
+
+    /**
+     * Controls where the dropdown opens.
+     * - Sidebar use-case: "right" looks best
+     * - Header use-case: "bottom" is expected
+     */
+    dropdownSide?: "top" | "right" | "bottom" | "left"
+    dropdownAlign?: "start" | "center" | "end"
 }
 
 function initials(name: string) {
@@ -43,6 +51,8 @@ export function NavUser({
     accountHref = "/staff/account",
     settingsHref = "/staff/settings",
     logoutHref = "/staff/logout",
+    dropdownSide = "right",
+    dropdownAlign = "end",
 }: NavUserProps) {
     const { state, isMobile } = useSidebar()
     const collapsed = state === "collapsed" && !isMobile
@@ -55,10 +65,7 @@ export function NavUser({
                         <SidebarMenuButton asChild size="lg" tooltip={user.name}>
                             <Button
                                 variant="ghost"
-                                className={cn(
-                                    "w-full justify-start gap-3 px-2",
-                                    collapsed && "justify-center px-0"
-                                )}
+                                className={cn("w-full justify-start gap-3 px-2", collapsed && "justify-center px-0")}
                             >
                                 <Avatar className="h-8 w-8">
                                     {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={user.name} /> : null}
@@ -73,7 +80,12 @@ export function NavUser({
                         </SidebarMenuButton>
                     </DropdownMenuTrigger>
 
-                    <DropdownMenuContent align="end" side="right" className="w-56">
+                    <DropdownMenuContent
+                        align={dropdownAlign}
+                        side={dropdownSide}
+                        sideOffset={8}
+                        className="w-56"
+                    >
                         <DropdownMenuLabel>Account</DropdownMenuLabel>
                         <DropdownMenuSeparator />
 

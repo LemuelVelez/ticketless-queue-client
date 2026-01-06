@@ -2,9 +2,18 @@
 
 import * as React from "react"
 
-import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import {
+    Sidebar,
+    SidebarContent,
+    SidebarFooter,
+    SidebarHeader,
+    SidebarInset,
+    SidebarProvider,
+} from "@/components/ui/sidebar"
+
 import { DashboardHeader } from "@/components/dashboard-header"
-import { NavMain, type NavMainItem } from "@/components/nav-main"
+import { NavMain } from "@/components/nav-main"
+import { STAFF_NAV_ITEMS, type NavMainItem } from "@/components/dashboard-nav"
 import { SidebarHeader as AppSidebarHeader } from "@/components/sidebar-header"
 import { SidebarFooter as AppSidebarFooter } from "@/components/sidebar-footer"
 import type { DashboardUser } from "@/components/nav-user"
@@ -20,15 +29,14 @@ type DashboardLayoutProps = {
      * Example: react-router's `useLocation().pathname`
      */
     activePath?: string
-}
 
-const DEFAULT_NAV: NavMainItem[] = [
-    { title: "Dashboard", href: "/staff/dashboard" },
-    { title: "Queue", href: "/staff/queue" },
-    { title: "Now Serving", href: "/staff/now-serving" },
-    { title: "Reports", href: "/staff/reports" },
-    { title: "Settings", href: "/staff/settings" },
-]
+    /**
+     * Optional overrides for NavUser links in the header dropdown
+     */
+    accountHref?: string
+    settingsHref?: string
+    logoutHref?: string
+}
 
 const DEFAULT_USER: DashboardUser = {
     name: "Staff User",
@@ -38,10 +46,13 @@ const DEFAULT_USER: DashboardUser = {
 export function DashboardLayout({
     children,
     title = "Dashboard",
-    navItems = DEFAULT_NAV,
+    navItems = STAFF_NAV_ITEMS,
     user = DEFAULT_USER,
     headerRightSlot,
     activePath,
+    accountHref,
+    settingsHref,
+    logoutHref,
 }: DashboardLayoutProps) {
     return (
         <SidebarProvider defaultOpen>
@@ -60,7 +71,15 @@ export function DashboardLayout({
             </Sidebar>
 
             <SidebarInset>
-                <DashboardHeader title={title}>{headerRightSlot}</DashboardHeader>
+                <DashboardHeader
+                    title={title}
+                    user={user}
+                    accountHref={accountHref}
+                    settingsHref={settingsHref}
+                    logoutHref={logoutHref}
+                >
+                    {headerRightSlot}
+                </DashboardHeader>
 
                 <main className="flex-1 p-4 md:p-6">{children}</main>
             </SidebarInset>

@@ -1,17 +1,10 @@
 import * as React from "react"
 import { useLocation, Link } from "react-router-dom"
-import {
-    LayoutDashboard,
-    Building2,
-    LayoutGrid,
-    Users,
-    Settings as SettingsIcon,
-    RefreshCcw,
-} from "lucide-react"
+import { Building2, LayoutGrid, Users, Settings as SettingsIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
-import type { NavMainItem } from "@/components/nav-main"
+import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { adminApi, type Department, type ServiceWindow, type Setting, type StaffUser } from "@/api/admin"
@@ -32,14 +25,6 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-
-const ADMIN_NAV: NavMainItem[] = [
-    { title: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
-    { title: "Departments", href: "/admin/departments", icon: Building2 },
-    { title: "Windows", href: "/admin/windows", icon: LayoutGrid },
-    { title: "Accounts", href: "/admin/accounts", icon: Users },
-    { title: "Settings", href: "/admin/settings", icon: SettingsIcon },
-]
 
 function isEnabledFlag(value: boolean | undefined) {
     // treat undefined as enabled (common backend default)
@@ -141,27 +126,11 @@ export default function AdminDashboardPage() {
         void fetchAll()
     }, [fetchAll])
 
-    const headerRight = (
-        <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void fetchAll()} disabled={loading}>
-                <RefreshCcw className="mr-2 h-4 w-4" />
-                Refresh
-            </Button>
-            <Button asChild size="sm">
-                <Link to="/admin/settings">
-                    <SettingsIcon className="mr-2 h-4 w-4" />
-                    Settings
-                </Link>
-            </Button>
-        </div>
-    )
-
     return (
         <DashboardLayout
             title="Admin Dashboard"
-            navItems={ADMIN_NAV}
+            navItems={ADMIN_NAV_ITEMS}
             user={dashboardUser}
-            headerRightSlot={headerRight}
             activePath={location.pathname}
         >
             {error ? (
@@ -186,9 +155,7 @@ export default function AdminDashboardPage() {
                         loading ? (
                             <Skeleton className="h-4 w-40" />
                         ) : (
-                            <span className="text-muted-foreground">
-                                {enabledDepartments} enabled
-                            </span>
+                            <span className="text-muted-foreground">{enabledDepartments} enabled</span>
                         )
                     }
                     badge={
@@ -212,9 +179,7 @@ export default function AdminDashboardPage() {
                         loading ? (
                             <Skeleton className="h-4 w-40" />
                         ) : (
-                            <span className="text-muted-foreground">
-                                {enabledWindows} enabled
-                            </span>
+                            <span className="text-muted-foreground">{enabledWindows} enabled</span>
                         )
                     }
                     badge={
@@ -238,9 +203,7 @@ export default function AdminDashboardPage() {
                         loading ? (
                             <Skeleton className="h-4 w-40" />
                         ) : (
-                            <span className="text-muted-foreground">
-                                {activeStaff} active
-                            </span>
+                            <span className="text-muted-foreground">{activeStaff} active</span>
                         )
                     }
                     badge={
@@ -265,9 +228,7 @@ export default function AdminDashboardPage() {
                         loading ? (
                             <Skeleton className="h-9 w-24" />
                         ) : settings ? (
-                            <span className="text-2xl font-semibold">
-                                {settings.maxHoldAttempts}
-                            </span>
+                            <span className="text-2xl font-semibold">{settings.maxHoldAttempts}</span>
                         ) : (
                             <span className="text-2xl font-semibold">—</span>
                         )
@@ -276,13 +237,9 @@ export default function AdminDashboardPage() {
                         loading ? (
                             <Skeleton className="h-4 w-44" />
                         ) : settings ? (
-                            <span className="text-muted-foreground">
-                                Holds allowed per ticket
-                            </span>
+                            <span className="text-muted-foreground">Holds allowed per ticket</span>
                         ) : (
-                            <span className="text-muted-foreground">
-                                Configure queue behavior
-                            </span>
+                            <span className="text-muted-foreground">Configure queue behavior</span>
                         )
                     }
                     badge={
@@ -310,9 +267,7 @@ export default function AdminDashboardPage() {
                 <Card className="lg:col-span-2">
                     <CardHeader>
                         <CardTitle className="text-base">Directory</CardTitle>
-                        <CardDescription>
-                            Quick view of departments, windows, and staff.
-                        </CardDescription>
+                        <CardDescription>Quick view of departments, windows, and staff.</CardDescription>
                     </CardHeader>
 
                     <CardContent>
@@ -345,9 +300,7 @@ export default function AdminDashboardPage() {
                                                 return (
                                                     <TableRow key={d._id}>
                                                         <TableCell className="font-medium">{d.name}</TableCell>
-                                                        <TableCell className="text-muted-foreground">
-                                                            {d.code ?? "—"}
-                                                        </TableCell>
+                                                        <TableCell className="text-muted-foreground">{d.code ?? "—"}</TableCell>
                                                         <TableCell className="text-right">
                                                             <Badge variant={enabled ? "default" : "secondary"}>
                                                                 {enabled ? "Enabled" : "Disabled"}
@@ -396,9 +349,7 @@ export default function AdminDashboardPage() {
                                                 return (
                                                     <TableRow key={w._id}>
                                                         <TableCell className="font-medium">{w.name}</TableCell>
-                                                        <TableCell className="text-muted-foreground">
-                                                            {w.number}
-                                                        </TableCell>
+                                                        <TableCell className="text-muted-foreground">{w.number}</TableCell>
                                                         <TableCell className="text-right">
                                                             <Badge variant={enabled ? "default" : "secondary"}>
                                                                 {enabled ? "Enabled" : "Disabled"}
@@ -514,9 +465,7 @@ export default function AdminDashboardPage() {
                         <div className="rounded-lg border p-3">
                             <div className="flex items-center justify-between gap-2">
                                 <div className="text-sm font-medium">Up next display</div>
-                                <Badge variant="secondary">
-                                    {loading ? "…" : settings?.upNextCount ?? "—"}
-                                </Badge>
+                                <Badge variant="secondary">{loading ? "…" : settings?.upNextCount ?? "—"}</Badge>
                             </div>
                             <p className="mt-2 text-xs text-muted-foreground">
                                 Controls how many tickets appear on the public display as “Up Next”.
