@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { Link } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
@@ -114,13 +115,9 @@ export default function Header() {
         <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
             <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
                 {/* Brand (clickable to /) */}
-                <a href="/" className="flex items-center gap-3">
+                <Link to="/" className="flex items-center gap-3">
                     <div className="flex h-14 w-14 items-center justify-center rounded-lg border">
-                        <img
-                            src={logo}
-                            alt="QueuePass logo"
-                            className="h-12 w-12"
-                        />
+                        <img src={logo} alt="QueuePass logo" className="h-12 w-12" />
                     </div>
                     <div className="leading-tight">
                         <div className="flex items-center gap-2">
@@ -133,7 +130,7 @@ export default function Header() {
                             Student ID queue management with SMS, voice, and public display
                         </p>
                     </div>
-                </a>
+                </Link>
 
                 {/* Desktop nav */}
                 <div className="hidden items-center gap-3 md:flex">
@@ -151,7 +148,7 @@ export default function Header() {
                                                 "relative",
                                                 isActive &&
                                                 "bg-accent text-accent-foreground " +
-                                                "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary"
+                                                "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
                                             )}
                                         >
                                             <a
@@ -169,9 +166,11 @@ export default function Header() {
                     </NavigationMenu>
 
                     <div className="flex items-center gap-2">
+                        {/* ✅ Staff Login -> /login */}
                         <Button variant="outline" asChild>
-                            <a href="/staff/login">Staff Login</a>
+                            <Link to="/login">Staff Login</Link>
                         </Button>
+
                         <Button asChild>
                             <a href="/join">Join Queue</a>
                         </Button>
@@ -196,11 +195,7 @@ export default function Header() {
                                 <SheetTitle className="text-left">
                                     <div className="flex flex-col gap-3">
                                         <div className="flex items-center gap-3">
-                                            <img
-                                                src={logo}
-                                                alt="QueuePass logo"
-                                                className="h-10 w-10"
-                                            />
+                                            <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
                                             <div className="leading-tight">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <span className="font-semibold">QueuePass</span>
@@ -227,7 +222,7 @@ export default function Header() {
                                                 "relative w-full justify-start",
                                                 isActive &&
                                                 "bg-accent text-accent-foreground " +
-                                                "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary"
+                                                "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
                                             )}
                                             asChild
                                         >
@@ -243,39 +238,30 @@ export default function Header() {
                                 })}
 
                                 <div className="mt-4 flex flex-col gap-2 border-t pt-4">
+                                    {/* ✅ Staff Login -> /login */}
                                     <Button
                                         variant="outline"
                                         className="w-full"
                                         asChild
+                                        onClick={() => setSheetOpen(false)}
                                     >
-                                        <a
-                                            href="/staff/login"
-                                            onClick={() => setSheetOpen(false)}
-                                        >
-                                            Staff Login
-                                        </a>
+                                        <Link to="/login">Staff Login</Link>
                                     </Button>
 
                                     <Button className="w-full" asChild>
-                                        <a
-                                            href="/join"
-                                            onClick={() => setSheetOpen(false)}
-                                        >
+                                        <a href="/join" onClick={() => setSheetOpen(false)}>
                                             Join Queue
                                         </a>
                                     </Button>
 
+                                    {/* ✅ Admin Login -> /login */}
                                     <Button
                                         variant="ghost"
                                         className="w-full justify-start"
                                         asChild
+                                        onClick={() => setSheetOpen(false)}
                                     >
-                                        <a
-                                            href="/admin/login"
-                                            onClick={() => setSheetOpen(false)}
-                                        >
-                                            Admin Login
-                                        </a>
+                                        <Link to="/login">Admin Login</Link>
                                     </Button>
                                 </div>
                             </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
 import { Separator } from "@/components/ui/separator"
@@ -43,10 +44,7 @@ export default function Footer() {
             (entries) => {
                 const visible = entries
                     .filter((e) => e.isIntersecting)
-                    .sort(
-                        (a, b) =>
-                            (b.intersectionRatio ?? 0) - (a.intersectionRatio ?? 0)
-                    )[0]
+                    .sort((a, b) => (b.intersectionRatio ?? 0) - (a.intersectionRatio ?? 0))[0]
 
                 if (visible?.target?.id) {
                     setActiveHref(`#${visible.target.id}`)
@@ -56,7 +54,7 @@ export default function Footer() {
                 root: null,
                 threshold: [0.2, 0.35, 0.5, 0.65],
                 rootMargin: "-20% 0px -60% 0px",
-            }
+            },
         )
 
         sections.forEach((el) => observer.observe(el))
@@ -78,7 +76,8 @@ export default function Footer() {
                                     <Badge variant="secondary">Ticketless</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    QR-based student ID queueing with SMS notification, voice announcement, and public display.
+                                    QR-based student ID queueing with SMS notification, voice announcement, and
+                                    public display.
                                 </p>
                             </div>
                         </div>
@@ -86,12 +85,16 @@ export default function Footer() {
                         <Separator className="my-5" />
 
                         <div className="flex flex-wrap gap-2">
+                            {/* ✅ Admin -> /login */}
                             <Button variant="outline" asChild>
-                                <a href="/admin/login">Admin</a>
+                                <Link to="/login">Admin</Link>
                             </Button>
+
+                            {/* ✅ Staff -> /login */}
                             <Button variant="outline" asChild>
-                                <a href="/staff/login">Staff</a>
+                                <Link to="/login">Staff</Link>
                             </Button>
+
                             <Button asChild>
                                 <a href="/join">Join Queue</a>
                             </Button>
@@ -108,10 +111,7 @@ export default function Footer() {
                                 <Button
                                     key={item.href}
                                     variant="link"
-                                    className={cn(
-                                        "h-auto justify-start p-0",
-                                        isActive && "font-semibold underline"
-                                    )}
+                                    className={cn("h-auto justify-start p-0", isActive && "font-semibold underline")}
                                     asChild
                                 >
                                     <a

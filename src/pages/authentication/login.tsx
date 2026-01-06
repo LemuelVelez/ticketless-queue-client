@@ -1,8 +1,10 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import { useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import * as React from "react"
+import { Link, useLocation, useNavigate } from "react-router-dom"
 import { Eye, EyeOff } from "lucide-react"
 import { toast } from "sonner"
+
+import { useSession } from "@/hooks/use-session"
+import { ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -20,22 +22,63 @@ import { Label } from "@/components/ui/label"
 import logo from "@/assets/images/logo.svg"
 import heroImage from "@/assets/images/heroImage.svg"
 
+type LocationState = {
+    from?: {
+        pathname?: string
+    }
+}
+
 export default function LoginPage() {
     const navigate = useNavigate()
-    const [isSubmitting, setIsSubmitting] = useState(false)
-    const [rememberMe, setRememberMe] = useState(true)
-    const [showPassword, setShowPassword] = useState(false)
+    const location = useLocation()
+    const { login } = useSession()
+
+    const [email, setEmail] = React.useState("")
+    const [password, setPassword] = React.useState("")
+    const [isSubmitting, setIsSubmitting] = React.useState(false)
+    const [rememberMe, setRememberMe] = React.useState(true)
+    const [showPassword, setShowPassword] = React.useState(false)
 
     async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault()
+        if (isSubmitting) return
+
+        const cleanEmail = email.trim()
+        if (!cleanEmail || !password) {
+            toast.error("Please enter your email and password.")
+            return
+        }
+
         setIsSubmitting(true)
 
         try {
-            // TODO: Replace with real auth call
+            const res = await login(cleanEmail, password, rememberMe)
+
             toast.success("Signed in successfully")
-            navigate("/loading")
+
+            // If RoleGuard redirected here, it sets state.from
+            const state = location.state as LocationState | null
+            const fromPath = state?.from?.pathname
+
+            if (fromPath && typeof fromPath === "string") {
+                navigate(fromPath, { replace: true })
+                return
+            }
+
+            // Default destination based on role
+            if (res.user.role === "ADMIN") {
+                navigate("/admin/dashboard", { replace: true })
+            } else {
+                navigate("/staff/dashboard", { replace: true })
+            }
         } catch (err) {
-            toast.error("Sign in failed")
+            const message =
+                err instanceof ApiError
+                    ? err.message
+                    : err instanceof Error
+                        ? err.message
+                        : "Sign in failed"
+            toast.error(message)
         } finally {
             setIsSubmitting(false)
         }
@@ -52,9 +95,7 @@ export default function LoginPage() {
                         </div>
                         <div className="leading-tight">
                             <div className="text-sm font-semibold">QueuePass</div>
-                            <div className="text-muted-foreground text-xs">
-                                Ticketless QR Queue
-                            </div>
+                            <div className="text-muted-foreground text-xs">Ticketless QR Queue</div>
                         </div>
                     </Link>
                 </div>
@@ -80,6 +121,8 @@ export default function LoginPage() {
                                             autoComplete="email"
                                             required
                                             disabled={isSubmitting}
+                                            value={email}
+                                            onChange={(e) => setEmail(e.target.value)}
                                         />
                                     </div>
 
@@ -102,6 +145,8 @@ export default function LoginPage() {
                                                 required
                                                 disabled={isSubmitting}
                                                 className="pr-10"
+                                                value={password}
+                                                onChange={(e) => setPassword(e.target.value)}
                                             />
                                             <Button
                                                 type="button"
@@ -109,9 +154,7 @@ export default function LoginPage() {
                                                 size="icon"
                                                 disabled={isSubmitting}
                                                 onClick={() => setShowPassword((s) => !s)}
-                                                aria-label={
-                                                    showPassword ? "Hide password" : "Show password"
-                                                }
+                                                aria-label={showPassword ? "Hide password" : "Show password"}
                                                 className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
                                             >
                                                 {showPassword ? (
@@ -131,10 +174,7 @@ export default function LoginPage() {
                                                 onCheckedChange={(v) => setRememberMe(v === true)}
                                                 disabled={isSubmitting}
                                             />
-                                            <Label
-                                                htmlFor="remember"
-                                                className="text-sm font-normal"
-                                            >
+                                            <Label htmlFor="remember" className="text-sm font-normal">
                                                 Remember me
                                             </Label>
                                         </div>
@@ -167,10 +207,7 @@ export default function LoginPage() {
                                         Terms
                                     </Link>{" "}
                                     and{" "}
-                                    <Link
-                                        to="/privacy"
-                                        className="underline-offset-4 hover:underline"
-                                    >
+                                    <Link to="/privacy" className="underline-offset-4 hover:underline">
                                         Privacy Policy
                                     </Link>
                                     .
@@ -190,8 +227,8 @@ export default function LoginPage() {
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-xl">Manage queues with ease</CardTitle>
                                 <CardDescription>
-                                    QR-based entry, SMS updates, voice announcements, and a public
-                                    display—built for student-facing offices.
+                                    QR-based entry, SMS updates, voice announcements, and a public display—built
+                                    for student-facing offices.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
