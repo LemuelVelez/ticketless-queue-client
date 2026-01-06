@@ -10,13 +10,7 @@ import {
     NavigationMenuList,
     navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu"
-import {
-    Sheet,
-    SheetContent,
-    SheetHeader,
-    SheetTitle,
-    SheetTrigger,
-} from "@/components/ui/sheet"
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import { Menu } from "lucide-react"
 
@@ -49,7 +43,7 @@ export default function Header() {
         return () => window.removeEventListener("hashchange", syncFromHash)
     }, [])
 
-    // ✅ Scroll-spy (deterministic): fixes "How it works" being skipped while scrolling
+    // Scroll-spy
     useEffect(() => {
         const sections = sectionIds
             .map((id) => document.getElementById(id))
@@ -61,14 +55,9 @@ export default function Header() {
 
         const computeActive = () => {
             const headerH = headerRef.current?.getBoundingClientRect().height ?? 0
-
-            // buffer to match your sections' scroll-mt-24 (~96px)
-            // header + small cushion so boundary cases don't skip
             const offset = headerH + 24
-
             const y = window.scrollY + offset + 1
 
-            // Default to first section if user is above it
             let currentId = sections[0].id
 
             for (const sec of sections) {
@@ -79,8 +68,6 @@ export default function Header() {
                     currentId = sec.id
                     break
                 }
-
-                // If we passed this section, keep it as current until we enter the next
                 if (y >= top) currentId = sec.id
             }
 
@@ -108,13 +95,13 @@ export default function Header() {
 
     const handleNavClick = (href: string) => {
         setActiveHref(href)
-        setSheetOpen(false) // ✅ auto close sheet on mobile nav click
+        setSheetOpen(false)
     }
 
     return (
         <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
             <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-                {/* Brand (clickable to /) */}
+                {/* Brand */}
                 <Link to="/" className="flex items-center gap-3">
                     <div className="flex h-14 w-14 items-center justify-center rounded-lg border">
                         <img src={logo} alt="QueuePass logo" className="h-12 w-12" />
@@ -166,9 +153,9 @@ export default function Header() {
                     </NavigationMenu>
 
                     <div className="flex items-center gap-2">
-                        {/* ✅ Staff Login -> /login */}
+                        {/* ✅ Unified Login */}
                         <Button variant="outline" asChild>
-                            <Link to="/login">Staff Login</Link>
+                            <Link to="/login">Login</Link>
                         </Button>
 
                         <Button asChild>
@@ -186,25 +173,20 @@ export default function Header() {
                             </Button>
                         </SheetTrigger>
 
-                        {/* Mobile-only: add side spacing (inset) + better vertical layout */}
                         <SheetContent
                             side="right"
                             className="right-4 top-4 bottom-4 h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-90 overflow-y-auto rounded-xl border px-4 py-6 sm:px-6"
                         >
                             <SheetHeader>
                                 <SheetTitle className="text-left">
-                                    <div className="flex flex-col gap-3">
-                                        <div className="flex items-center gap-3">
-                                            <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
-                                            <div className="leading-tight">
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    <span className="font-semibold">QueuePass</span>
-                                                    <Badge variant="secondary">QR Queue</Badge>
-                                                </div>
-                                                <p className="mt-1 text-xs text-muted-foreground">
-                                                    Ticketless student queue
-                                                </p>
+                                    <div className="flex items-center gap-3">
+                                        <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
+                                        <div className="leading-tight">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="font-semibold">QueuePass</span>
+                                                <Badge variant="secondary">QR Queue</Badge>
                                             </div>
+                                            <p className="mt-1 text-xs text-muted-foreground">Ticketless student queue</p>
                                         </div>
                                     </div>
                                 </SheetTitle>
@@ -238,30 +220,20 @@ export default function Header() {
                                 })}
 
                                 <div className="mt-4 flex flex-col gap-2 border-t pt-4">
-                                    {/* ✅ Staff Login -> /login */}
+                                    {/* ✅ Unified Login */}
                                     <Button
                                         variant="outline"
                                         className="w-full"
                                         asChild
                                         onClick={() => setSheetOpen(false)}
                                     >
-                                        <Link to="/login">Staff Login</Link>
+                                        <Link to="/login">Login</Link>
                                     </Button>
 
                                     <Button className="w-full" asChild>
                                         <a href="/join" onClick={() => setSheetOpen(false)}>
                                             Join Queue
                                         </a>
-                                    </Button>
-
-                                    {/* ✅ Admin Login -> /login */}
-                                    <Button
-                                        variant="ghost"
-                                        className="w-full justify-start"
-                                        asChild
-                                        onClick={() => setSheetOpen(false)}
-                                    >
-                                        <Link to="/login">Admin Login</Link>
                                     </Button>
                                 </div>
                             </div>

@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
@@ -13,11 +15,7 @@ export default function NotFoundPage() {
                     <CardHeader>
                         <CardTitle className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2">
-                                <img
-                                    src={logo}
-                                    alt="QueuePass logo"
-                                    className="h-7 w-7"
-                                />
+                                <img src={logo} alt="QueuePass logo" className="h-12 w-12" />
                                 <span>Page not found</span>
                             </div>
                             <Badge variant="secondary">404</Badge>
@@ -39,13 +37,13 @@ export default function NotFoundPage() {
 
                         <div className="flex flex-col gap-2 sm:flex-row">
                             <Button asChild>
-                                <a href="/">Go to Landing</a>
+                                <Link to="/">Go to Landing</Link>
                             </Button>
                             <Button variant="outline" asChild>
                                 <a href="/join">Join Queue</a>
                             </Button>
                             <Button variant="ghost" asChild>
-                                <a href="/staff/login">Staff Login</a>
+                                <Link to="/login">Login</Link>
                             </Button>
                         </div>
 

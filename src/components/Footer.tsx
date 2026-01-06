@@ -76,8 +76,8 @@ export default function Footer() {
                                     <Badge variant="secondary">Ticketless</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    QR-based student ID queueing with SMS notification, voice announcement, and
-                                    public display.
+                                    QR-based student ID queueing with SMS notification, voice announcement, and public
+                                    display.
                                 </p>
                             </div>
                         </div>
@@ -85,14 +85,9 @@ export default function Footer() {
                         <Separator className="my-5" />
 
                         <div className="flex flex-wrap gap-2">
-                            {/* ✅ Admin -> /login */}
+                            {/* ✅ Unified Login */}
                             <Button variant="outline" asChild>
-                                <Link to="/login">Admin</Link>
-                            </Button>
-
-                            {/* ✅ Staff -> /login */}
-                            <Button variant="outline" asChild>
-                                <Link to="/login">Staff</Link>
+                                <Link to="/login">Login</Link>
                             </Button>
 
                             <Button asChild>
