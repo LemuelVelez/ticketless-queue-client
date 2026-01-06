@@ -2,7 +2,7 @@
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { MoreHorizontal, Plus, RefreshCw, Building2, LayoutGrid } from "lucide-react"
+import { MoreHorizontal, Plus, RefreshCw, LayoutGrid, Building2 } from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
@@ -46,6 +46,14 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 function isEnabledFlag(value: boolean | undefined) {
@@ -57,7 +65,12 @@ function statusBadge(enabled: boolean | undefined) {
     return <Badge variant={on ? "default" : "secondary"}>{on ? "Enabled" : "Disabled"}</Badge>
 }
 
-export default function AdminDepartmentsPage() {
+function safeInt(v: string) {
+    const n = Number.parseInt(v, 10)
+    return Number.isFinite(n) ? n : 0
+}
+
+export default function AdminWindowsPage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
 
@@ -73,38 +86,40 @@ export default function AdminDepartmentsPage() {
     const [saving, setSaving] = React.useState(false)
 
     const [departments, setDepartments] = React.useState<Department[]>([])
-    // Only for showing window counts per department (management happens in /admin/windows)
     const [windows, setWindows] = React.useState<ServiceWindow[]>([])
 
     // filters
-    const [deptQ, setDeptQ] = React.useState("")
-    const [deptStatusTab, setDeptStatusTab] = React.useState<"all" | "enabled" | "disabled">("all")
+    const [winQ, setWinQ] = React.useState("")
+    const [winStatusTab, setWinStatusTab] = React.useState<"all" | "enabled" | "disabled">("all")
+    const [winDeptFilter, setWinDeptFilter] = React.useState<string>("all")
 
     // dialogs
-    const [createDeptOpen, setCreateDeptOpen] = React.useState(false)
-    const [editDeptOpen, setEditDeptOpen] = React.useState(false)
+    const [createWinOpen, setCreateWinOpen] = React.useState(false)
+    const [editWinOpen, setEditWinOpen] = React.useState(false)
 
     // selected
-    const [selectedDept, setSelectedDept] = React.useState<Department | null>(null)
+    const [selectedWin, setSelectedWin] = React.useState<ServiceWindow | null>(null)
 
-    // create dept form
-    const [cDeptName, setCDeptName] = React.useState("")
-    const [cDeptCode, setCDeptCode] = React.useState("")
+    // create window form
+    const [cWinDeptId, setCWinDeptId] = React.useState<string>("")
+    const [cWinName, setCWinName] = React.useState("")
+    const [cWinNumber, setCWinNumber] = React.useState<number>(1)
 
-    // edit dept form
-    const [eDeptName, setEDeptName] = React.useState("")
-    const [eDeptCode, setEDeptCode] = React.useState("")
-    const [eDeptEnabled, setEDeptEnabled] = React.useState(true)
+    // edit window form
+    const [eWinName, setEWinName] = React.useState("")
+    const [eWinNumber, setEWinNumber] = React.useState<number>(1)
+    const [eWinEnabled, setEWinEnabled] = React.useState(true)
 
-    const windowsByDept = React.useMemo(() => {
-        const m = new Map<string, ServiceWindow[]>()
-        for (const w of windows) {
-            const arr = m.get(w.department) ?? []
-            arr.push(w)
-            m.set(w.department, arr)
-        }
+    const deptById = React.useMemo(() => {
+        const m = new Map<string, Department>()
+        for (const d of departments) m.set(d._id, d)
         return m
-    }, [windows])
+    }, [departments])
+
+    const enabledDepartments = React.useMemo(
+        () => departments.filter((d) => isEnabledFlag(d.enabled)),
+        [departments],
+    )
 
     const fetchAll = React.useCallback(async () => {
         setLoading(true)
@@ -116,7 +131,7 @@ export default function AdminDepartmentsPage() {
             setDepartments(deptRes.departments ?? [])
             setWindows(winRes.windows ?? [])
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to load departments."
+            const msg = e instanceof Error ? e.message : "Failed to load windows."
             toast.error(msg)
         } finally {
             setLoading(false)
@@ -127,83 +142,91 @@ export default function AdminDepartmentsPage() {
         void fetchAll()
     }, [fetchAll])
 
-    function resetCreateDeptForm() {
-        setCDeptName("")
-        setCDeptCode("")
+    function resetCreateWinForm() {
+        setCWinDeptId("")
+        setCWinName("")
+        setCWinNumber(1)
     }
 
-    const deptRows = React.useMemo(() => {
-        const q = deptQ.trim().toLowerCase()
+    const winRows = React.useMemo(() => {
+        const q = winQ.trim().toLowerCase()
 
-        return (departments ?? [])
-            .filter((d) => {
-                const enabled = isEnabledFlag(d.enabled)
-                if (deptStatusTab === "enabled" && !enabled) return false
-                if (deptStatusTab === "disabled" && enabled) return false
+        return (windows ?? [])
+            .filter((w) => {
+                const enabled = isEnabledFlag(w.enabled)
+                if (winStatusTab === "enabled" && !enabled) return false
+                if (winStatusTab === "disabled" && enabled) return false
+
+                if (winDeptFilter !== "all" && w.department !== winDeptFilter) return false
 
                 if (!q) return true
-                const hay = `${d.name ?? ""} ${d.code ?? ""}`.toLowerCase()
+                const deptName = deptById.get(w.department)?.name ?? ""
+                const hay = `${w.name ?? ""} ${w.number ?? ""} ${deptName}`.toLowerCase()
                 return hay.includes(q)
             })
             .sort((a, b) => {
                 const ae = isEnabledFlag(a.enabled)
                 const be = isEnabledFlag(b.enabled)
                 if (ae !== be) return ae ? -1 : 1
-                return (a.name ?? "").localeCompare(b.name ?? "")
+                const deptA = deptById.get(a.department)?.name ?? ""
+                const deptB = deptById.get(b.department)?.name ?? ""
+                if (deptA !== deptB) return deptA.localeCompare(deptB)
+                return (a.number ?? 0) - (b.number ?? 0)
             })
-    }, [departments, deptQ, deptStatusTab])
+    }, [windows, winQ, winStatusTab, winDeptFilter, deptById])
 
-    function openEditDept(d: Department) {
-        setSelectedDept(d)
-        setEDeptName(d.name ?? "")
-        setEDeptCode(d.code ?? "")
-        setEDeptEnabled(isEnabledFlag(d.enabled))
-        setEditDeptOpen(true)
+    function openEditWin(w: ServiceWindow) {
+        setSelectedWin(w)
+        setEWinName(w.name ?? "")
+        setEWinNumber(Number(w.number ?? 1))
+        setEWinEnabled(isEnabledFlag(w.enabled))
+        setEditWinOpen(true)
     }
 
-    async function handleCreateDept() {
-        const name = cDeptName.trim()
-        const code = cDeptCode.trim()
+    async function handleCreateWin() {
+        const departmentId = cWinDeptId
+        const name = cWinName.trim()
+        const number = Number(cWinNumber)
 
-        if (!name) return toast.error("Department name is required.")
+        if (!departmentId) return toast.error("Department is required.")
+        if (!name) return toast.error("Window name is required.")
+        if (!Number.isFinite(number) || number <= 0) return toast.error("Window number must be a positive integer.")
 
         setSaving(true)
         try {
-            await adminApi.createDepartment({ name, code: code || undefined })
-            toast.success("Department created.")
-            setCreateDeptOpen(false)
-            resetCreateDeptForm()
+            await adminApi.createWindow({ departmentId, name, number })
+            toast.success("Window created.")
+            setCreateWinOpen(false)
+            resetCreateWinForm()
             await fetchAll()
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to create department."
+            const msg = e instanceof Error ? e.message : "Failed to create window."
             toast.error(msg)
         } finally {
             setSaving(false)
         }
     }
 
-    async function handleSaveDept() {
-        if (!selectedDept) return
-        const id = selectedDept._id
-        if (!id) return toast.error("Invalid department id.")
+    async function handleSaveWin() {
+        if (!selectedWin) return
+        const id = selectedWin._id
+        if (!id) return toast.error("Invalid window id.")
 
-        const name = eDeptName.trim()
-        const code = eDeptCode.trim()
-        if (!name) return toast.error("Department name is required.")
+        const name = eWinName.trim()
+        const number = Number(eWinNumber)
+
+        if (!name) return toast.error("Window name is required.")
+        if (!Number.isFinite(number) || number <= 0) return toast.error("Window number must be a positive integer.")
 
         setSaving(true)
         try {
-            await adminApi.updateDepartment(id, {
-                name,
-                code: code || undefined,
-                enabled: eDeptEnabled,
-            })
-            toast.success("Department updated.")
-            setEditDeptOpen(false)
-            setSelectedDept(null)
+            await adminApi.updateWindow(id, { name, number, enabled: eWinEnabled })
+            toast.success("Window updated.")
+            setEditWinOpen(false)
+            setSelectedWin(null)
             await fetchAll()
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to update department."
+            const msg = e instanceof Error ? e.message : "Failed to update window."
             toast.error(msg)
         } finally {
             setSaving(false)
@@ -211,20 +234,14 @@ export default function AdminDepartmentsPage() {
     }
 
     const stats = React.useMemo(() => {
-        const deptTotal = departments.length
-        const deptEnabled = departments.filter((d) => isEnabledFlag(d.enabled)).length
-        const winTotal = windows.length
-        return {
-            deptTotal,
-            deptEnabled,
-            deptDisabled: deptTotal - deptEnabled,
-            winTotal,
-        }
-    }, [departments, windows])
+        const total = windows.length
+        const enabled = windows.filter((w) => isEnabledFlag(w.enabled)).length
+        return { total, enabled, disabled: total - enabled }
+    }, [windows])
 
     return (
         <DashboardLayout
-            title="Departments"
+            title="Windows"
             navItems={ADMIN_NAV_ITEMS}
             user={dashboardUser}
             activePath={location.pathname}
@@ -234,9 +251,9 @@ export default function AdminDepartmentsPage() {
                     <CardHeader className="gap-2">
                         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
-                                <CardTitle>Department Management</CardTitle>
+                                <CardTitle>Window Management</CardTitle>
                                 <CardDescription>
-                                    Create and manage departments. Disable to hide from public selection.
+                                    Create and manage service windows. Disable windows to hide them from staff assignment.
                                 </CardDescription>
                             </div>
 
@@ -253,20 +270,20 @@ export default function AdminDepartmentsPage() {
 
                                 <Button
                                     onClick={() => {
-                                        resetCreateDeptForm()
-                                        setCreateDeptOpen(true)
+                                        resetCreateWinForm()
+                                        setCreateWinOpen(true)
                                     }}
                                     disabled={saving}
                                     className="gap-2"
                                 >
                                     <Plus className="h-4 w-4" />
-                                    New department
+                                    New window
                                 </Button>
 
                                 <Button asChild variant="secondary" className="gap-2">
-                                    <a href="/admin/windows">
-                                        <LayoutGrid className="h-4 w-4" />
-                                        Manage windows
+                                    <a href="/admin/departments">
+                                        <Building2 className="h-4 w-4" />
+                                        View departments
                                     </a>
                                 </Button>
                             </div>
@@ -276,35 +293,50 @@ export default function AdminDepartmentsPage() {
 
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <Badge variant="secondary">Depts: {stats.deptTotal}</Badge>
-                                <Badge variant="default">Enabled: {stats.deptEnabled}</Badge>
-                                <Badge variant="secondary">Disabled: {stats.deptDisabled}</Badge>
-                                <Badge variant="secondary">Windows: {stats.winTotal}</Badge>
+                                <Badge variant="secondary">Total: {stats.total}</Badge>
+                                <Badge variant="default">Enabled: {stats.enabled}</Badge>
+                                <Badge variant="secondary">Disabled: {stats.disabled}</Badge>
                             </div>
 
                             <div className="flex items-center gap-2">
-                                <Building2 className="h-4 w-4 text-muted-foreground" />
-                                <span className="text-sm text-muted-foreground">Departments</span>
+                                <LayoutGrid className="h-4 w-4 text-muted-foreground" />
+                                <span className="text-sm text-muted-foreground">Windows</span>
                             </div>
                         </div>
                     </CardHeader>
 
                     <CardContent>
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <Input
-                                value={deptQ}
-                                onChange={(e) => setDeptQ(e.target.value)}
-                                placeholder="Search departments…"
-                                className="w-full md:w-96"
-                            />
+                            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                                <Input
+                                    value={winQ}
+                                    onChange={(e) => setWinQ(e.target.value)}
+                                    placeholder="Search windows…"
+                                    className="w-full md:w-80"
+                                />
 
-                            <Tabs value={deptStatusTab} onValueChange={(v) => setDeptStatusTab(v as any)}>
+                                <Select value={winDeptFilter} onValueChange={setWinDeptFilter}>
+                                    <SelectTrigger className="w-full md:w-80">
+                                        <SelectValue placeholder="Filter by department" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All departments</SelectItem>
+                                        {departments.map((d) => (
+                                            <SelectItem key={d._id} value={d._id}>
+                                                {d.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <Tabs value={winStatusTab} onValueChange={(v) => setWinStatusTab(v as any)}>
                                 <TabsList className="grid w-full grid-cols-3 md:w-80">
                                     <TabsTrigger value="all">All</TabsTrigger>
                                     <TabsTrigger value="enabled">Enabled</TabsTrigger>
                                     <TabsTrigger value="disabled">Disabled</TabsTrigger>
                                 </TabsList>
-                                <TabsContent value={deptStatusTab} />
+                                <TabsContent value={winStatusTab} />
                             </Tabs>
                         </div>
 
@@ -321,37 +353,35 @@ export default function AdminDepartmentsPage() {
                                     <Table>
                                         <TableHeader>
                                             <TableRow>
-                                                <TableHead>Name</TableHead>
-                                                <TableHead className="hidden md:table-cell">Code</TableHead>
-                                                <TableHead className="hidden lg:table-cell">Windows</TableHead>
+                                                <TableHead>Window</TableHead>
+                                                <TableHead className="hidden md:table-cell">Department</TableHead>
                                                 <TableHead className="text-right">Status</TableHead>
                                                 <TableHead className="w-14" />
                                             </TableRow>
                                         </TableHeader>
 
                                         <TableBody>
-                                            {deptRows.map((d) => {
-                                                const winCount = (windowsByDept.get(d._id) ?? []).length
+                                            {winRows.map((w) => {
+                                                const deptName = deptById.get(w.department)?.name ?? "—"
                                                 return (
-                                                    <TableRow key={d._id}>
+                                                    <TableRow key={w._id}>
                                                         <TableCell className="font-medium">
                                                             <div className="flex flex-col">
-                                                                <span className="truncate">{d.name}</span>
+                                                                <span className="truncate">
+                                                                    {w.name}{" "}
+                                                                    <span className="text-muted-foreground">(#{w.number})</span>
+                                                                </span>
                                                                 <span className="truncate text-xs text-muted-foreground md:hidden">
-                                                                    {d.code || "—"}
+                                                                    {deptName}
                                                                 </span>
                                                             </div>
                                                         </TableCell>
 
                                                         <TableCell className="hidden md:table-cell">
-                                                            <span className="text-muted-foreground">{d.code || "—"}</span>
+                                                            <span className="text-muted-foreground">{deptName}</span>
                                                         </TableCell>
 
-                                                        <TableCell className="hidden lg:table-cell">
-                                                            <span className="text-muted-foreground">{winCount}</span>
-                                                        </TableCell>
-
-                                                        <TableCell className="text-right">{statusBadge(d.enabled)}</TableCell>
+                                                        <TableCell className="text-right">{statusBadge(w.enabled)}</TableCell>
 
                                                         <TableCell className="text-right">
                                                             <DropdownMenu>
@@ -365,10 +395,10 @@ export default function AdminDepartmentsPage() {
                                                                     <DropdownMenuLabel>Actions</DropdownMenuLabel>
                                                                     <DropdownMenuSeparator />
                                                                     <DropdownMenuItem
-                                                                        onClick={() => openEditDept(d)}
+                                                                        onClick={() => openEditWin(w)}
                                                                         className="cursor-pointer"
                                                                     >
-                                                                        Edit department
+                                                                        Edit window
                                                                     </DropdownMenuItem>
                                                                 </DropdownMenuContent>
                                                             </DropdownMenu>
@@ -377,10 +407,10 @@ export default function AdminDepartmentsPage() {
                                                 )
                                             })}
 
-                                            {deptRows.length === 0 ? (
+                                            {winRows.length === 0 ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                                                        No departments match your filters.
+                                                    <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                                                        No windows match your filters.
                                                     </TableCell>
                                                 </TableRow>
                                             ) : null}
@@ -393,31 +423,55 @@ export default function AdminDepartmentsPage() {
                 </Card>
             </div>
 
-            {/* Create Department */}
-            <Dialog open={createDeptOpen} onOpenChange={setCreateDeptOpen}>
+            {/* Create Window */}
+            <Dialog open={createWinOpen} onOpenChange={setCreateWinOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
-                        <DialogTitle>Create department</DialogTitle>
+                        <DialogTitle>Create window</DialogTitle>
                     </DialogHeader>
 
                     <div className="grid gap-4">
                         <div className="grid gap-2">
-                            <Label htmlFor="c-dept-name">Name</Label>
+                            <Label>Department</Label>
+                            <Select
+                                value={cWinDeptId || "none"}
+                                onValueChange={(v) => setCWinDeptId(v === "none" ? "" : v)}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select department" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="none">Select…</SelectItem>
+                                    {enabledDepartments.map((d) => (
+                                        <SelectItem key={d._id} value={d._id}>
+                                            {d.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Only enabled departments are selectable here.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="c-win-name">Window name</Label>
                             <Input
-                                id="c-dept-name"
-                                value={cDeptName}
-                                onChange={(e) => setCDeptName(e.target.value)}
-                                placeholder="e.g., Registrar"
+                                id="c-win-name"
+                                value={cWinName}
+                                onChange={(e) => setCWinName(e.target.value)}
+                                placeholder="e.g., Window A"
                             />
                         </div>
 
                         <div className="grid gap-2">
-                            <Label htmlFor="c-dept-code">Code (optional)</Label>
+                            <Label htmlFor="c-win-number">Window number</Label>
                             <Input
-                                id="c-dept-code"
-                                value={cDeptCode}
-                                onChange={(e) => setCDeptCode(e.target.value)}
-                                placeholder="e.g., REG"
+                                id="c-win-number"
+                                type="number"
+                                value={String(cWinNumber)}
+                                onChange={(e) => setCWinNumber(safeInt(e.target.value))}
+                                min={1}
                             />
                         </div>
                     </div>
@@ -427,8 +481,8 @@ export default function AdminDepartmentsPage() {
                             type="button"
                             variant="outline"
                             onClick={() => {
-                                setCreateDeptOpen(false)
-                                resetCreateDeptForm()
+                                setCreateWinOpen(false)
+                                resetCreateWinForm()
                             }}
                             disabled={saving}
                             className="mr-2"
@@ -436,37 +490,49 @@ export default function AdminDepartmentsPage() {
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleCreateDept()} disabled={saving}>
+                        <Button type="button" onClick={() => void handleCreateWin()} disabled={saving}>
                             {saving ? "Creating…" : "Create"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
 
-            {/* Edit Department */}
-            <Dialog open={editDeptOpen} onOpenChange={setEditDeptOpen}>
+            {/* Edit Window */}
+            <Dialog open={editWinOpen} onOpenChange={setEditWinOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
-                        <DialogTitle>Edit department</DialogTitle>
+                        <DialogTitle>Edit window</DialogTitle>
                     </DialogHeader>
 
                     <div className="grid gap-4">
                         <div className="grid gap-2">
-                            <Label htmlFor="e-dept-name">Name</Label>
+                            <Label>Department</Label>
                             <Input
-                                id="e-dept-name"
-                                value={eDeptName}
-                                onChange={(e) => setEDeptName(e.target.value)}
+                                value={selectedWin ? (deptById.get(selectedWin.department)?.name ?? "—") : ""}
+                                readOnly
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Window department can’t be changed (create a new window instead).
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="e-win-name">Window name</Label>
+                            <Input
+                                id="e-win-name"
+                                value={eWinName}
+                                onChange={(e) => setEWinName(e.target.value)}
                             />
                         </div>
 
                         <div className="grid gap-2">
-                            <Label htmlFor="e-dept-code">Code</Label>
+                            <Label htmlFor="e-win-number">Window number</Label>
                             <Input
-                                id="e-dept-code"
-                                value={eDeptCode}
-                                onChange={(e) => setEDeptCode(e.target.value)}
-                                placeholder="Optional"
+                                id="e-win-number"
+                                type="number"
+                                value={String(eWinNumber)}
+                                onChange={(e) => setEWinNumber(safeInt(e.target.value))}
+                                min={1}
                             />
                         </div>
 
@@ -474,10 +540,10 @@ export default function AdminDepartmentsPage() {
                             <div className="grid gap-0.5">
                                 <div className="text-sm font-medium">Enabled</div>
                                 <div className="text-xs text-muted-foreground">
-                                    Disabled departments won’t appear in public/join selection.
+                                    Disabled windows won’t appear when assigning staff.
                                 </div>
                             </div>
-                            <Switch checked={eDeptEnabled} onCheckedChange={setEDeptEnabled} />
+                            <Switch checked={eWinEnabled} onCheckedChange={setEWinEnabled} />
                         </div>
                     </div>
 
@@ -486,8 +552,8 @@ export default function AdminDepartmentsPage() {
                             type="button"
                             variant="outline"
                             onClick={() => {
-                                setEditDeptOpen(false)
-                                setSelectedDept(null)
+                                setEditWinOpen(false)
+                                setSelectedWin(null)
                             }}
                             disabled={saving}
                             className="mr-2"
@@ -495,7 +561,7 @@ export default function AdminDepartmentsPage() {
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleSaveDept()} disabled={saving}>
+                        <Button type="button" onClick={() => void handleSaveWin()} disabled={saving}>
                             {saving ? "Saving…" : "Save"}
                         </Button>
                     </DialogFooter>
