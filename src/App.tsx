@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom"
 
 import LandingPage from "@/pages/landing"
 import LoadingPage from "@/pages/loading"
+import LoginPage from "@/pages/authentication/login"
 import NotFoundPage from "@/pages/404"
 
 export default function App() {
@@ -10,6 +11,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/loading" element={<LoadingPage />} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </BrowserRouter>
