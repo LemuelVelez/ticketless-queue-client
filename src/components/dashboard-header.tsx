@@ -31,7 +31,6 @@ export function DashboardHeader({
     className,
     children,
     user,
-    accountHref,
     settingsHref,
     logoutHref,
 }: DashboardHeaderProps) {
@@ -57,11 +56,11 @@ export function DashboardHeader({
                     <div className="ml-2">
                         <NavUser
                             user={user}
-                            accountHref={accountHref}
                             settingsHref={settingsHref}
                             logoutHref={logoutHref}
-                            dropdownSide="bottom"
+                            dropdownSide="bottom" // desktop stays the same
                             dropdownAlign="end"
+                            compactOnMobile // mobile: avatar only (desktop unchanged)
                         />
                     </div>
                 ) : null}

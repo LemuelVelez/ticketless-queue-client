@@ -3,6 +3,8 @@ import { Link, useLocation, useNavigate } from "react-router-dom"
 import { Eye, EyeOff } from "lucide-react"
 import { toast } from "sonner"
 
+import LoadingPage from "@/pages/loading"
+
 import { useSession } from "@/hooks/use-session"
 import { ApiError } from "@/lib/http"
 
@@ -28,16 +30,56 @@ type LocationState = {
     }
 }
 
+function defaultDashboardPath(role: "ADMIN" | "STAFF") {
+    return role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
+}
+
+/**
+ * Prevent redirect loops / wrong-role redirects.
+ * Example: a STAFF user trying to access /admin/* should NOT be redirected back there after login.
+ */
+function canRedirectTo(pathname: string | undefined, role: "ADMIN" | "STAFF") {
+    if (!pathname || typeof pathname !== "string") return false
+
+    // Never redirect back to auth/loading routes
+    if (pathname === "/login" || pathname === "/loading") return false
+
+    // Role-based protection
+    if (pathname.startsWith("/admin")) return role === "ADMIN"
+    if (pathname.startsWith("/staff")) return role === "STAFF"
+
+    // Public routes (e.g. /display) are OK
+    return true
+}
+
 export default function LoginPage() {
     const navigate = useNavigate()
     const location = useLocation()
-    const { login } = useSession()
+    const { login, user, loading } = useSession()
 
     const [email, setEmail] = React.useState("")
     const [password, setPassword] = React.useState("")
     const [isSubmitting, setIsSubmitting] = React.useState(false)
     const [rememberMe, setRememberMe] = React.useState(true)
     const [showPassword, setShowPassword] = React.useState(false)
+
+    // ✅ If there's an active session, redirect away from /login automatically.
+    React.useEffect(() => {
+        if (loading) return
+        if (!user) return
+
+        const role = user.role
+        const home = defaultDashboardPath(role)
+        const state = location.state as LocationState | null
+        const fromPath = state?.from?.pathname
+
+        if (canRedirectTo(fromPath, role)) {
+            navigate(fromPath!, { replace: true })
+            return
+        }
+
+        navigate(home, { replace: true })
+    }, [loading, user, location.state, navigate])
 
     async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault()
@@ -53,24 +95,22 @@ export default function LoginPage() {
 
         try {
             const res = await login(cleanEmail, password, rememberMe)
-
             toast.success("Signed in successfully")
 
-            // If RoleGuard redirected here, it sets state.from
+            const role = res.user.role
+            const home = defaultDashboardPath(role)
+
+            // If RoleGuard redirected here, it may set state.from
             const state = location.state as LocationState | null
             const fromPath = state?.from?.pathname
 
-            if (fromPath && typeof fromPath === "string") {
-                navigate(fromPath, { replace: true })
+            // ✅ Only redirect back if it matches the user's role
+            if (canRedirectTo(fromPath, role)) {
+                navigate(fromPath!, { replace: true })
                 return
             }
 
-            // Default destination based on role
-            if (res.user.role === "ADMIN") {
-                navigate("/admin/dashboard", { replace: true })
-            } else {
-                navigate("/staff/dashboard", { replace: true })
-            }
+            navigate(home, { replace: true })
         } catch (err) {
             const message =
                 err instanceof ApiError
@@ -83,6 +123,9 @@ export default function LoginPage() {
             setIsSubmitting(false)
         }
     }
+
+    // While resolving an existing token/session, show loading instead of flashing the login form.
+    if (loading) return <LoadingPage />
 
     return (
         <div className="grid min-h-svh lg:grid-cols-2">

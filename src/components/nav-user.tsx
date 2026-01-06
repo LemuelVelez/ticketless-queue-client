@@ -55,6 +55,12 @@ type NavUserProps = {
      */
     dropdownSide?: "top" | "right" | "bottom" | "left"
     dropdownAlign?: "start" | "center" | "end"
+
+    /**
+     * If true, show only the avatar on mobile (desktop remains unchanged).
+     * Useful for header mobile layout.
+     */
+    compactOnMobile?: boolean
 }
 
 function initials(name: string) {
@@ -71,9 +77,13 @@ export function NavUser({
     logoutHref = "/login",
     dropdownSide = "right",
     dropdownAlign = "end",
+    compactOnMobile = false,
 }: NavUserProps) {
     const { state, isMobile } = useSidebar()
     const collapsed = state === "collapsed" && !isMobile
+
+    // Mobile: dropdown should open on TOP (do not affect desktop)
+    const resolvedDropdownSide: NavUserProps["dropdownSide"] = isMobile ? "top" : dropdownSide
 
     const navigate = useNavigate()
     const { logout } = useSession()
@@ -98,14 +108,29 @@ export function NavUser({
                             <SidebarMenuButton asChild size="lg" tooltip={user.name}>
                                 <Button
                                     variant="ghost"
-                                    className={cn("w-full justify-start gap-3 px-2", collapsed && "justify-center px-0")}
+                                    className={cn(
+                                        "justify-start px-2",
+                                        // default behavior
+                                        "w-full gap-3",
+                                        // collapsed sidebar (desktop)
+                                        collapsed && "justify-center px-0",
+                                        // compact header (MOBILE ONLY) - do not affect desktop
+                                        compactOnMobile && "w-auto gap-0 px-0 md:w-full md:gap-3 md:px-2",
+                                    )}
                                 >
                                     <Avatar className="h-8 w-8">
                                         {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={user.name} /> : null}
                                         <AvatarFallback>{initials(user.name)}</AvatarFallback>
                                     </Avatar>
 
-                                    <div className={cn("min-w-0 flex-1 text-left", collapsed && "hidden")}>
+                                    <div
+                                        className={cn(
+                                            "min-w-0 flex-1 text-left",
+                                            collapsed && "hidden",
+                                            // hide text only on mobile when compactOnMobile is enabled
+                                            compactOnMobile && "hidden md:block",
+                                        )}
+                                    >
                                         <div className="truncate text-sm font-medium">{user.name}</div>
                                         <div className="truncate text-xs text-muted-foreground">{user.email}</div>
                                     </div>
@@ -115,11 +140,18 @@ export function NavUser({
 
                         <DropdownMenuContent
                             align={dropdownAlign}
-                            side={dropdownSide}
+                            side={resolvedDropdownSide}
                             sideOffset={8}
                             className="w-56"
                         >
-                            <DropdownMenuLabel>Account</DropdownMenuLabel>
+                            {/* Always show name + email inside the dropdown (so email is never "lost") */}
+                            <DropdownMenuLabel>
+                                <div className="flex flex-col">
+                                    <span className="truncate text-sm font-medium">{user.name}</span>
+                                    <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+                                </div>
+                            </DropdownMenuLabel>
+
                             <DropdownMenuSeparator />
 
                             <DropdownMenuGroup>
