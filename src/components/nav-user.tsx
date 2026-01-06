@@ -14,7 +14,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar"
-import { LogOut, Settings, User } from "lucide-react"
+import { LogOut, Settings } from "lucide-react"
 
 export type DashboardUser = {
     name: string
@@ -48,7 +48,6 @@ function initials(name: string) {
 export function NavUser({
     user,
     className,
-    accountHref = "/staff/account",
     settingsHref = "/staff/settings",
     logoutHref = "/staff/logout",
     dropdownSide = "right",
@@ -90,13 +89,6 @@ export function NavUser({
                         <DropdownMenuSeparator />
 
                         <DropdownMenuGroup>
-                            <DropdownMenuItem asChild>
-                                <a href={accountHref} className="flex items-center gap-2">
-                                    <User className="h-4 w-4" />
-                                    Profile
-                                </a>
-                            </DropdownMenuItem>
-
                             <DropdownMenuItem asChild>
                                 <a href={settingsHref} className="flex items-center gap-2">
                                     <Settings className="h-4 w-4" />
