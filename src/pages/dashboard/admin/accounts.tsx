@@ -883,6 +883,7 @@ export default function AdminAccountsPage() {
                                 setNewPassword("")
                             }}
                             disabled={saving}
+                            className="mr-2"
                         >
                             Cancel
                         </Button>
@@ -921,7 +922,7 @@ export default function AdminAccountsPage() {
                                 e.preventDefault()
                                 void handleDeleteAccount()
                             }}
-                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            className="bg-destructive text-white hover:bg-destructive/90"
                         >
                             {saving ? "Deleting…" : "Delete"}
                         </AlertDialogAction>
