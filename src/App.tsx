@@ -11,6 +11,8 @@ import AdminAccountsPage from "@/pages/dashboard/admin/accounts"
 import AdminDepartmentsPage from "@/pages/dashboard/admin/departments"
 import AdminWindowsPage from "@/pages/dashboard/admin/windows"
 
+import StaffDashboardPage from "@/pages/dashboard/staff/dashboard"
+
 import { SessionProvider, useSession } from "@/hooks/use-session"
 import { RoleGuard } from "@/lib/roleguard"
 
@@ -57,6 +59,22 @@ export default function App() {
             <Route path="/admin/accounts" element={<AdminAccountsPage />} />
             <Route path="/admin/departments" element={<AdminDepartmentsPage />} />
             <Route path="/admin/windows" element={<AdminWindowsPage />} />
+          </Route>
+
+          {/* Staff Routes */}
+          <Route
+            element={
+              <RoleGuard
+                allow="STAFF"
+                redirectTo="/login"
+                unauthorizedTo="/login"
+                loadingFallback={<LoadingPage />}
+              >
+                <Outlet />
+              </RoleGuard>
+            }
+          >
+            <Route path="/staff/dashboard" element={<StaffDashboardPage />} />
           </Route>
 
           <Route path="*" element={<NotFoundPage />} />
