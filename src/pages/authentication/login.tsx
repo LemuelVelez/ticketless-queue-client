@@ -151,7 +151,7 @@ export default function LoginPage() {
             {/* Right: illustration */}
             <div className="bg-muted relative hidden lg:block">
                 <div className="absolute inset-0 bg-linear-to-br from-primary/15 via-background to-muted" />
-                <div className="relative flex h-full flex-col items-center justify-center p-10">
+                <div className="relative flex h-svh flex-col items-center justify-center p-10">
                     <div className="w-full max-w-lg">
                         <Card className="border-border/60 bg-background/70 overflow-hidden backdrop-blur">
                             <CardHeader className="space-y-1">
@@ -165,7 +165,7 @@ export default function LoginPage() {
                                     <img
                                         src={heroImage}
                                         alt="QueuePass hero illustration"
-                                        className="h-full w-full rounded-lg object-contain"
+                                        className="max-h-102.75 w-full rounded-lg object-contain"
                                     />
                                 </div>
                             </CardContent>
