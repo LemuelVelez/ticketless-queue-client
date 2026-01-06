@@ -8,7 +8,7 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
-import { adminApi, type Department, type ServiceWindow, type StaffUser } from "@/api/admin"
+import { adminApi, type Department, type ServiceWindow } from "@/api/admin"
 import { useSession } from "@/hooks/use-session"
 import { api } from "@/lib/http"
 
@@ -33,7 +33,6 @@ import {
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -71,24 +70,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 type AccountRole = "STAFF" | "ADMIN"
 
-type AccountRow = {
-    id: string
+type AccountUser = {
+    id?: string
+    _id?: string
     name: string
     email: string
-    role: AccountRole
+    role?: AccountRole
     active: boolean
     assignedDepartment: string | null
     assignedWindow: string | null
-    /**
-     * Accounts coming from /admin/staff are manageable with adminApi.updateStaff/delete.
-     * The current admin session row is shown as a helpful fallback if /admin/staff returns empty.
-     */
-    source: "staff" | "session"
-    raw?: StaffUser
 }
 
-function staffId(s: StaffUser) {
-    return s._id ?? s.id ?? ""
+function userId(u: AccountUser) {
+    return u._id ?? u.id ?? ""
 }
 
 function isEnabledFlag(value: boolean | undefined) {
@@ -99,14 +93,14 @@ function roleBadge(role: AccountRole) {
     if (role === "ADMIN") {
         return (
             <Badge className="gap-1" variant="default">
-                <Shield className="h-3.5 w-3.5" />
+                <Shield className="h-4 w-4" />
                 ADMIN
             </Badge>
         )
     }
     return (
         <Badge variant="secondary" className="gap-1">
-            <UserCog className="h-3.5 w-3.5" />
+            <UserCog className="h-4 w-4" />
             STAFF
         </Badge>
     )
@@ -129,7 +123,7 @@ export default function AdminAccountsPage() {
 
     const [departments, setDepartments] = React.useState<Department[]>([])
     const [windows, setWindows] = React.useState<ServiceWindow[]>([])
-    const [staff, setStaff] = React.useState<StaffUser[]>([])
+    const [users, setUsers] = React.useState<AccountUser[]>([])
 
     const [q, setQ] = React.useState("")
     const [deptFilter, setDeptFilter] = React.useState<string>("all")
@@ -141,8 +135,8 @@ export default function AdminAccountsPage() {
     const [resetOpen, setResetOpen] = React.useState(false)
     const [deleteOpen, setDeleteOpen] = React.useState(false)
 
-    // selected user (only staff rows are editable with current adminApi)
-    const [selected, setSelected] = React.useState<StaffUser | null>(null)
+    // selected user
+    const [selected, setSelected] = React.useState<AccountUser | null>(null)
 
     // create form
     const [cName, setCName] = React.useState("")
@@ -200,7 +194,7 @@ export default function AdminAccountsPage() {
 
             setDepartments(deptRes.departments ?? [])
             setWindows(winRes.windows ?? [])
-            setStaff(staffRes.staff ?? [])
+            setUsers((staffRes.staff ?? []) as any)
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed to load accounts."
             toast.error(msg)
@@ -213,54 +207,12 @@ export default function AdminAccountsPage() {
         void fetchAll()
     }, [fetchAll])
 
-    /**
-     * ✅ IMPORTANT FIX:
-     * Your backend endpoint `GET /admin/staff` often returns STAFF accounts only.
-     * If you only have an ADMIN account in the system, it won't show up.
-     *
-     * So we always show the current admin session as a fallback row if it isn't present in /admin/staff.
-     */
-    const rows: AccountRow[] = React.useMemo(() => {
-        const fromStaff: AccountRow[] = (staff ?? []).map((u) => {
-            const id = staffId(u) || u.email
-            const role = (((u as unknown as { role?: AccountRole }).role ?? "STAFF") as AccountRole)
-            return {
-                id,
-                name: u.name,
-                email: u.email,
-                role,
-                active: !!u.active,
-                assignedDepartment: u.assignedDepartment ?? null,
-                assignedWindow: u.assignedWindow ?? null,
-                source: "staff",
-                raw: u,
-            }
+    const rows = React.useMemo(() => {
+        return (users ?? []).map((u) => {
+            const role = (u.role ?? "STAFF") as AccountRole
+            return { ...u, role }
         })
-
-        // Add current session admin as fallback row (only if it's not already included).
-        if (sessionUser?.role === "ADMIN") {
-            const sessionId = sessionUser.id
-            const sessionEmail = sessionUser.email ?? ""
-            const exists =
-                fromStaff.some((r) => r.id === sessionId) ||
-                (sessionEmail ? fromStaff.some((r) => r.email.toLowerCase() === sessionEmail.toLowerCase()) : false)
-
-            if (!exists) {
-                fromStaff.unshift({
-                    id: sessionId,
-                    name: sessionUser.name ?? "Admin",
-                    email: sessionUser.email ?? "—",
-                    role: "ADMIN",
-                    active: true,
-                    assignedDepartment: sessionUser.assignedDepartment ?? null,
-                    assignedWindow: sessionUser.assignedWindow ?? null,
-                    source: "session",
-                })
-            }
-        }
-
-        return fromStaff
-    }, [staff, sessionUser])
+    }, [users])
 
     const filtered = React.useMemo(() => {
         const query = q.trim().toLowerCase()
@@ -281,41 +233,26 @@ export default function AdminAccountsPage() {
             .sort((a, b) => (a.active === b.active ? a.name.localeCompare(b.name) : a.active ? -1 : 1))
     }, [rows, q, deptFilter, tab])
 
-    function openEdit(row: AccountRow) {
-        if (row.source !== "staff" || !row.raw) {
-            toast.error("This account isn't returned by /admin/staff, so it can’t be edited here.")
-            return
-        }
-
-        const u = row.raw
+    function openEdit(u: AccountUser & { role: AccountRole }) {
         setSelected(u)
         setEName(u.name ?? "")
         setEActive(!!u.active)
 
-        const role = (((u as unknown as { role?: AccountRole }).role ?? "STAFF") as AccountRole)
-        setERole(role)
-
+        setERole(u.role ?? "STAFF")
         setEDepartmentId(u.assignedDepartment ?? "")
         setEWindowId(u.assignedWindow ?? "")
+
         setEditOpen(true)
     }
 
-    function openReset(row: AccountRow) {
-        if (row.source !== "staff" || !row.raw) {
-            toast.error("This account isn't returned by /admin/staff, so it can’t be updated here.")
-            return
-        }
-        setSelected(row.raw)
+    function openReset(u: AccountUser) {
+        setSelected(u)
         setNewPassword("")
         setResetOpen(true)
     }
 
-    function openDelete(row: AccountRow) {
-        if (row.source !== "staff" || !row.raw) {
-            toast.error("This account isn't returned by /admin/staff, so it can’t be deleted here.")
-            return
-        }
-        setSelected(row.raw)
+    function openDelete(u: AccountUser) {
+        setSelected(u)
         setDeleteOpen(true)
     }
 
@@ -344,15 +281,19 @@ export default function AdminAccountsPage() {
 
         setSaving(true)
         try {
-            await adminApi.createStaff({
+            const payload: any = {
                 name,
                 email,
                 password,
-                departmentId: cDepartmentId,
-                windowId: cWindowId,
                 role: cRole,
-            } as any)
+            }
 
+            if (cRole === "STAFF") {
+                payload.departmentId = cDepartmentId
+                payload.windowId = cWindowId
+            }
+
+            await adminApi.createStaff(payload)
             toast.success("Account created.")
             setCreateOpen(false)
             resetCreateForm()
@@ -367,7 +308,7 @@ export default function AdminAccountsPage() {
 
     async function handleSaveEdit() {
         if (!selected) return
-        const id = staffId(selected)
+        const id = userId(selected)
         if (!id) return toast.error("Invalid user id.")
 
         const name = eName.trim()
@@ -404,7 +345,7 @@ export default function AdminAccountsPage() {
 
     async function handleResetPassword() {
         if (!selected) return
-        const id = staffId(selected)
+        const id = userId(selected)
         if (!id) return toast.error("Invalid user id.")
         if (!newPassword) return toast.error("New password is required.")
 
@@ -425,7 +366,7 @@ export default function AdminAccountsPage() {
 
     async function handleDeleteAccount() {
         if (!selected) return
-        const id = staffId(selected)
+        const id = userId(selected)
         if (!id) return toast.error("Invalid user id.")
 
         setSaving(true)
@@ -434,15 +375,13 @@ export default function AdminAccountsPage() {
 
             if (typeof apiAny.delete === "function") {
                 await apiAny.delete(`/admin/staff/${id}`)
-                toast.success("Account deleted.")
             } else if (typeof apiAny.del === "function") {
                 await apiAny.del(`/admin/staff/${id}`)
-                toast.success("Account deleted.")
             } else {
                 await adminApi.updateStaff(id, { active: false })
-                toast.success("No DELETE client found — account deactivated instead.")
             }
 
+            toast.success("Account removed.")
             setDeleteOpen(false)
             setSelected(null)
             await fetchAll()
@@ -460,9 +399,6 @@ export default function AdminAccountsPage() {
         const inactive = total - active
         return { total, active, inactive }
     }, [rows])
-
-    const showAdminFallbackNote =
-        !loading && staff.length === 0 && sessionUser?.role === "ADMIN"
 
     return (
         <DashboardLayout
@@ -508,14 +444,6 @@ export default function AdminAccountsPage() {
                         </div>
 
                         <Separator />
-
-                        {showAdminFallbackNote ? (
-                            <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-                                You’re logged in as an <span className="font-medium">ADMIN</span>, but <code>/admin/staff</code> returned no rows.
-                                This page is showing your current session as a fallback.
-                                If you want ADMIN accounts to be listed/managed here, your backend should expose an endpoint that returns them.
-                            </div>
-                        ) : null}
 
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -582,6 +510,9 @@ export default function AdminAccountsPage() {
 
                                             <TableBody>
                                                 {filtered.map((u) => {
+                                                    const id = userId(u) || u.email
+                                                    const role = (u.role ?? "STAFF") as AccountRole
+
                                                     const deptName =
                                                         u.assignedDepartment && deptById.get(u.assignedDepartment)
                                                             ? deptById.get(u.assignedDepartment)!.name
@@ -593,17 +524,10 @@ export default function AdminAccountsPage() {
                                                             : "—"
 
                                                     return (
-                                                        <TableRow key={u.id || u.email}>
+                                                        <TableRow key={id}>
                                                             <TableCell className="font-medium">
                                                                 <div className="flex flex-col">
-                                                                    <span className="truncate">
-                                                                        {u.name}
-                                                                        {u.source === "session" ? (
-                                                                            <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                                                                (current session)
-                                                                            </span>
-                                                                        ) : null}
-                                                                    </span>
+                                                                    <span className="truncate">{u.name}</span>
                                                                     <span className="truncate text-xs text-muted-foreground md:hidden">
                                                                         {u.email}
                                                                     </span>
@@ -614,7 +538,7 @@ export default function AdminAccountsPage() {
                                                                 <span className="text-muted-foreground">{u.email}</span>
                                                             </TableCell>
 
-                                                            <TableCell>{roleBadge(u.role)}</TableCell>
+                                                            <TableCell>{roleBadge(role)}</TableCell>
 
                                                             <TableCell className="hidden lg:table-cell">
                                                                 <span className="text-muted-foreground">{deptName}</span>
@@ -638,22 +562,20 @@ export default function AdminAccountsPage() {
                                                                         </Button>
                                                                     </DropdownMenuTrigger>
 
-                                                                    <DropdownMenuContent align="end" className="w-56">
+                                                                    <DropdownMenuContent align="end" className="w-52">
                                                                         <DropdownMenuLabel>Actions</DropdownMenuLabel>
                                                                         <DropdownMenuSeparator />
 
                                                                         <DropdownMenuItem
-                                                                            disabled={u.source !== "staff"}
-                                                                            onClick={() => openEdit(u)}
-                                                                            className={u.source === "staff" ? "cursor-pointer" : undefined}
+                                                                            onClick={() => openEdit({ ...(u as any), role } as any)}
+                                                                            className="cursor-pointer"
                                                                         >
                                                                             Edit account
                                                                         </DropdownMenuItem>
 
                                                                         <DropdownMenuItem
-                                                                            disabled={u.source !== "staff"}
                                                                             onClick={() => openReset(u)}
-                                                                            className={u.source === "staff" ? "cursor-pointer" : undefined}
+                                                                            className="cursor-pointer"
                                                                         >
                                                                             Reset password
                                                                         </DropdownMenuItem>
@@ -661,26 +583,11 @@ export default function AdminAccountsPage() {
                                                                         <DropdownMenuSeparator />
 
                                                                         <DropdownMenuItem
-                                                                            disabled={u.source !== "staff"}
                                                                             onClick={() => openDelete(u)}
-                                                                            className={
-                                                                                u.source === "staff"
-                                                                                    ? "cursor-pointer text-destructive focus:text-destructive"
-                                                                                    : "text-muted-foreground"
-                                                                            }
+                                                                            className="cursor-pointer text-destructive focus:text-destructive"
                                                                         >
                                                                             Delete account
                                                                         </DropdownMenuItem>
-
-                                                                        {u.source !== "staff" ? (
-                                                                            <>
-                                                                                <DropdownMenuSeparator />
-                                                                                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                                                                                    This row is shown from the current session.
-                                                                                    Admin accounts aren’t managed via <code>/admin/staff</code>.
-                                                                                </div>
-                                                                            </>
-                                                                        ) : null}
                                                                     </DropdownMenuContent>
                                                                 </DropdownMenu>
                                                             </TableCell>
@@ -705,17 +612,14 @@ export default function AdminAccountsPage() {
                 </Card>
             </div>
 
-            {/* Create dialog */}
+            {/* Create dialog (mobile: shorter + scroll; desktop unchanged) */}
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-                <DialogContent className="sm:max-w-lg">
+                <DialogContent className="sm:max-w-lg flex max-h-[85vh] flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
                     <DialogHeader>
                         <DialogTitle>Create new user</DialogTitle>
-                        <DialogDescription>
-                            Creates a new account. By default, this uses your current STAFF endpoints.
-                        </DialogDescription>
                     </DialogHeader>
 
-                    <div className="grid gap-4">
+                    <div className="grid flex-1 gap-4 overflow-y-auto pr-1 sm:overflow-visible sm:pr-0">
                         <div className="grid gap-2">
                             <Label htmlFor="c-name">Name</Label>
                             <Input
@@ -812,7 +716,8 @@ export default function AdminAccountsPage() {
                         </div>
                     </div>
 
-                    <DialogFooter className="gap-2 sm:gap-0">
+                    {/* ✅ FIX: add spacing on mobile; keep desktop layout unchanged */}
+                    <DialogFooter className="flex flex-col sm:flex-row sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -821,11 +726,17 @@ export default function AdminAccountsPage() {
                                 resetCreateForm()
                             }}
                             disabled={saving}
+                            className="w-full mr-2 sm:w-auto"
                         >
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleCreate()} disabled={saving}>
+                        <Button
+                            type="button"
+                            onClick={() => void handleCreate()}
+                            disabled={saving}
+                            className="w-full sm:w-auto"
+                        >
                             {saving ? "Creating…" : "Create user"}
                         </Button>
                     </DialogFooter>
@@ -837,9 +748,6 @@ export default function AdminAccountsPage() {
                 <DialogContent className="sm:max-w-lg">
                     <DialogHeader>
                         <DialogTitle>Edit account</DialogTitle>
-                        <DialogDescription>
-                            Update details, role, assignments, and status.
-                        </DialogDescription>
                     </DialogHeader>
 
                     <div className="grid gap-4">
@@ -864,9 +772,6 @@ export default function AdminAccountsPage() {
                                     <SelectItem value="ADMIN">ADMIN</SelectItem>
                                 </SelectContent>
                             </Select>
-                            <p className="text-xs text-muted-foreground">
-                                Role changes require backend support. This UI sends <code>role</code> best-effort on update.
-                            </p>
                         </div>
 
                         <div className="flex items-center justify-between rounded-lg border p-3">
@@ -937,6 +842,7 @@ export default function AdminAccountsPage() {
                                 setSelected(null)
                             }}
                             disabled={saving}
+                            className="mr-2"
                         >
                             Cancel
                         </Button>
@@ -953,9 +859,6 @@ export default function AdminAccountsPage() {
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
                         <DialogTitle>Reset password</DialogTitle>
-                        <DialogDescription>
-                            Set a new password for <span className="font-medium">{selected?.email ?? "this account"}</span>.
-                        </DialogDescription>
                     </DialogHeader>
 
                     <div className="grid gap-2">
@@ -997,8 +900,7 @@ export default function AdminAccountsPage() {
                     <AlertDialogHeader>
                         <AlertDialogTitle>Delete account?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            This action cannot be undone if your backend supports hard delete.
-                            If hard delete is not available, this page will deactivate the account instead.
+                            This will remove the user (or disable them if your client can’t send DELETE).
                         </AlertDialogDescription>
                     </AlertDialogHeader>
 
