@@ -59,6 +59,59 @@ function toQuery(params?: Record<string, string | number | boolean | undefined |
     return s ? `?${s}` : ""
 }
 
+/** =========================
+ * REPORTS TYPES (STAFF-SCOPED)
+ * ========================= */
+
+export type ReportRange = {
+    from: string // YYYY-MM-DD
+    to: string // YYYY-MM-DD
+}
+
+export type StatusCounts = Partial<Record<TicketStatus, number>>
+
+export type DepartmentReportRow = {
+    departmentId: string
+    name?: string
+    code?: string
+
+    total: number
+    waiting: number
+    called: number
+    hold: number
+    out: number
+    served: number
+
+    avgWaitMs: number | null
+    avgServiceMs: number | null
+}
+
+export type ReportsSummaryResponse = {
+    range: ReportRange
+    totals: {
+        total: number
+        byStatus: StatusCounts
+        avgWaitMs: number | null
+        avgServiceMs: number | null
+    }
+    departments: DepartmentReportRow[]
+}
+
+export type ReportsTimeseriesPoint = {
+    dateKey: string // YYYY-MM-DD
+    total: number
+    waiting: number
+    called: number
+    hold: number
+    out: number
+    served: number
+}
+
+export type ReportsTimeseriesResponse = {
+    range: ReportRange
+    series: ReportsTimeseriesPoint[]
+}
+
 export const staffApi = {
     myAssignment: () => api.get<MyAssignmentResponse>("/staff/me/assignment"),
 
@@ -84,4 +137,11 @@ export const staffApi = {
     holdNoShow: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/hold`),
 
     returnFromHold: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/return`),
+
+    // ✅ Staff reports (scoped to assigned department on backend)
+    getReportsSummary: (opts?: { from?: string; to?: string }) =>
+        api.get<ReportsSummaryResponse>(`/staff/reports/summary${toQuery(opts as any)}`),
+
+    getReportsTimeseries: (opts?: { from?: string; to?: string }) =>
+        api.get<ReportsTimeseriesResponse>(`/staff/reports/timeseries${toQuery(opts as any)}`),
 }
