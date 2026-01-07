@@ -21,22 +21,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
-import {
-    Dialog,
-    DialogContent,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 import {
     AlertDialog,
@@ -58,13 +45,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -168,15 +149,9 @@ export default function AdminAccountsPage() {
         return m
     }, [windows])
 
-    const enabledDepartments = React.useMemo(
-        () => departments.filter((d) => isEnabledFlag(d.enabled)),
-        [departments],
-    )
+    const enabledDepartments = React.useMemo(() => departments.filter((d) => isEnabledFlag(d.enabled)), [departments])
 
-    const enabledWindows = React.useMemo(
-        () => windows.filter((w) => isEnabledFlag(w.enabled)),
-        [windows],
-    )
+    const enabledWindows = React.useMemo(() => windows.filter((w) => isEnabledFlag(w.enabled)), [windows])
 
     const windowsForDept = React.useCallback(
         (departmentId: string) => enabledWindows.filter((w) => w.department === departmentId),
@@ -401,29 +376,27 @@ export default function AdminAccountsPage() {
     }, [rows])
 
     return (
-        <DashboardLayout
-            title="Accounts"
-            navItems={ADMIN_NAV_ITEMS}
-            user={dashboardUser}
-            activePath={location.pathname}
-        >
-            <div className="grid gap-6">
-                <Card>
+        <DashboardLayout title="Accounts" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+            {/* ✅ Responsiveness fix: define grid columns + allow shrink */}
+            <div className="grid w-full min-w-0 grid-cols-1 gap-6">
+                <Card className="min-w-0">
                     <CardHeader className="gap-2">
                         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
                                 <CardTitle>Account Management</CardTitle>
                                 <CardDescription>
-                                    Create users, update roles, reset passwords, assign departments/windows, and disable or delete accounts.
+                                    Create users, update roles, reset passwords, assign departments/windows, and disable
+                                    or delete accounts.
                                 </CardDescription>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2">
+                            {/* ✅ XS stack buttons; desktop unchanged */}
+                            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                 <Button
                                     variant="outline"
                                     onClick={() => void fetchAll()}
                                     disabled={loading || saving}
-                                    className="gap-2"
+                                    className="w-full gap-2 sm:w-auto"
                                 >
                                     <RefreshCw className="h-4 w-4" />
                                     Refresh
@@ -434,7 +407,7 @@ export default function AdminAccountsPage() {
                                         resetCreateForm()
                                         setCreateOpen(true)
                                     }}
-                                    className="gap-2"
+                                    className="w-full gap-2 sm:w-auto"
                                     disabled={saving}
                                 >
                                     <Plus className="h-4 w-4" />
@@ -446,16 +419,16 @@ export default function AdminAccountsPage() {
                         <Separator />
 
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
                                 <Input
                                     value={q}
                                     onChange={(e) => setQ(e.target.value)}
                                     placeholder="Search name or email…"
-                                    className="w-full sm:w-80"
+                                    className="w-full min-w-0 sm:w-80"
                                 />
 
                                 <Select value={deptFilter} onValueChange={setDeptFilter}>
-                                    <SelectTrigger className="w-full sm:w-64">
+                                    <SelectTrigger className="w-full min-w-0 sm:w-64">
                                         <SelectValue placeholder="Filter by department" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -477,7 +450,7 @@ export default function AdminAccountsPage() {
                         </div>
                     </CardHeader>
 
-                    <CardContent>
+                    <CardContent className="min-w-0">
                         <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
                             <TabsList className="grid w-full grid-cols-3 md:w-90">
                                 <TabsTrigger value="all">All</TabsTrigger>
@@ -494,7 +467,8 @@ export default function AdminAccountsPage() {
                                         <Skeleton className="h-10 w-full" />
                                     </div>
                                 ) : (
-                                    <div className="rounded-lg border">
+                                    // ✅ Prevent page overflow if table becomes wider than viewport
+                                    <div className="rounded-lg border overflow-x-auto">
                                         <Table>
                                             <TableHeader>
                                                 <TableRow>
@@ -526,7 +500,7 @@ export default function AdminAccountsPage() {
                                                     return (
                                                         <TableRow key={id}>
                                                             <TableCell className="font-medium">
-                                                                <div className="flex flex-col">
+                                                                <div className="flex min-w-0 flex-col">
                                                                     <span className="truncate">{u.name}</span>
                                                                     <span className="truncate text-xs text-muted-foreground md:hidden">
                                                                         {u.email}
@@ -557,7 +531,11 @@ export default function AdminAccountsPage() {
                                                             <TableCell className="text-right">
                                                                 <DropdownMenu>
                                                                     <DropdownMenuTrigger asChild>
-                                                                        <Button variant="ghost" size="icon" aria-label="Row actions">
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="icon"
+                                                                            aria-label="Row actions"
+                                                                        >
                                                                             <MoreHorizontal className="h-4 w-4" />
                                                                         </Button>
                                                                     </DropdownMenuTrigger>
@@ -657,7 +635,7 @@ export default function AdminAccountsPage() {
                         <div className="grid gap-2">
                             <Label>Role</Label>
                             <Select value={cRole} onValueChange={(v) => setCRole(v as AccountRole)}>
-                                <SelectTrigger>
+                                <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select role" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -678,7 +656,7 @@ export default function AdminAccountsPage() {
                                 }}
                                 disabled={cRole === "ADMIN"}
                             >
-                                <SelectTrigger>
+                                <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select department" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -699,8 +677,10 @@ export default function AdminAccountsPage() {
                                 onValueChange={(v) => setCWindowId(v === "none" ? "" : v)}
                                 disabled={cRole === "ADMIN" || !cDepartmentId}
                             >
-                                <SelectTrigger>
-                                    <SelectValue placeholder={cDepartmentId ? "Select window" : "Select department first"} />
+                                <SelectTrigger className="w-full min-w-0">
+                                    <SelectValue
+                                        placeholder={cDepartmentId ? "Select window" : "Select department first"}
+                                    />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">Unassigned</SelectItem>
@@ -716,8 +696,8 @@ export default function AdminAccountsPage() {
                         </div>
                     </div>
 
-                    {/* ✅ FIX: add spacing on mobile; keep desktop layout unchanged */}
-                    <DialogFooter className="flex flex-col sm:flex-row sm:gap-0">
+                    {/* ✅ FIX: no "w-full + mr-2" overflow on mobile */}
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -726,7 +706,7 @@ export default function AdminAccountsPage() {
                                 resetCreateForm()
                             }}
                             disabled={saving}
-                            className="w-full mr-2 sm:w-auto"
+                            className="w-full sm:w-auto sm:mr-2"
                         >
                             Cancel
                         </Button>
@@ -764,7 +744,7 @@ export default function AdminAccountsPage() {
                         <div className="grid gap-2">
                             <Label>Role</Label>
                             <Select value={eRole} onValueChange={(v) => setERole(v as AccountRole)}>
-                                <SelectTrigger>
+                                <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select role" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -777,9 +757,7 @@ export default function AdminAccountsPage() {
                         <div className="flex items-center justify-between rounded-lg border p-3">
                             <div className="grid gap-0.5">
                                 <div className="text-sm font-medium">Active</div>
-                                <div className="text-xs text-muted-foreground">
-                                    Disable to block login without deleting.
-                                </div>
+                                <div className="text-xs text-muted-foreground">Disable to block login without deleting.</div>
                             </div>
                             <Switch checked={eActive} onCheckedChange={setEActive} />
                         </div>
@@ -795,7 +773,7 @@ export default function AdminAccountsPage() {
                                 }}
                                 disabled={eRole === "ADMIN"}
                             >
-                                <SelectTrigger>
+                                <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select department" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -816,7 +794,7 @@ export default function AdminAccountsPage() {
                                 onValueChange={(v) => setEWindowId(v === "none" ? "" : v)}
                                 disabled={eRole === "ADMIN" || !eDepartmentId}
                             >
-                                <SelectTrigger>
+                                <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder={eDepartmentId ? "Select window" : "Select department first"} />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -833,7 +811,7 @@ export default function AdminAccountsPage() {
                         </div>
                     </div>
 
-                    <DialogFooter className="gap-2 sm:gap-0">
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -842,12 +820,12 @@ export default function AdminAccountsPage() {
                                 setSelected(null)
                             }}
                             disabled={saving}
-                            className="mr-2"
+                            className="w-full sm:w-auto sm:mr-2"
                         >
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleSaveEdit()} disabled={saving}>
+                        <Button type="button" onClick={() => void handleSaveEdit()} disabled={saving} className="w-full sm:w-auto">
                             {saving ? "Saving…" : "Save changes"}
                         </Button>
                     </DialogFooter>
@@ -873,7 +851,7 @@ export default function AdminAccountsPage() {
                         />
                     </div>
 
-                    <DialogFooter className="gap-2 sm:gap-0">
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -883,12 +861,17 @@ export default function AdminAccountsPage() {
                                 setNewPassword("")
                             }}
                             disabled={saving}
-                            className="mr-2"
+                            className="w-full sm:w-auto sm:mr-2"
                         >
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleResetPassword()} disabled={saving}>
+                        <Button
+                            type="button"
+                            onClick={() => void handleResetPassword()}
+                            disabled={saving}
+                            className="w-full sm:w-auto"
+                        >
                             {saving ? "Updating…" : "Update password"}
                         </Button>
                     </DialogFooter>
