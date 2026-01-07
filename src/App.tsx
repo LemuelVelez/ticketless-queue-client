@@ -15,6 +15,7 @@ import AdminDepartmentsPage from "@/pages/dashboard/admin/departments"
 import AdminWindowsPage from "@/pages/dashboard/admin/windows"
 import AdminReportsPage from "@/pages/dashboard/admin/reports"
 import AdminAuditsPage from "@/pages/dashboard/admin/audits"
+import AdminSettingsPage from "@/pages/dashboard/admin/settings"
 
 import StaffDashboardPage from "@/pages/dashboard/staff/dashboard"
 
@@ -77,6 +78,9 @@ export default function App() {
 
             {/* ✅ Audit Logs */}
             <Route path="/admin/audit-logs" element={<AdminAuditsPage />} />
+
+            {/* ✅ Settings */}
+            <Route path="/admin/settings" element={<AdminSettingsPage />} />
           </Route>
 
           {/* Staff Routes */}

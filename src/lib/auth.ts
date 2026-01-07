@@ -13,6 +13,11 @@ export type StoredAuthUser = {
     role?: string
     assignedDepartment?: string | null
     assignedWindow?: string | null
+
+    // ✅ Avatar (optional)
+    avatarKey?: string | null
+    avatarUrl?: string | null
+
     // Allow extra backend fields without breaking
     [key: string]: unknown
 }
