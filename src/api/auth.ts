@@ -30,6 +30,8 @@ export type MeResponse = {
 export type ForgotPasswordResponse = { ok: true }
 export type ResetPasswordResponse = { ok: true }
 
+export type EmailExistsResponse = { exists: boolean }
+
 export const authApi = {
     adminLogin: (email: string, password: string) =>
         api.post<LoginResponse>("/auth/admin/login", { email, password }, { auth: false }),
@@ -54,6 +56,10 @@ export const authApi = {
     },
 
     me: () => api.get<MeResponse>("/auth/me", { auth: true }),
+
+    // ✅ Check if an email exists (active account)
+    checkEmailExists: (email: string) =>
+        api.post<EmailExistsResponse>("/auth/email-exists", { email }, { auth: false }),
 
     // ✅ Password reset flow
     forgotPassword: (email: string) =>

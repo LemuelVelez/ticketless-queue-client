@@ -38,10 +38,20 @@ export default function ForgotPasswordPage() {
 
         setIsSubmitting(true)
         try {
+            // ✅ Check first if email exists (active account)
+            const existsRes = await authApi.checkEmailExists(cleanEmail)
+
+            if (!existsRes.exists) {
+                toast.error(
+                    "Email not found. Please let the admin create your account if you are a part of a staff in a particular department that handles queue."
+                )
+                return
+            }
+
+            // ✅ If exists, proceed to send reset token/email
             await authApi.forgotPassword(cleanEmail)
 
-            // Security-friendly (doesn't reveal if email exists)
-            toast.success("If an account exists for that email, a reset link has been sent.")
+            toast.success("Reset link has been sent to your email.")
             navigate("/login", { replace: true })
         } catch (err) {
             const message =
@@ -78,7 +88,7 @@ export default function ForgotPasswordPage() {
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-2xl">Forgot password</CardTitle>
                                 <CardDescription>
-                                    Enter your email and we’ll send you a password reset link.
+                                    Enter your registered email and we’ll send you a password reset link.
                                 </CardDescription>
                             </CardHeader>
 
@@ -116,7 +126,7 @@ export default function ForgotPasswordPage() {
                                 </p>
 
                                 <p className="text-muted-foreground text-balance text-center text-xs">
-                                    For security, we don’t confirm whether an email is registered.
+                                    If you don’t have an account yet, please contact your admin.
                                 </p>
                             </CardFooter>
                         </Card>
