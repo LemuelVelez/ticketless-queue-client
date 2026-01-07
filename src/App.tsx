@@ -24,6 +24,8 @@ import StaffDisplayPage from "@/pages/dashboard/staff/display"
 import StaffReportsPage from "@/pages/dashboard/staff/reports"
 import StaffSettingsPage from "@/pages/dashboard/staff/settings"
 
+import StudentJoinPage from "@/pages/student/join"
+
 import { SessionProvider, useSession } from "@/hooks/use-session"
 import { RoleGuard } from "@/lib/roleguard"
 
@@ -47,6 +49,9 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LandingPage />} />
+
+          {/* ✅ Public student join route */}
+          <Route path="/join" element={<StudentJoinPage />} />
 
           {/* ✅ Used only during redirect/session resolve */}
           <Route path="/loading" element={<LoadingRedirect />} />

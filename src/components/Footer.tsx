@@ -9,6 +9,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { QrCode } from "lucide-react"
 
+type FooterProps = {
+    /**
+     * "landing" = section links + scroll spy (default)
+     * "student" = minimal footer for public pages like /join
+     */
+    variant?: "landing" | "student"
+}
+
 const exploreItems: Array<{ label: string; href: string }> = [
     { label: "Why this exists", href: "#why" },
     { label: "How it works", href: "#how" },
@@ -22,23 +30,32 @@ const sectionIds = exploreItems
     .filter((href) => href.startsWith("#"))
     .map((href) => href.slice(1))
 
-export default function Footer() {
+export default function Footer({ variant = "landing" }: FooterProps) {
     const { user, loading } = useSession()
     const dashboardPath = useMemo(() => (user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"), [user])
 
+    const showDashboard = !loading && !!user
+    const authLabel = showDashboard ? "Dashboard" : "Login"
+    const authTo = showDashboard ? dashboardPath : "/login"
+
+    // ✅ Hooks must not be conditional — define all here
     const [activeHref, setActiveHref] = useState<string>("")
 
-    // Keep active state in sync with URL hash (clicks, back/forward)
+    // Landing-only: hash sync
     useEffect(() => {
+        if (variant !== "landing") return
+
         const syncFromHash = () => setActiveHref(window.location.hash || "")
         syncFromHash()
 
         window.addEventListener("hashchange", syncFromHash)
         return () => window.removeEventListener("hashchange", syncFromHash)
-    }, [])
+    }, [variant])
 
-    // Scroll-spy using IntersectionObserver
+    // Landing-only: scroll-spy using IntersectionObserver
     useEffect(() => {
+        if (variant !== "landing") return
+
         const sections = sectionIds
             .map((id) => document.getElementById(id))
             .filter(Boolean) as HTMLElement[]
@@ -51,9 +68,7 @@ export default function Footer() {
                     .filter((e) => e.isIntersecting)
                     .sort((a, b) => (b.intersectionRatio ?? 0) - (a.intersectionRatio ?? 0))[0]
 
-                if (visible?.target?.id) {
-                    setActiveHref(`#${visible.target.id}`)
-                }
+                if (visible?.target?.id) setActiveHref(`#${visible.target.id}`)
             },
             {
                 root: null,
@@ -64,12 +79,56 @@ export default function Footer() {
 
         sections.forEach((el) => observer.observe(el))
         return () => observer.disconnect()
-    }, [])
+    }, [variant])
 
-    const showDashboard = !loading && !!user
-    const authLabel = showDashboard ? "Dashboard" : "Login"
-    const authTo = showDashboard ? dashboardPath : "/login"
+    // ✅ Student/simple footer
+    if (variant === "student") {
+        return (
+            <footer className="mt-14 border-t bg-background">
+                <div className="mx-auto max-w-6xl px-4 py-10">
+                    <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="flex h-9 w-9 items-center justify-center rounded-lg border">
+                                <QrCode className="h-5 w-5" />
+                            </div>
+                            <div className="leading-tight">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm font-semibold">QueuePass</span>
+                                    <Badge variant="secondary">Student</Badge>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Scan QR → enter Student ID → get a queue number.
+                                </p>
+                            </div>
+                        </div>
 
+                        <div className="flex flex-wrap gap-2">
+                            <Button variant="outline" asChild>
+                                <Link to="/">Home</Link>
+                            </Button>
+
+                            <Button asChild>
+                                <Link to="/join">Join Queue</Link>
+                            </Button>
+
+                            <Button variant="outline" asChild disabled={loading}>
+                                <Link to={authTo}>{authLabel}</Link>
+                            </Button>
+                        </div>
+                    </div>
+
+                    <Separator className="my-8" />
+
+                    <div className="flex flex-col gap-2 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
+                        <span>© {new Date().getFullYear()} QueuePass. All rights reserved.</span>
+                        <span>Built for student-facing offices and queue-based services.</span>
+                    </div>
+                </div>
+            </footer>
+        )
+    }
+
+    // ✅ Landing footer (original behavior)
     return (
         <footer className="mt-14 border-t bg-background">
             <div className="mx-auto max-w-6xl px-4 py-10">
@@ -85,8 +144,7 @@ export default function Footer() {
                                     <Badge variant="secondary">Ticketless</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    QR-based student ID queueing with SMS notification, voice announcement, and public
-                                    display.
+                                    QR-based student ID queueing with SMS notification, voice announcement, and public display.
                                 </p>
                             </div>
                         </div>
@@ -109,7 +167,6 @@ export default function Footer() {
 
                         {exploreItems.map((item) => {
                             const isActive = activeHref === item.href
-
                             return (
                                 <Button
                                     key={item.href}
