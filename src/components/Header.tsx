@@ -125,8 +125,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         return (
             <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
                 <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-                    {/* Brand -> ✅ redirect to landing page */}
-                    <Link to="/" className="flex items-center gap-3">
+                    {/* ✅ Keep /student home redirection */}
+                    <Link to="/student" className="flex items-center gap-3">
                         <div className="flex h-12 w-12 items-center justify-center rounded-lg border">
                             <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
                         </div>
@@ -143,10 +143,14 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                         </div>
                     </Link>
 
-                    {/* Desktop actions (✅ no Login button for students) */}
+                    {/* ✅ Student header: add Landing Page link; remove Login button */}
                     <div className="hidden items-center gap-2 md:flex">
                         <Button variant="outline" asChild>
-                            <Link to="/">Home</Link>
+                            <Link to="/">Landing Page</Link>
+                        </Button>
+
+                        <Button variant="outline" asChild>
+                            <Link to="/student">Home</Link>
                         </Button>
 
                         <Button asChild>
@@ -189,6 +193,12 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                 <div className="mt-6 flex flex-col gap-2">
                                     <Button variant="ghost" className="w-full justify-start" asChild>
                                         <Link to="/" onClick={() => setSheetOpen(false)}>
+                                            Landing Page
+                                        </Link>
+                                    </Button>
+
+                                    <Button variant="ghost" className="w-full justify-start" asChild>
+                                        <Link to="/student" onClick={() => setSheetOpen(false)}>
                                             Home
                                         </Link>
                                     </Button>
@@ -250,8 +260,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                                 navigationMenuTriggerStyle(),
                                                 "relative",
                                                 isActive &&
-                                                "bg-accent text-accent-foreground " +
-                                                "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
+                                                    "bg-accent text-accent-foreground " +
+                                                        "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
                                             )}
                                         >
                                             <a
@@ -318,8 +328,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                             className={cn(
                                                 "relative w-full justify-start",
                                                 isActive &&
-                                                "bg-accent text-accent-foreground " +
-                                                "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
+                                                    "bg-accent text-accent-foreground " +
+                                                        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
                                             )}
                                             asChild
                                         >
