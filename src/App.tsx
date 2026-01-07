@@ -24,6 +24,7 @@ import StaffDisplayPage from "@/pages/dashboard/staff/display"
 import StaffReportsPage from "@/pages/dashboard/staff/reports"
 import StaffSettingsPage from "@/pages/dashboard/staff/settings"
 
+import StudentHomePage from "@/pages/student/home"
 import StudentJoinPage from "@/pages/student/join"
 import StudentDisplayPage from "@/pages/student/display"
 
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
 
           {/* ✅ Public student routes */}
+          <Route path="/student" element={<StudentHomePage />} />
           <Route path="/join" element={<StudentJoinPage />} />
           <Route path="/display" element={<StudentDisplayPage />} />
 

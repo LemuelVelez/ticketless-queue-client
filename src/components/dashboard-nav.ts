@@ -23,10 +23,10 @@ export type NavMainItem = {
 
 /**
  * ✅ Student nav (public pages — no login, no dashboard)
- * Use this for student-facing layouts/pages after "Join Queue" redirection.
+ * Use this for student-facing layouts/pages.
  */
 export const STUDENT_NAV_ITEMS: NavMainItem[] = [
-    { title: "Home", href: "/", icon: Home },
+    { title: "Home", href: "/student", icon: Home },
     { title: "Join Queue", href: "/join", icon: QrCode },
     { title: "Public Display", href: "/display", icon: Monitor },
 ]

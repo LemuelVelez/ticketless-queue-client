@@ -12,7 +12,7 @@ import { QrCode } from "lucide-react"
 type FooterProps = {
     /**
      * "landing" = section links + scroll spy (default)
-     * "student" = minimal footer for public pages like /join
+     * "student" = minimal footer for public student pages
      */
     variant?: "landing" | "student"
 }
@@ -38,7 +38,7 @@ export default function Footer({ variant = "landing" }: FooterProps) {
     const authLabel = showDashboard ? "Dashboard" : "Login"
     const authTo = showDashboard ? dashboardPath : "/login"
 
-    // ✅ Hooks must not be conditional — define all here
+    // ✅ Hooks must not be conditional
     const [activeHref, setActiveHref] = useState<string>("")
 
     // Landing-only: hash sync
@@ -97,18 +97,22 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                                     <Badge variant="secondary">Student</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    Scan QR → enter Student ID → get a queue number.
+                                    Join the queue and view live updates on the public display.
                                 </p>
                             </div>
                         </div>
 
                         <div className="flex flex-wrap gap-2">
                             <Button variant="outline" asChild>
-                                <Link to="/">Home</Link>
+                                <Link to="/student">Home</Link>
                             </Button>
 
                             <Button asChild>
                                 <Link to="/join">Join Queue</Link>
+                            </Button>
+
+                            <Button variant="outline" asChild>
+                                <Link to="/display">Public Display</Link>
                             </Button>
 
                             <Button variant="outline" asChild disabled={loading}>
@@ -144,7 +148,8 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                                     <Badge variant="secondary">Ticketless</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    QR-based student ID queueing with SMS notification, voice announcement, and public display.
+                                    QR-based student ID queueing with SMS notification, voice announcement, and public
+                                    display.
                                 </p>
                             </div>
                         </div>
@@ -167,6 +172,7 @@ export default function Footer({ variant = "landing" }: FooterProps) {
 
                         {exploreItems.map((item) => {
                             const isActive = activeHref === item.href
+
                             return (
                                 <Button
                                     key={item.href}

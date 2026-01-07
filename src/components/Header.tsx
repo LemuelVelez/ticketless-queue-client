@@ -21,7 +21,7 @@ import logo from "@/assets/images/logo.svg"
 type HeaderProps = {
     /**
      * "landing" = section anchors + scroll spy (default)
-     * "student" = simple header for public pages like /join
+     * "student" = simple header for public pages like /join, /display, /student
      */
     variant?: "landing" | "student"
 }
@@ -47,7 +47,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     const authLabel = showDashboard ? "Dashboard" : "Login"
     const authTo = showDashboard ? dashboardPath : "/login"
 
-    // ✅ Hooks must not be conditional — define all here
+    // ✅ Hooks must not be conditional
     const [activeHref, setActiveHref] = useState<string>("")
     const [sheetOpen, setSheetOpen] = useState(false)
     const headerRef = useRef<HTMLElement | null>(null)
@@ -120,13 +120,13 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         setSheetOpen(false)
     }
 
-    // ✅ Student/simple header (no landing anchors, no scroll-spy UI)
+    // ✅ Student/simple header
     if (variant === "student") {
         return (
             <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
                 <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
                     {/* Brand */}
-                    <Link to="/" className="flex items-center gap-3">
+                    <Link to="/student" className="flex items-center gap-3">
                         <div className="flex h-12 w-12 items-center justify-center rounded-lg border">
                             <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
                         </div>
@@ -134,11 +134,11 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                             <div className="flex items-center gap-2">
                                 <span className="text-sm font-semibold">QueuePass</span>
                                 <Badge variant="secondary" className="hidden sm:inline-flex">
-                                    Student Join
+                                    Student
                                 </Badge>
                             </div>
                             <p className="hidden text-xs text-muted-foreground sm:block">
-                                Scan QR → enter Student ID → get queue number
+                                Join queue + view live public display
                             </p>
                         </div>
                     </Link>
@@ -146,7 +146,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                     {/* Desktop actions */}
                     <div className="hidden items-center gap-2 md:flex">
                         <Button variant="outline" asChild>
-                            <Link to="/">Home</Link>
+                            <Link to="/student">Home</Link>
                         </Button>
 
                         <Button asChild>
@@ -178,9 +178,9 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                             <div className="leading-tight">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <span className="font-semibold">QueuePass</span>
-                                                    <Badge variant="secondary">Join</Badge>
+                                                    <Badge variant="secondary">Student</Badge>
                                                 </div>
-                                                <p className="mt-1 text-xs text-muted-foreground">Student queue entry</p>
+                                                <p className="mt-1 text-xs text-muted-foreground">Public student pages</p>
                                             </div>
                                         </div>
                                     </SheetTitle>
@@ -188,7 +188,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
 
                                 <div className="mt-6 flex flex-col gap-2">
                                     <Button variant="ghost" className="w-full justify-start" asChild>
-                                        <Link to="/" onClick={() => setSheetOpen(false)}>
+                                        <Link to="/student" onClick={() => setSheetOpen(false)}>
                                             Home
                                         </Link>
                                     </Button>
@@ -196,6 +196,12 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                     <Button className="w-full" asChild>
                                         <Link to="/join" onClick={() => setSheetOpen(false)}>
                                             Join Queue
+                                        </Link>
+                                    </Button>
+
+                                    <Button variant="outline" className="w-full" asChild>
+                                        <Link to="/display" onClick={() => setSheetOpen(false)}>
+                                            Public Display
                                         </Link>
                                     </Button>
 
