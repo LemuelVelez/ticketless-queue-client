@@ -32,29 +32,11 @@ import { Label } from "@/components/ui/label"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
-import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -102,12 +84,28 @@ function DateRangePicker({
     onChange: (v: DateRange | undefined) => void
     disabled?: boolean
 }) {
-    const label = React.useMemo(() => {
+    const labelLong = React.useMemo(() => {
         if (value?.from) {
             if (value.to) return `${format(value.from, "LLL dd, y")} – ${format(value.to, "LLL dd, y")}`
             return format(value.from, "LLL dd, y")
         }
         return "Pick a date range"
+    }, [value])
+
+    // Shorter label for XS screens to avoid max-content overflow at very narrow widths
+    const labelShort = React.useMemo(() => {
+        if (!value?.from) return "Pick dates"
+        if (!value.to) return format(value.from, "MMM d, yyyy")
+
+        const fromD = value.from
+        const toD = value.to
+
+        const sameYear = fromD.getFullYear() === toD.getFullYear()
+        const sameMonth = sameYear && fromD.getMonth() === toD.getMonth()
+
+        if (sameMonth) return `${format(fromD, "MMM d")}–${format(toD, "d, yyyy")}`
+        if (sameYear) return `${format(fromD, "MMM d")}–${format(toD, "MMM d, yyyy")}`
+        return `${format(fromD, "MMM d, yyyy")}–${format(toD, "MMM d, yyyy")}`
     }, [value])
 
     return (
@@ -116,20 +114,20 @@ function DateRangePicker({
                 <Button
                     variant="outline"
                     disabled={disabled}
-                    className={cn("w-full justify-start text-left font-normal", !value?.from && "text-muted-foreground")}
+                    className={cn(
+                        "w-full min-w-0 justify-start text-left font-normal overflow-hidden",
+                        !value?.from && "text-muted-foreground",
+                    )}
                 >
-                    <CalendarDays className="mr-2 h-4 w-4" />
-                    {label}
+                    <CalendarDays className="mr-2 h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">
+                        <span className="sm:hidden">{labelShort}</span>
+                        <span className="hidden sm:inline">{labelLong}</span>
+                    </span>
                 </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                    mode="range"
-                    selected={value}
-                    onSelect={onChange}
-                    initialFocus
-                    numberOfMonths={1}
-                />
+                <Calendar mode="range" selected={value} onSelect={onChange} initialFocus numberOfMonths={1} />
             </PopoverContent>
         </Popover>
     )
@@ -284,17 +282,16 @@ export default function AdminReportsPage() {
     }
 
     return (
-        <DashboardLayout
-            title="Reports"
-            navItems={ADMIN_NAV_ITEMS}
-            user={dashboardUser}
-            activePath={location.pathname}
-        >
-            <div className="grid gap-6">
+        <DashboardLayout title="Reports" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+            {/* ✅ Responsiveness fix:
+                - Always define base grid columns (grid-cols-1) so the implicit grid doesn't size to max-content.
+                - Ensure containers can shrink (min-w-0).
+            */}
+            <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 {/* Filters */}
-                <Card>
+                <Card className="min-w-0">
                     <CardHeader className="gap-2">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
                                 <CardTitle className="flex items-center gap-2">
                                     <BarChart3 className="h-5 w-5" />
@@ -338,8 +335,8 @@ export default function AdminReportsPage() {
 
                         <Separator />
 
-                        <div className="grid gap-4 md:grid-cols-4">
-                            <div className="grid gap-2 md:col-span-2">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                            <div className="grid min-w-0 grid-cols-1 gap-2 sm:col-span-2">
                                 <Label>Date range</Label>
                                 <DateRangePicker value={range} onChange={setRange} />
 
@@ -389,10 +386,10 @@ export default function AdminReportsPage() {
                                 </div>
                             </div>
 
-                            <div className="grid gap-2 md:col-span-2">
+                            <div className="grid min-w-0 grid-cols-1 gap-2 sm:col-span-2">
                                 <Label>Department</Label>
                                 <Select value={departmentId} onValueChange={setDepartmentId} disabled={loadingDepts}>
-                                    <SelectTrigger>
+                                    <SelectTrigger className="w-full min-w-0">
                                         <SelectValue placeholder="Select department" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -405,7 +402,7 @@ export default function AdminReportsPage() {
                                     </SelectContent>
                                 </Select>
                                 <div className="text-xs text-muted-foreground">
-                                    Currently viewing: <span className="font-medium">{selectedDeptLabel}</span>
+                                    Currently viewing: <span className="font-medium break-all">{selectedDeptLabel}</span>
                                 </div>
                             </div>
                         </div>
@@ -417,7 +414,7 @@ export default function AdminReportsPage() {
                     {/* XS-only dedicated mobile tab UI */}
                     <div className="sm:hidden">
                         <Select value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
-                            <SelectTrigger className="w-full">
+                            <SelectTrigger className="w-full min-w-0">
                                 <SelectValue placeholder="Select view" />
                             </SelectTrigger>
                             <SelectContent>
@@ -440,7 +437,7 @@ export default function AdminReportsPage() {
 
                     {/* SUMMARY */}
                     <TabsContent value="summary" className="mt-4">
-                        <Card>
+                        <Card className="min-w-0">
                             <CardHeader>
                                 <CardTitle>Summary</CardTitle>
                                 <CardDescription>
@@ -448,9 +445,9 @@ export default function AdminReportsPage() {
                                 </CardDescription>
                             </CardHeader>
 
-                            <CardContent className="grid gap-6">
+                            <CardContent className="grid min-w-0 grid-cols-1 gap-6">
                                 {loadingReports ? (
-                                    <div className="grid gap-3 md:grid-cols-5">
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
                                         <Skeleton className="h-20 w-full" />
                                         <Skeleton className="h-20 w-full" />
                                         <Skeleton className="h-20 w-full" />
@@ -459,7 +456,7 @@ export default function AdminReportsPage() {
                                     </div>
                                 ) : (
                                     <>
-                                        <div className="grid gap-3 md:grid-cols-5">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
                                             <div className="rounded-lg border p-4">
                                                 <div className="text-xs text-muted-foreground">Total tickets</div>
                                                 <div className="mt-1 text-2xl font-semibold">{formatNumber(totalAll)}</div>
@@ -498,7 +495,7 @@ export default function AdminReportsPage() {
                                             </div>
                                         </div>
 
-                                        <div className="grid gap-3 md:grid-cols-3">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                                             <div className="rounded-lg border p-4">
                                                 <div className="text-xs text-muted-foreground">Called</div>
                                                 <div className="mt-1 text-2xl font-semibold">{formatNumber(calledAll)}</div>
@@ -509,13 +506,17 @@ export default function AdminReportsPage() {
 
                                             <div className="rounded-lg border p-4">
                                                 <div className="text-xs text-muted-foreground">Avg wait time</div>
-                                                <div className="mt-1 text-2xl font-semibold">{formatDuration(totals?.avgWaitMs)}</div>
+                                                <div className="mt-1 text-2xl font-semibold">
+                                                    {formatDuration(totals?.avgWaitMs)}
+                                                </div>
                                                 <div className="mt-2 text-xs text-muted-foreground">From join → called</div>
                                             </div>
 
                                             <div className="rounded-lg border p-4">
                                                 <div className="text-xs text-muted-foreground">Avg service time</div>
-                                                <div className="mt-1 text-2xl font-semibold">{formatDuration(totals?.avgServiceMs)}</div>
+                                                <div className="mt-1 text-2xl font-semibold">
+                                                    {formatDuration(totals?.avgServiceMs)}
+                                                </div>
                                                 <div className="mt-2 text-xs text-muted-foreground">From called → served</div>
                                             </div>
                                         </div>
@@ -531,12 +532,13 @@ export default function AdminReportsPage() {
                                             <Badge variant="secondary">{formatNumber(summary?.departments?.length ?? 0)} rows</Badge>
                                         </div>
 
-                                        <div className="rounded-lg border">
+                                        {/* ✅ Prevent page-level horizontal scroll if table ever overflows */}
+                                        <div className="rounded-lg border overflow-x-auto">
                                             <Table>
                                                 <TableHeader>
                                                     <TableRow>
                                                         <TableHead>Department</TableHead>
-                                                        <TableHead className="hidden md:table-cell">Total</TableHead>
+                                                        <TableHead className="hidden sm:table-cell">Total</TableHead>
                                                         <TableHead className="hidden lg:table-cell">WAIT</TableHead>
                                                         <TableHead className="hidden lg:table-cell">CALLED</TableHead>
                                                         <TableHead className="hidden lg:table-cell">HOLD</TableHead>
@@ -551,7 +553,7 @@ export default function AdminReportsPage() {
                                                     {(summary?.departments ?? []).map((r) => (
                                                         <TableRow key={r.departmentId}>
                                                             <TableCell className="font-medium">
-                                                                <div className="flex flex-col">
+                                                                <div className="flex flex-col min-w-0">
                                                                     <span className="truncate">{r.name ?? "Department"}</span>
                                                                     <span className="truncate text-xs text-muted-foreground">
                                                                         {r.code ? `Code: ${r.code}` : `ID: ${r.departmentId}`}
@@ -559,7 +561,7 @@ export default function AdminReportsPage() {
                                                                 </div>
                                                             </TableCell>
 
-                                                            <TableCell className="hidden md:table-cell">{formatNumber(r.total)}</TableCell>
+                                                            <TableCell className="hidden sm:table-cell">{formatNumber(r.total)}</TableCell>
                                                             <TableCell className="hidden lg:table-cell">{formatNumber(r.waiting)}</TableCell>
                                                             <TableCell className="hidden lg:table-cell">{formatNumber(r.called)}</TableCell>
                                                             <TableCell className="hidden lg:table-cell">{formatNumber(r.hold)}</TableCell>
@@ -597,7 +599,7 @@ export default function AdminReportsPage() {
 
                     {/* TIMESERIES */}
                     <TabsContent value="timeseries" className="mt-4">
-                        <Card>
+                        <Card className="min-w-0">
                             <CardHeader>
                                 <CardTitle>Daily breakdown</CardTitle>
                                 <CardDescription>
@@ -605,7 +607,7 @@ export default function AdminReportsPage() {
                                 </CardDescription>
                             </CardHeader>
 
-                            <CardContent className="grid gap-4">
+                            <CardContent className="grid min-w-0 grid-cols-1 gap-4">
                                 {loadingReports ? (
                                     <div className="space-y-3">
                                         <Skeleton className="h-10 w-full" />
@@ -614,16 +616,16 @@ export default function AdminReportsPage() {
                                         <Skeleton className="h-10 w-full" />
                                     </div>
                                 ) : (
-                                    <div className="rounded-lg border">
+                                    <div className="rounded-lg border overflow-x-auto">
                                         <Table>
                                             <TableHeader>
                                                 <TableRow>
                                                     <TableHead>Date</TableHead>
                                                     <TableHead>Total</TableHead>
-                                                    <TableHead className="hidden md:table-cell">WAIT</TableHead>
-                                                    <TableHead className="hidden md:table-cell">CALLED</TableHead>
-                                                    <TableHead className="hidden md:table-cell">HOLD</TableHead>
-                                                    <TableHead className="hidden md:table-cell">OUT</TableHead>
+                                                    <TableHead className="hidden sm:table-cell">WAIT</TableHead>
+                                                    <TableHead className="hidden sm:table-cell">CALLED</TableHead>
+                                                    <TableHead className="hidden sm:table-cell">HOLD</TableHead>
+                                                    <TableHead className="hidden sm:table-cell">OUT</TableHead>
                                                     <TableHead className="text-right">SERVED</TableHead>
                                                 </TableRow>
                                             </TableHeader>
@@ -633,10 +635,14 @@ export default function AdminReportsPage() {
                                                     <TableRow key={p.dateKey}>
                                                         <TableCell className="font-medium">{p.dateKey}</TableCell>
                                                         <TableCell>{formatNumber(p.total)}</TableCell>
-                                                        <TableCell className="hidden md:table-cell">{formatNumber(p.waiting)}</TableCell>
-                                                        <TableCell className="hidden md:table-cell">{formatNumber(p.called)}</TableCell>
-                                                        <TableCell className="hidden md:table-cell">{formatNumber(p.hold)}</TableCell>
-                                                        <TableCell className="hidden md:table-cell">{formatNumber(p.out)}</TableCell>
+                                                        <TableCell className="hidden sm:table-cell">
+                                                            {formatNumber(p.waiting)}
+                                                        </TableCell>
+                                                        <TableCell className="hidden sm:table-cell">
+                                                            {formatNumber(p.called)}
+                                                        </TableCell>
+                                                        <TableCell className="hidden sm:table-cell">{formatNumber(p.hold)}</TableCell>
+                                                        <TableCell className="hidden sm:table-cell">{formatNumber(p.out)}</TableCell>
                                                         <TableCell className="text-right">
                                                             <Badge>{formatNumber(p.served)}</Badge>
                                                         </TableCell>
@@ -660,9 +666,9 @@ export default function AdminReportsPage() {
 
                     {/* AUDIT LOGS */}
                     <TabsContent value="audit" className="mt-4">
-                        <Card>
+                        <Card className="min-w-0">
                             <CardHeader className="gap-2">
-                                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div className="min-w-0">
                                         <CardTitle>Audit logs</CardTitle>
                                         <CardDescription>
@@ -673,7 +679,7 @@ export default function AdminReportsPage() {
                                     {/* XS: stack vertically; desktop unchanged */}
                                     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                         <Select value={String(limit)} onValueChange={(v) => setLimit(Number(v))}>
-                                            <SelectTrigger className="w-full sm:w-32">
+                                            <SelectTrigger className="w-full min-w-0 sm:w-32">
                                                 <SelectValue placeholder="Rows" />
                                             </SelectTrigger>
                                             <SelectContent>
@@ -699,8 +705,8 @@ export default function AdminReportsPage() {
 
                                 <Separator />
 
-                                <div className="grid gap-3 md:grid-cols-4">
-                                    <div className="grid gap-2">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                                    <div className="grid min-w-0 grid-cols-1 gap-2">
                                         <Label htmlFor="log-action">Action (optional)</Label>
                                         <Input
                                             id="log-action"
@@ -710,7 +716,7 @@ export default function AdminReportsPage() {
                                         />
                                     </div>
 
-                                    <div className="grid gap-2">
+                                    <div className="grid min-w-0 grid-cols-1 gap-2">
                                         <Label htmlFor="log-entity">Entity type (optional)</Label>
                                         <Input
                                             id="log-entity"
@@ -720,10 +726,10 @@ export default function AdminReportsPage() {
                                         />
                                     </div>
 
-                                    <div className="grid gap-2">
+                                    <div className="grid min-w-0 grid-cols-1 gap-2">
                                         <Label>Actor role</Label>
                                         <Select value={logActorRole} onValueChange={(v) => setLogActorRole(v as any)}>
-                                            <SelectTrigger>
+                                            <SelectTrigger className="w-full min-w-0">
                                                 <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
@@ -749,7 +755,7 @@ export default function AdminReportsPage() {
                                 </div>
                             </CardHeader>
 
-                            <CardContent className="grid gap-4">
+                            <CardContent className="grid min-w-0 grid-cols-1 gap-4">
                                 {loadingLogs ? (
                                     <div className="space-y-3">
                                         <Skeleton className="h-10 w-full" />
@@ -759,7 +765,7 @@ export default function AdminReportsPage() {
                                     </div>
                                 ) : (
                                     <>
-                                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                             <div className="flex flex-wrap items-center gap-2 text-sm">
                                                 <Badge variant="secondary">Total: {formatNumber(logs?.total ?? 0)}</Badge>
                                                 <Badge variant="secondary">
@@ -796,7 +802,7 @@ export default function AdminReportsPage() {
                                             </div>
                                         </div>
 
-                                        <div className="rounded-lg border">
+                                        <div className="rounded-lg border overflow-x-auto">
                                             <Table>
                                                 <TableHeader>
                                                     <TableRow>
@@ -814,14 +820,19 @@ export default function AdminReportsPage() {
                                                         <TableRow key={l.id}>
                                                             <TableCell className="whitespace-nowrap">
                                                                 <div className="flex flex-col">
-                                                                    <span className="font-medium">{new Date(l.createdAt).toLocaleString()}</span>
+                                                                    <span className="font-medium">
+                                                                        {new Date(l.createdAt).toLocaleString()}
+                                                                    </span>
                                                                     <span className="text-xs text-muted-foreground">{l.id}</span>
                                                                 </div>
                                                             </TableCell>
 
-                                                            <TableCell className="min-w-45">
-                                                                <div className="flex flex-col">
-                                                                    <span className="truncate font-medium">{l.actorName || "—"}</span>
+                                                            {/* ✅ allow shrink on XS, keep some room on larger screens */}
+                                                            <TableCell className="min-w-0 sm:min-w-44">
+                                                                <div className="flex flex-col min-w-0">
+                                                                    <span className="truncate font-medium">
+                                                                        {l.actorName || "—"}
+                                                                    </span>
                                                                     <span className="truncate text-xs text-muted-foreground">
                                                                         {l.actorEmail || l.actorId || "—"}
                                                                     </span>
@@ -829,7 +840,9 @@ export default function AdminReportsPage() {
                                                             </TableCell>
 
                                                             <TableCell>
-                                                                <Badge variant={l.actorRole === "ADMIN" ? "default" : "secondary"}>
+                                                                <Badge
+                                                                    variant={l.actorRole === "ADMIN" ? "default" : "secondary"}
+                                                                >
                                                                     {l.actorRole ?? "—"}
                                                                 </Badge>
                                                             </TableCell>
@@ -837,9 +850,11 @@ export default function AdminReportsPage() {
                                                             <TableCell className="font-medium">{l.action}</TableCell>
 
                                                             <TableCell className="hidden lg:table-cell">
-                                                                <div className="flex flex-col">
+                                                                <div className="flex flex-col min-w-0">
                                                                     <span className="truncate">{l.entityType || "—"}</span>
-                                                                    <span className="truncate text-xs text-muted-foreground">{l.entityId || "—"}</span>
+                                                                    <span className="truncate text-xs text-muted-foreground">
+                                                                        {l.entityId || "—"}
+                                                                    </span>
                                                                 </div>
                                                             </TableCell>
 
@@ -848,7 +863,12 @@ export default function AdminReportsPage() {
                                                                     <Button
                                                                         variant="outline"
                                                                         size="sm"
-                                                                        onClick={() => openMeta(`${l.action} • ${l.entityType ?? "Meta"}`, l.meta)}
+                                                                        onClick={() =>
+                                                                            openMeta(
+                                                                                `${l.action} • ${l.entityType ?? "Meta"}`,
+                                                                                l.meta,
+                                                                            )
+                                                                        }
                                                                     >
                                                                         View
                                                                     </Button>
