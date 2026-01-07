@@ -41,13 +41,7 @@ async function parseJsonSafe(res: Response) {
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const {
-        method = "GET",
-        body,
-        headers = {},
-        auth = true,
-        signal,
-    } = options
+    const { method = "GET", body, headers = {}, auth = true, signal } = options
 
     const finalHeaders: Record<string, string> = {
         Accept: "application/json",
@@ -78,11 +72,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     const data = await parseJsonSafe(res)
 
     if (!res.ok) {
-        const message =
-            (data as any)?.message ||
-            res.statusText ||
-            "Request failed"
-
+        const message = (data as any)?.message || res.statusText || "Request failed"
         throw new ApiError(message, res.status, data)
     }
 
@@ -92,12 +82,25 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 export const api = {
     get: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "GET" }),
+
     post: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "POST", body }),
+
     put: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "PUT", body }),
+
     patch: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "PATCH", body }),
+
+    /**
+     * Preferred DELETE method
+     */
+    delete: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
+        apiRequest<T>(path, { ...opts, method: "DELETE" }),
+
+    /**
+     * Backwards-compatible alias
+     */
     del: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "DELETE" }),
 }

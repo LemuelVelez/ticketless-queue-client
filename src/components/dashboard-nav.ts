@@ -9,6 +9,8 @@ import {
     LayoutGrid,
     ShieldCheck,
     Megaphone,
+    QrCode,
+    Home,
 } from "lucide-react"
 
 export type NavMainItem = {
@@ -18,6 +20,16 @@ export type NavMainItem = {
     badge?: React.ReactNode
     items?: Array<{ title: string; href: string }>
 }
+
+/**
+ * ✅ Student nav (public pages — no login, no dashboard)
+ * Use this for student-facing layouts/pages after "Join Queue" redirection.
+ */
+export const STUDENT_NAV_ITEMS: NavMainItem[] = [
+    { title: "Home", href: "/", icon: Home },
+    { title: "Join Queue", href: "/join", icon: QrCode },
+    { title: "Public Display", href: "/display", icon: Monitor },
+]
 
 export const STAFF_NAV_ITEMS: NavMainItem[] = [
     { title: "Dashboard", href: "/staff/dashboard", icon: LayoutDashboard },

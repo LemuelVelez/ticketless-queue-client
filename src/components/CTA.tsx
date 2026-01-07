@@ -1,9 +1,21 @@
+import { useMemo } from "react"
+import { Link } from "react-router-dom"
+
+import { useSession } from "@/hooks/use-session"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ArrowRight, QrCode } from "lucide-react"
 
 export default function CTA() {
+    const { user, loading } = useSession()
+    const dashboardPath = useMemo(() => (user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"), [user])
+
+    const showDashboard = !loading && !!user
+    const authLabel = showDashboard ? "Dashboard" : "Login"
+    const authTo = showDashboard ? dashboardPath : "/login"
+
     return (
         <section className="pb-16">
             <Card className="overflow-hidden">
@@ -27,15 +39,13 @@ export default function CTA() {
 
                     <div className="flex flex-wrap gap-2">
                         <Button asChild className="gap-2">
-                            <a href="/join">
+                            <Link to="/join">
                                 Join Queue <ArrowRight className="h-4 w-4" />
-                            </a>
+                            </Link>
                         </Button>
-                        <Button variant="outline" asChild>
-                            <a href="/staff/login">Staff Login</a>
-                        </Button>
-                        <Button variant="ghost" asChild>
-                            <a href="/admin/login">Admin Setup</a>
+
+                        <Button variant="outline" asChild disabled={loading}>
+                            <Link to={authTo}>{authLabel}</Link>
                         </Button>
                     </div>
                 </CardContent>

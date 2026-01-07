@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { api } from "@/lib/http"
 import type { UserRole } from "@/api/auth"
 
@@ -61,18 +62,91 @@ type UpdateUserPayload = {
     password?: string
 }
 
-function apiDelete(path: string) {
-    // Your http client may expose delete() or del(). Wrap it here so callers don't need any hacks.
-    const apiAny = api as unknown as {
-        delete?: (p: string) => Promise<unknown>
-        del?: (p: string) => Promise<unknown>
+/** =========================
+ * REPORTS + AUDIT LOGS TYPES
+ * ========================= */
+
+export type ReportRange = {
+    from: string // YYYY-MM-DD
+    to: string // YYYY-MM-DD
+}
+
+export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
+
+export type StatusCounts = Partial<Record<TicketStatus, number>>
+
+export type DepartmentReportRow = {
+    departmentId: string
+    name?: string
+    code?: string
+
+    total: number
+    waiting: number
+    called: number
+    hold: number
+    out: number
+    served: number
+
+    avgWaitMs: number | null
+    avgServiceMs: number | null
+}
+
+export type ReportsSummaryResponse = {
+    range: ReportRange
+    totals: {
+        total: number
+        byStatus: StatusCounts
+        avgWaitMs: number | null
+        avgServiceMs: number | null
     }
+    departments: DepartmentReportRow[]
+}
 
-    if (typeof apiAny.delete === "function") return apiAny.delete(path)
-    if (typeof apiAny.del === "function") return apiAny.del(path)
+export type ReportsTimeseriesPoint = {
+    dateKey: string // YYYY-MM-DD
+    total: number
+    waiting: number
+    called: number
+    hold: number
+    out: number
+    served: number
+}
 
-    // If neither exists, throw so the UI can fallback (or you can implement delete in lib/http)
-    throw new Error("HTTP client has no delete() / del() method")
+export type ReportsTimeseriesResponse = {
+    range: ReportRange
+    series: ReportsTimeseriesPoint[]
+}
+
+export type AuditLogRow = {
+    id: string
+    actorId: string | null
+    actorRole: UserRole | null
+    actorName: string | null
+    actorEmail: string | null
+
+    action: string
+    entityType?: string
+    entityId: string | null
+    meta?: Record<string, unknown>
+    createdAt: string
+}
+
+export type AuditLogsResponse = {
+    page: number
+    limit: number
+    total: number
+    logs: AuditLogRow[]
+}
+
+function toQuery(params?: Record<string, string | number | boolean | undefined | null>) {
+    const qs = new URLSearchParams()
+    if (!params) return ""
+    for (const [k, v] of Object.entries(params)) {
+        if (v === undefined || v === null || v === "") continue
+        qs.set(k, String(v))
+    }
+    const s = qs.toString()
+    return s ? `?${s}` : ""
 }
 
 export const adminApi = {
@@ -99,16 +173,27 @@ export const adminApi = {
 
     // ACCOUNTS (backend still uses /admin/staff endpoints; now supports both ADMIN & STAFF)
     listStaff: () => api.get<{ staff: StaffUser[] }>("/admin/staff"),
-
-    createStaff: (payload: CreateUserPayload) =>
-        api.post<{ staff: StaffUser }>("/admin/staff", payload),
-
+    createStaff: (payload: CreateUserPayload) => api.post<{ staff: StaffUser }>("/admin/staff", payload),
     updateStaff: (id: string, payload: UpdateUserPayload) =>
         api.put<{ staff: StaffUser }>(`/admin/staff/${id}`, payload),
 
-    deleteStaff: async (id: string) => {
-        // backend now supports DELETE /admin/staff/:id
-        await apiDelete(`/admin/staff/${id}`)
-        return { ok: true as const }
-    },
+    deleteStaff: (id: string) => api.delete<{ ok: true }>(`/admin/staff/${id}`),
+
+    // REPORTS
+    getReportsSummary: (opts?: { from?: string; to?: string; departmentId?: string }) =>
+        api.get<ReportsSummaryResponse>(`/admin/reports/summary${toQuery(opts)}`),
+
+    getReportsTimeseries: (opts?: { from?: string; to?: string; departmentId?: string }) =>
+        api.get<ReportsTimeseriesResponse>(`/admin/reports/timeseries${toQuery(opts)}`),
+
+    // AUDIT LOGS
+    listAuditLogs: (opts?: {
+        page?: number
+        limit?: number
+        action?: string
+        entityType?: string
+        actorRole?: UserRole
+        from?: string
+        to?: string
+    }) => api.get<AuditLogsResponse>(`/admin/audit-logs${toQuery(opts as any)}`),
 }
