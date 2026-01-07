@@ -235,7 +235,7 @@ export default function StudentJoinPage() {
                                                 id="studentId"
                                                 value={studentId}
                                                 onChange={(e) => setStudentId(e.target.value)}
-                                                placeholder="e.g. 2021-00001"
+                                                placeholder="e.g. TC-20-A-00001"
                                                 autoComplete="off"
                                                 inputMode="text"
                                                 disabled={busy}
