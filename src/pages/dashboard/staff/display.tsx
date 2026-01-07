@@ -2,7 +2,17 @@
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { Monitor, RefreshCw, Maximize2, Minimize2, Copy, ExternalLink } from "lucide-react"
+import {
+    Monitor,
+    RefreshCw,
+    Maximize2,
+    Minimize2,
+    Copy,
+    ExternalLink,
+    Download,
+    QrCode as QrCodeIcon,
+} from "lucide-react"
+import QRCode from "react-qr-code"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
@@ -63,11 +73,10 @@ function joinUrl(base: string, path: string) {
 }
 
 function getClientPublicUrl() {
-    // ✅ Prefer VITE_CLIENT_PUBLIC_URL for QR/redirect links
+    // Base URL for QR/redirect links (prefer env, fallback to current origin)
     const envBase = String((import.meta as any)?.env?.VITE_CLIENT_PUBLIC_URL ?? "").trim()
     if (envBase) return stripTrailingSlash(envBase)
 
-    // Fallback (dev/local)
     if (typeof window !== "undefined") return stripTrailingSlash(window.location.origin)
     return ""
 }
@@ -88,6 +97,85 @@ async function copyToClipboard(text: string) {
     } catch {
         return false
     }
+}
+
+function safeFilePart(v: string) {
+    return String(v || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-_]+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 60)
+}
+
+function clamp(n: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, n))
+}
+
+/**
+ * Downloads the QR SVG as a PNG with a proper white "quiet zone" (padding)
+ * around it (top/bottom/left/right).
+ */
+async function downloadSvgAsPng(svgEl: SVGSVGElement, filename: string, scale = 4) {
+    const serializer = new XMLSerializer()
+    const svgString = serializer.serializeToString(svgEl)
+
+    // Ensure SVG has xmlns for proper serialization in some browsers
+    const hasXmlns = svgString.includes('xmlns="http://www.w3.org/2000/svg"')
+    const fixedSvg = hasXmlns ? svgString : svgString.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"')
+
+    const svgBlob = new Blob([fixedSvg], { type: "image/svg+xml;charset=utf-8" })
+    const url = URL.createObjectURL(svgBlob)
+
+    const img = new Image()
+
+    await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error("Failed to render QR image."))
+        img.src = url
+    })
+
+    // Use rendered size
+    const rect = svgEl.getBoundingClientRect()
+    const w = Math.max(1, Math.round(rect.width))
+    const h = Math.max(1, Math.round(rect.height))
+
+    // ✅ Add proper spacing (quiet zone) around QR when downloading
+    // - 12% of the QR size (min 24px, max 80px) feels good for scanning + print
+    const padding = clamp(Math.round(Math.min(w, h) * 0.12), 24, 80)
+
+    const canvas = document.createElement("canvas")
+    canvas.width = (w + padding * 2) * scale
+    canvas.height = (h + padding * 2) * scale
+
+    const ctx = canvas.getContext("2d")
+    if (!ctx) {
+        URL.revokeObjectURL(url)
+        throw new Error("Canvas is not supported in this browser.")
+    }
+
+    // White background for PNG
+    ctx.fillStyle = "#ffffff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    // Keep edges crisp (QR codes look better without smoothing)
+    ctx.imageSmoothingEnabled = false
+
+    // Draw QR centered with padding
+    const dx = padding * scale
+    const dy = padding * scale
+    ctx.drawImage(img, dx, dy, w * scale, h * scale)
+
+    URL.revokeObjectURL(url)
+
+    const pngUrl = canvas.toDataURL("image/png")
+    const a = document.createElement("a")
+    a.href = pngUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
 }
 
 export default function StaffDisplayPage() {
@@ -123,9 +211,7 @@ export default function StaffDisplayPage() {
 
     const clientPublicBase = React.useMemo(() => getClientPublicUrl(), [])
 
-    // ✅ These are the links you can embed into your QR code
-    // - staffDisplayUrl: opens this staff page (requires login)
-    // - publicDisplayUrl: suggested public route using departmentId (adjust if your public route differs)
+    // URLs (QR targets)
     const staffDisplayUrl = React.useMemo(() => joinUrl(clientPublicBase, "/staff/display"), [clientPublicBase])
 
     const publicDisplayUrl = React.useMemo(() => {
@@ -133,6 +219,15 @@ export default function StaffDisplayPage() {
         // Common pattern: /display?departmentId=...
         return joinUrl(clientPublicBase, `/display?departmentId=${encodeURIComponent(departmentId)}`)
     }, [clientPublicBase, departmentId])
+
+    // ✅ QR Generator state
+    const [qrTarget, setQrTarget] = React.useState<"public" | "staff">("public")
+    const [downloadingQr, setDownloadingQr] = React.useState(false)
+    const qrWrapRef = React.useRef<HTMLDivElement | null>(null)
+
+    const qrValue = React.useMemo(() => {
+        return qrTarget === "staff" ? staffDisplayUrl : publicDisplayUrl
+    }, [qrTarget, staffDisplayUrl, publicDisplayUrl])
 
     const refresh = React.useCallback(async () => {
         try {
@@ -198,7 +293,6 @@ export default function StaffDisplayPage() {
 
         autoPresentDoneRef.current = true
         void enterPresentation()
-         
     }, [location.search])
 
     React.useEffect(() => {
@@ -241,6 +335,35 @@ export default function StaffDisplayPage() {
         window.open(url, "_blank", "noopener,noreferrer")
     }
 
+    async function onDownloadQrPng() {
+        if (!qrValue) {
+            toast.error("No QR link available.")
+            return
+        }
+
+        const svg = qrWrapRef.current?.querySelector("svg") as SVGSVGElement | null
+        if (!svg) {
+            toast.error("QR code is not ready.")
+            return
+        }
+
+        setDownloadingQr(true)
+        try {
+            const label =
+                qrTarget === "staff"
+                    ? "staff-display"
+                    : `public-display-${safeFilePart(departmentName) || safeFilePart(departmentId ?? "department")}`
+
+            const filename = `${label}.png`
+            await downloadSvgAsPng(svg, filename, 5)
+            toast.success("QR code downloaded.")
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to download QR code.")
+        } finally {
+            setDownloadingQr(false)
+        }
+    }
+
     // ✅ Presentation overlay
     if (presentation) {
         const bigNumberClass = "text-7xl sm:text-8xl md:text-9xl font-semibold tracking-tight leading-none"
@@ -256,7 +379,9 @@ export default function StaffDisplayPage() {
                                 <Badge variant="secondary">Dept ID: {departmentId ?? "—"}</Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                             </div>
-                            <div className="mt-2 text-sm text-muted-foreground">Auto refresh: {autoRefresh ? "On" : "Off"} • Updates every 5s</div>
+                            <div className="mt-2 text-sm text-muted-foreground">
+                                Auto refresh: {autoRefresh ? "On" : "Off"} • Updates every 5s
+                            </div>
                         </div>
 
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -300,9 +425,7 @@ export default function StaffDisplayPage() {
                                         <div className="mt-4 text-lg text-muted-foreground">
                                             Window: {nowServing.windowNumber ? `#${nowServing.windowNumber}` : "—"}
                                         </div>
-                                        <div className="mt-1 text-sm text-muted-foreground">
-                                            Called at: {fmtTime(nowServing.calledAt)}
-                                        </div>
+                                        <div className="mt-1 text-sm text-muted-foreground">Called at: {fmtTime(nowServing.calledAt)}</div>
                                     </>
                                 ) : (
                                     <div className="text-center text-lg text-muted-foreground">No ticket is currently being called.</div>
@@ -348,9 +471,7 @@ export default function StaffDisplayPage() {
                                     <Monitor className="h-5 w-5" />
                                     Staff Display
                                 </CardTitle>
-                                <CardDescription>
-                                    Department public display data (based on your assignment). Links below use <b>VITE_CLIENT_PUBLIC_URL</b>.
-                                </CardDescription>
+                                <CardDescription>Department public display data (based on your assignment).</CardDescription>
                             </div>
 
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -412,76 +533,101 @@ export default function StaffDisplayPage() {
                             </div>
                         ) : (
                             <div className="grid gap-6 lg:grid-cols-12">
-                                {/* Share links (QR code destination) */}
+                                {/* QR Generator */}
                                 <Card className="lg:col-span-12">
                                     <CardHeader>
-                                        <CardTitle>QR / Redirect Links</CardTitle>
-                                        <CardDescription>
-                                            Use these URLs as your QR code target. Base comes from <b>VITE_CLIENT_PUBLIC_URL</b>.
-                                        </CardDescription>
+                                        <CardTitle className="flex items-center gap-2">
+                                            <QrCodeIcon className="h-5 w-5" />
+                                            QR Code
+                                        </CardTitle>
+                                        <CardDescription>Generate a QR code and download it as PNG (with proper spacing).</CardDescription>
                                     </CardHeader>
+
                                     <CardContent className="space-y-4">
-                                        <div className="rounded-lg border p-4">
-                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                                <div className="min-w-0">
-                                                    <div className="text-sm font-medium">Staff Display (requires login)</div>
-                                                    <div className="break-all text-xs text-muted-foreground">{staffDisplayUrl}</div>
-                                                </div>
-                                                <div className="flex flex-col gap-2 sm:flex-row">
-                                                    <Button
-                                                        type="button"
-                                                        variant="outline"
-                                                        className="gap-2"
-                                                        onClick={() => void onCopy(staffDisplayUrl)}
-                                                    >
-                                                        <Copy className="h-4 w-4" />
-                                                        Copy
-                                                    </Button>
-                                                    <Button
-                                                        type="button"
-                                                        variant="secondary"
-                                                        className="gap-2"
-                                                        onClick={() => onOpen(staffDisplayUrl)}
-                                                    >
-                                                        <ExternalLink className="h-4 w-4" />
-                                                        Open
-                                                    </Button>
-                                                </div>
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                            <div className="flex flex-col gap-2 sm:flex-row">
+                                                <Button
+                                                    type="button"
+                                                    variant={qrTarget === "public" ? "default" : "outline"}
+                                                    onClick={() => setQrTarget("public")}
+                                                    className="w-full sm:w-auto"
+                                                >
+                                                    Public Display
+                                                </Button>
+
+                                                <Button
+                                                    type="button"
+                                                    variant={qrTarget === "staff" ? "default" : "outline"}
+                                                    onClick={() => setQrTarget("staff")}
+                                                    className="w-full sm:w-auto"
+                                                >
+                                                    Staff Display
+                                                </Button>
+                                            </div>
+
+                                            <div className="flex flex-col gap-2 sm:flex-row">
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    className="w-full gap-2 sm:w-auto"
+                                                    disabled={!qrValue}
+                                                    onClick={() => void onCopy(qrValue)}
+                                                >
+                                                    <Copy className="h-4 w-4" />
+                                                    Copy link
+                                                </Button>
+
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    className="w-full gap-2 sm:w-auto"
+                                                    disabled={!qrValue}
+                                                    onClick={() => onOpen(qrValue)}
+                                                >
+                                                    <ExternalLink className="h-4 w-4" />
+                                                    Open
+                                                </Button>
+
+                                                <Button
+                                                    type="button"
+                                                    className="w-full gap-2 sm:w-auto"
+                                                    disabled={!qrValue || downloadingQr}
+                                                    onClick={() => void onDownloadQrPng()}
+                                                >
+                                                    <Download className="h-4 w-4" />
+                                                    {downloadingQr ? "Downloading…" : "Download PNG"}
+                                                </Button>
                                             </div>
                                         </div>
 
                                         <div className="rounded-lg border p-4">
-                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                                <div className="min-w-0">
-                                                    <div className="text-sm font-medium">Public Display (department-specific)</div>
-                                                    <div className="break-all text-xs text-muted-foreground">
-                                                        {publicDisplayUrl || "—"}
+                                            <div className="grid gap-4 lg:grid-cols-12">
+                                                <div className="lg:col-span-4">
+                                                    <div className="text-sm font-medium">
+                                                        Target: {qrTarget === "public" ? "Public Display" : "Staff Display"}
                                                     </div>
-                                                    <div className="mt-1 text-xs text-muted-foreground">
-                                                        If your public route uses a different format, adjust this path in this file.
-                                                    </div>
+                                                    <div className="mt-1 break-all text-xs text-muted-foreground">{qrValue || "—"}</div>
+                                                    {qrTarget === "staff" ? (
+                                                        <div className="mt-2 text-xs text-muted-foreground">Note: Staff display may require login.</div>
+                                                    ) : null}
                                                 </div>
-                                                <div className="flex flex-col gap-2 sm:flex-row">
-                                                    <Button
-                                                        type="button"
-                                                        variant="outline"
-                                                        className="gap-2"
-                                                        disabled={!publicDisplayUrl}
-                                                        onClick={() => void onCopy(publicDisplayUrl)}
-                                                    >
-                                                        <Copy className="h-4 w-4" />
-                                                        Copy
-                                                    </Button>
-                                                    <Button
-                                                        type="button"
-                                                        variant="secondary"
-                                                        className="gap-2"
-                                                        disabled={!publicDisplayUrl}
-                                                        onClick={() => onOpen(publicDisplayUrl)}
-                                                    >
-                                                        <ExternalLink className="h-4 w-4" />
-                                                        Open
-                                                    </Button>
+
+                                                <div className="lg:col-span-8">
+                                                    <div className="flex items-center justify-center">
+                                                        <div
+                                                            ref={qrWrapRef}
+                                                            className="rounded-xl border bg-white p-4"
+                                                            style={{ width: "fit-content" }}
+                                                        >
+                                                            {qrValue ? (
+                                                                <QRCode value={qrValue} size={220} bgColor="#FFFFFF" fgColor="#000000" />
+                                                            ) : (
+                                                                <div className="flex h-55 w-55 items-center justify-center text-sm text-muted-foreground">
+                                                                    No link available
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
