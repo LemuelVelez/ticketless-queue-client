@@ -13,6 +13,7 @@ import AdminDashboardPage from "@/pages/dashboard/admin/dashboard"
 import AdminAccountsPage from "@/pages/dashboard/admin/accounts"
 import AdminDepartmentsPage from "@/pages/dashboard/admin/departments"
 import AdminWindowsPage from "@/pages/dashboard/admin/windows"
+import AdminReportsPage from "@/pages/dashboard/admin/reports"
 
 import StaffDashboardPage from "@/pages/dashboard/staff/dashboard"
 
@@ -71,6 +72,7 @@ export default function App() {
             <Route path="/admin/accounts" element={<AdminAccountsPage />} />
             <Route path="/admin/departments" element={<AdminDepartmentsPage />} />
             <Route path="/admin/windows" element={<AdminWindowsPage />} />
+            <Route path="/admin/reports" element={<AdminReportsPage />} />
           </Route>
 
           {/* Staff Routes */}

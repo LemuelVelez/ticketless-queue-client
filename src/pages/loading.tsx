@@ -8,7 +8,66 @@ import logo from "@/assets/images/logo.svg"
 export default function LoadingPage() {
     return (
         <div className="min-h-screen bg-background text-foreground">
-            <main className="mx-auto flex max-w-3xl items-center justify-center px-4 py-16">
+            {/* ✅ Mobile-only UI (xs): logo on top + vertical stack */}
+            <main className="flex min-h-screen items-center justify-center px-4 py-10 sm:hidden">
+                <Card className="w-full max-w-sm">
+                    <CardHeader className="space-y-3 text-center">
+                        <div className="flex justify-center">
+                            <div className="flex h-14 w-14 items-center justify-center rounded-lg border bg-card">
+                                <img
+                                    src={logo}
+                                    alt="QueuePass logo"
+                                    className="h-10 w-10"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-1">
+                            <CardTitle className="text-base">Loading QueuePass</CardTitle>
+                            <CardDescription className="text-xs">
+                                We’re preparing your queue experience.
+                            </CardDescription>
+                        </div>
+
+                        <div className="flex justify-center">
+                            <Badge variant="secondary" className="max-w-full whitespace-normal">
+                                Please wait
+                            </Badge>
+                        </div>
+                    </CardHeader>
+
+                    <CardContent className="grid gap-4">
+                        <div className="rounded-lg border p-4">
+                            <Skeleton className="h-9 w-32" />
+                            <div className="mt-3 grid gap-2">
+                                <Skeleton className="h-4 w-full" />
+                                <Skeleton className="h-4 w-11/12" />
+                                <Skeleton className="h-4 w-9/12" />
+                            </div>
+                        </div>
+
+                        <Separator />
+
+                        <div className="grid gap-2">
+                            <Skeleton className="h-4 w-4/5" />
+                            <Skeleton className="h-4 w-3/5" />
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Skeleton className="h-10 w-full" />
+                            <Skeleton className="h-10 w-full" />
+                            <Skeleton className="h-10 w-full" />
+                        </div>
+
+                        <div className="text-xs text-muted-foreground text-center">
+                            Tip: Keep this page open—queue status can update in real time.
+                        </div>
+                    </CardContent>
+                </Card>
+            </main>
+
+            {/* ✅ Desktop UI (sm+) — unchanged */}
+            <main className="mx-auto hidden max-w-3xl items-center justify-center px-4 py-16 sm:flex">
                 <Card className="w-full">
                     <CardHeader>
                         <CardTitle className="flex flex-wrap items-center justify-between gap-2">
