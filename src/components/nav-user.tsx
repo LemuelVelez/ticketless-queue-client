@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
 import * as React from "react"
@@ -31,6 +32,7 @@ import { LogOut, Settings } from "lucide-react"
 
 import { useSession } from "@/hooks/use-session"
 import { clearAuthUser, getAuthUser, type StoredAuthUser } from "@/lib/auth"
+import { authApi } from "@/api/auth"
 
 export type DashboardUser = {
     name: string
@@ -95,8 +97,8 @@ export function NavUser({
     const [logoutOpen, setLogoutOpen] = React.useState(false)
 
     /**
-     * Fix: on refresh some apps re-hydrate `user` without email (e.g. from /me).
-     * We fall back to auth storage so email doesn't "disappear" after refresh.
+     * We also use auth storage to avoid fields "disappearing" on refresh
+     * and to get avatarKey/avatarUrl even if parent didn't pass it.
      */
     const [storedUser, setStoredUser] = React.useState<StoredAuthUser | null>(null)
 
@@ -117,12 +119,41 @@ export function NavUser({
     const displayName = propName || storedName || "User"
     const displayEmail = propEmail || storedEmail || "—"
 
+    // ---- Avatar resolution (prop -> storage -> signed URL fallback) ----
+    const propAvatarUrl = pickNonEmptyString((user as any)?.avatarUrl)
+    const storedAvatarUrl = pickNonEmptyString((storedUser as any)?.avatarUrl)
+    const storedAvatarKey = pickNonEmptyString((storedUser as any)?.avatarKey)
+
+    const [resolvedAvatarUrl, setResolvedAvatarUrl] = React.useState<string | null>(null)
+    const signedTriedRef = React.useRef(false)
+
+    React.useEffect(() => {
+        const next = propAvatarUrl || storedAvatarUrl || null
+        setResolvedAvatarUrl(next)
+        signedTriedRef.current = false
+    }, [propAvatarUrl, storedAvatarUrl])
+
+    const fetchSignedAvatarUrl = React.useCallback(async () => {
+        if (!storedAvatarKey) return
+        if (signedTriedRef.current) return
+        signedTriedRef.current = true
+        try {
+            const res = await authApi.getMyAvatarUrl()
+            if (res?.url) setResolvedAvatarUrl(res.url)
+        } catch {
+            // ignore; avatar is optional
+        }
+    }, [storedAvatarKey])
+
+    React.useEffect(() => {
+        if (!resolvedAvatarUrl && storedAvatarKey) {
+            void fetchSignedAvatarUrl()
+        }
+    }, [resolvedAvatarUrl, storedAvatarKey, fetchSignedAvatarUrl])
+
     const handleLogout = () => {
-        // Clear session context + token
         logout()
-        // Also clear any stored user object (if used elsewhere)
         clearAuthUser()
-        // Navigate to login (or provided path)
         navigate(logoutHref, { replace: true })
     }
 
@@ -137,17 +168,29 @@ export function NavUser({
                                     variant="ghost"
                                     className={cn(
                                         "justify-start px-2",
-                                        // default behavior
                                         "w-full gap-3",
-                                        // collapsed sidebar (desktop)
                                         collapsed && "justify-center px-0",
-                                        // compact header (MOBILE ONLY) - do not affect desktop
                                         compactOnMobile && "w-auto gap-0 px-0 md:w-full md:gap-3 md:px-2",
                                     )}
                                 >
                                     <Avatar className="h-8 w-8">
-                                        {user.avatarUrl ? (
-                                            <AvatarImage src={user.avatarUrl} alt={displayName} />
+                                        {resolvedAvatarUrl ? (
+                                            <AvatarImage
+                                                src={resolvedAvatarUrl}
+                                                alt={displayName}
+                                                className="object-cover"
+                                                onLoadingStatusChange={(status) => {
+                                                    if (status === "error") {
+                                                        // If the stored URL is not accessible (private S3),
+                                                        // try fetching a signed URL once.
+                                                        if (storedAvatarKey && !signedTriedRef.current) {
+                                                            void fetchSignedAvatarUrl()
+                                                        } else {
+                                                            setResolvedAvatarUrl(null)
+                                                        }
+                                                    }
+                                                }}
+                                            />
                                         ) : null}
                                         <AvatarFallback>{initials(displayName)}</AvatarFallback>
                                     </Avatar>
@@ -156,7 +199,6 @@ export function NavUser({
                                         className={cn(
                                             "min-w-0 flex-1 text-left",
                                             collapsed && "hidden",
-                                            // hide text only on mobile when compactOnMobile is enabled
                                             compactOnMobile && "hidden md:block",
                                         )}
                                     >
@@ -173,7 +215,6 @@ export function NavUser({
                             sideOffset={8}
                             className="w-56"
                         >
-                            {/* Always show name + email inside the dropdown (so email is never "lost") */}
                             <DropdownMenuLabel>
                                 <div className="flex flex-col">
                                     <span className="truncate text-sm font-medium">{displayName}</span>
@@ -211,7 +252,6 @@ export function NavUser({
                 </SidebarMenuItem>
             </SidebarMenu>
 
-            {/* Logout confirmation */}
             <AlertDialog open={logoutOpen} onOpenChange={setLogoutOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
