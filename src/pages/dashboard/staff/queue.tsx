@@ -13,6 +13,7 @@ import {
     PauseOctagon,
     XCircle,
     History,
+    Volume2,
 } from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
@@ -56,6 +57,14 @@ function historyWhen(t: TicketType) {
     return fmtTime((t as any).updatedAt)
 }
 
+function isSpeechSupported() {
+    return (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        "SpeechSynthesisUtterance" in window
+    )
+}
+
 export default function StaffQueuePage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -86,6 +95,114 @@ export default function StaffQueuePage() {
 
     const assignedOk = Boolean(departmentId && windowInfo?.id)
 
+    // -------- Voice announcement (Web Speech API) --------
+    const [voiceEnabled, setVoiceEnabled] = React.useState(true)
+    const [voiceSupported, setVoiceSupported] = React.useState(true)
+    const voicesRef = React.useRef<SpeechSynthesisVoice[]>([])
+    const voiceWarnedRef = React.useRef(false)
+    const lastAnnouncedRef = React.useRef<number | null>(null)
+
+    React.useEffect(() => {
+        const supported = isSpeechSupported()
+        setVoiceSupported(supported)
+        if (!supported) {
+            setVoiceEnabled(false)
+            return
+        }
+
+        const synth = window.speechSynthesis
+        const loadVoices = () => {
+            try {
+                const v = synth.getVoices?.() ?? []
+                if (v.length) voicesRef.current = v
+            } catch {
+                // ignore
+            }
+        }
+
+        loadVoices()
+        try {
+            synth.addEventListener("voiceschanged", loadVoices)
+        } catch {
+            // ignore
+        }
+
+        return () => {
+            try {
+                synth.removeEventListener("voiceschanged", loadVoices)
+            } catch {
+                // ignore
+            }
+        }
+    }, [])
+
+    const speak = React.useCallback((text: string) => {
+        if (typeof window === "undefined") return
+        if (!isSpeechSupported()) return
+
+        try {
+            const synth = window.speechSynthesis
+
+            // ✅ DO NOT cancel. This allows repeated clicks to queue multiple announcements.
+            // synth.cancel()
+
+            // Some browsers pause synthesis if tab changes
+            try {
+                synth.resume()
+            } catch {
+                // ignore
+            }
+
+            const u = new SpeechSynthesisUtterance(text)
+            u.lang = "en-US"
+            u.rate = 1
+            u.pitch = 1
+            u.volume = 1
+
+            const voices = voicesRef.current?.length ? voicesRef.current : (synth.getVoices?.() ?? [])
+            const preferred =
+                voices.find((v) => v.lang?.toLowerCase().startsWith("en-ph")) ||
+                voices.find((v) => v.lang?.toLowerCase().startsWith("en")) ||
+                voices[0]
+
+            if (preferred) u.voice = preferred
+
+            synth.speak(u)
+        } catch {
+            // ignore
+        }
+    }, [])
+
+    const announceCall = React.useCallback(
+        (queueNumber: number) => {
+            lastAnnouncedRef.current = queueNumber
+
+            if (!voiceEnabled) return
+            if (!voiceSupported) {
+                if (!voiceWarnedRef.current) {
+                    voiceWarnedRef.current = true
+                    toast.message("Voice announcement is not supported in this browser.")
+                }
+                return
+            }
+
+            const win = windowInfo?.number
+            const text = win
+                ? `Queue number ${queueNumber}. Please proceed to window ${win}.`
+                : `Queue number ${queueNumber}.`
+
+            speak(text)
+        },
+        [speak, voiceEnabled, voiceSupported, windowInfo?.number],
+    )
+
+    const onRecallVoice = React.useCallback(() => {
+        const n = current?.queueNumber ?? lastAnnouncedRef.current
+        if (!n) return toast.message("No ticket to announce.")
+        announceCall(n)
+    }, [announceCall, current?.queueNumber])
+
+    // -------- Data refresh --------
     const refreshAll = React.useCallback(async () => {
         setLoading(true)
         try {
@@ -133,6 +250,10 @@ export default function StaffQueuePage() {
             const res = await staffApi.callNext()
             setCurrent(res.ticket)
             toast.success(`Called #${res.ticket.queueNumber}`)
+
+            // ✅ Voice announcement on each click
+            announceCall(res.ticket.queueNumber)
+
             await refreshAll()
         } catch (e: any) {
             toast.error(e?.message ?? "No waiting tickets.")
@@ -163,7 +284,7 @@ export default function StaffQueuePage() {
             toast.success(
                 res.ticket.status === "OUT"
                     ? `Ticket #${current.queueNumber} is OUT.`
-                    : `Ticket #${current.queueNumber} moved to HOLD.`
+                    : `Ticket #${current.queueNumber} moved to HOLD.`,
             )
             await refreshAll()
         } catch (e: any) {
@@ -219,6 +340,35 @@ export default function StaffQueuePage() {
                                     <Megaphone className="h-4 w-4" />
                                     Call next
                                 </Button>
+
+                                <Button
+                                    variant="outline"
+                                    onClick={() => onRecallVoice()}
+                                    disabled={
+                                        loading ||
+                                        busy ||
+                                        !assignedOk ||
+                                        !voiceEnabled ||
+                                        !voiceSupported ||
+                                        (!current?.queueNumber && !lastAnnouncedRef.current)
+                                    }
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <Volume2 className="h-4 w-4" />
+                                    Recall voice
+                                </Button>
+
+                                <div className="flex items-center gap-2 sm:pl-2">
+                                    <Switch
+                                        id="voiceEnabled"
+                                        checked={voiceEnabled}
+                                        onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
+                                        disabled={busy || !voiceSupported}
+                                    />
+                                    <Label htmlFor="voiceEnabled" className="text-sm">
+                                        Voice
+                                    </Label>
+                                </div>
                             </div>
                         </div>
 
@@ -231,6 +381,7 @@ export default function StaffQueuePage() {
                                     Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
                                 </Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                                {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2 text-sm">

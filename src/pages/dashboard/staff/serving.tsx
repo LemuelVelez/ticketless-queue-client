@@ -10,6 +10,7 @@ import {
     Ticket as TicketIcon,
     Maximize2,
     Minimize2,
+    Volume2,
 } from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
@@ -39,6 +40,14 @@ function parseBool(v: unknown): boolean {
     if (typeof v !== "string") return false
     const s = v.trim().toLowerCase()
     return s === "1" || s === "true" || s === "yes" || s === "y" || s === "on"
+}
+
+function isSpeechSupported() {
+    return (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        "SpeechSynthesisUtterance" in window
+    )
 }
 
 export default function StaffServingPage() {
@@ -73,6 +82,112 @@ export default function StaffServingPage() {
     const autoPresentDoneRef = React.useRef(false)
 
     const assignedOk = Boolean(departmentId && windowInfo?.id)
+
+    // -------- Voice announcement (Web Speech API) --------
+    const [voiceEnabled, setVoiceEnabled] = React.useState(true)
+    const [voiceSupported, setVoiceSupported] = React.useState(true)
+    const voicesRef = React.useRef<SpeechSynthesisVoice[]>([])
+    const voiceWarnedRef = React.useRef(false)
+    const lastAnnouncedRef = React.useRef<number | null>(null)
+
+    React.useEffect(() => {
+        const supported = isSpeechSupported()
+        setVoiceSupported(supported)
+        if (!supported) {
+            setVoiceEnabled(false)
+            return
+        }
+
+        const synth = window.speechSynthesis
+        const loadVoices = () => {
+            try {
+                const v = synth.getVoices?.() ?? []
+                if (v.length) voicesRef.current = v
+            } catch {
+                // ignore
+            }
+        }
+
+        loadVoices()
+        try {
+            synth.addEventListener("voiceschanged", loadVoices)
+        } catch {
+            // ignore
+        }
+
+        return () => {
+            try {
+                synth.removeEventListener("voiceschanged", loadVoices)
+            } catch {
+                // ignore
+            }
+        }
+    }, [])
+
+    const speak = React.useCallback((text: string) => {
+        if (typeof window === "undefined") return
+        if (!isSpeechSupported()) return
+
+        try {
+            const synth = window.speechSynthesis
+
+            // ✅ DO NOT cancel. This allows repeated clicks to queue multiple announcements.
+            // synth.cancel()
+
+            try {
+                synth.resume()
+            } catch {
+                // ignore
+            }
+
+            const u = new SpeechSynthesisUtterance(text)
+            u.lang = "en-US"
+            u.rate = 1
+            u.pitch = 1
+            u.volume = 1
+
+            const voices = voicesRef.current?.length ? voicesRef.current : (synth.getVoices?.() ?? [])
+            const preferred =
+                voices.find((v) => v.lang?.toLowerCase().startsWith("en-ph")) ||
+                voices.find((v) => v.lang?.toLowerCase().startsWith("en")) ||
+                voices[0]
+
+            if (preferred) u.voice = preferred
+
+            synth.speak(u)
+        } catch {
+            // ignore
+        }
+    }, [])
+
+    const announceCall = React.useCallback(
+        (queueNumber: number) => {
+            lastAnnouncedRef.current = queueNumber
+
+            if (!voiceEnabled) return
+            if (!voiceSupported) {
+                if (!voiceWarnedRef.current) {
+                    voiceWarnedRef.current = true
+                    toast.message("Voice announcement is not supported in this browser.")
+                }
+                return
+            }
+
+            const win = windowInfo?.number
+            const text = win
+                ? `Queue number ${queueNumber}. Please proceed to window ${win}.`
+                : `Queue number ${queueNumber}.`
+
+            speak(text)
+        },
+        [speak, voiceEnabled, voiceSupported, windowInfo?.number],
+    )
+
+    const onRecallVoice = React.useCallback(() => {
+        const n = current?.queueNumber ?? lastAnnouncedRef.current
+        if (!n) return toast.message("No ticket to announce.")
+        announceCall(n)
+    }, [announceCall, current?.queueNumber])
 
     const refresh = React.useCallback(async () => {
         try {
@@ -127,7 +242,7 @@ export default function StaffServingPage() {
     }
 
     React.useEffect(() => {
-        ;(async () => {
+        ; (async () => {
             setLoading(true)
             try {
                 await refresh()
@@ -147,7 +262,6 @@ export default function StaffServingPage() {
 
         autoPresentDoneRef.current = true
         void enterPresentation()
-         
     }, [location.search])
 
     React.useEffect(() => {
@@ -177,7 +291,15 @@ export default function StaffServingPage() {
         setBusy(true)
         try {
             const res = await staffApi.callNext()
+
+            // show immediately (then refresh to sync)
+            setCurrent(res.ticket)
+
             toast.success(`Called #${res.ticket.queueNumber}`)
+
+            // ✅ Voice announcement on each click
+            announceCall(res.ticket.queueNumber)
+
             await refresh()
         } catch (e: any) {
             toast.error(e?.message ?? "No waiting tickets.")
@@ -208,7 +330,7 @@ export default function StaffServingPage() {
             toast.success(
                 res.ticket.status === "OUT"
                     ? `Ticket #${current.queueNumber} is OUT.`
-                    : `Ticket #${current.queueNumber} moved to HOLD.`
+                    : `Ticket #${current.queueNumber} moved to HOLD.`,
             )
             await refresh()
         } catch (e: any) {
@@ -234,6 +356,7 @@ export default function StaffServingPage() {
                                     Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
                                 </Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                                {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
                             <div className="mt-2 text-sm text-muted-foreground">
                                 Auto refresh: {autoRefresh ? "On" : "Off"} • Updates every 5s
@@ -253,14 +376,51 @@ export default function StaffServingPage() {
                                 </Label>
                             </div>
 
-                            <Button variant="outline" onClick={() => void refresh()} disabled={loading || busy} className="gap-2">
+                            <div className="flex items-center gap-2">
+                                <Switch
+                                    id="voiceEnabledPm"
+                                    checked={voiceEnabled}
+                                    onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
+                                    disabled={busy || !voiceSupported}
+                                />
+                                <Label htmlFor="voiceEnabledPm" className="text-sm">
+                                    Voice
+                                </Label>
+                            </div>
+
+                            <Button
+                                variant="outline"
+                                onClick={() => void refresh()}
+                                disabled={loading || busy}
+                                className="gap-2"
+                            >
                                 <RefreshCw className="h-4 w-4" />
                                 Refresh
                             </Button>
 
-                            <Button onClick={() => void onCallNext()} disabled={loading || busy || !assignedOk} className="gap-2">
+                            <Button
+                                onClick={() => void onCallNext()}
+                                disabled={loading || busy || !assignedOk}
+                                className="gap-2"
+                            >
                                 <Megaphone className="h-4 w-4" />
                                 Call next
+                            </Button>
+
+                            <Button
+                                variant="outline"
+                                onClick={() => onRecallVoice()}
+                                disabled={
+                                    busy ||
+                                    !assignedOk ||
+                                    !voiceEnabled ||
+                                    !voiceSupported ||
+                                    (!current?.queueNumber && !lastAnnouncedRef.current)
+                                }
+                                className="gap-2"
+                            >
+                                <Volume2 className="h-4 w-4" />
+                                Recall
                             </Button>
 
                             <Button variant="secondary" onClick={() => void exitPresentation()} className="gap-2">
@@ -395,6 +555,22 @@ export default function StaffServingPage() {
                                 </Button>
 
                                 <Button
+                                    variant="outline"
+                                    onClick={() => onRecallVoice()}
+                                    disabled={
+                                        busy ||
+                                        !assignedOk ||
+                                        !voiceEnabled ||
+                                        !voiceSupported ||
+                                        (!current?.queueNumber && !lastAnnouncedRef.current)
+                                    }
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <Volume2 className="h-4 w-4" />
+                                    Recall voice
+                                </Button>
+
+                                <Button
                                     variant="secondary"
                                     onClick={() => void enterPresentation()}
                                     disabled={busy}
@@ -415,18 +591,33 @@ export default function StaffServingPage() {
                                     Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
                                 </Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                                {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
 
-                            <div className="flex items-center gap-2">
-                                <Switch
-                                    id="autoRefresh"
-                                    checked={autoRefresh}
-                                    onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
-                                    disabled={busy}
-                                />
-                                <Label htmlFor="autoRefresh" className="text-sm">
-                                    Auto refresh
-                                </Label>
+                            <div className="flex flex-wrap items-center gap-6">
+                                <div className="flex items-center gap-2">
+                                    <Switch
+                                        id="autoRefresh"
+                                        checked={autoRefresh}
+                                        onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                        disabled={busy}
+                                    />
+                                    <Label htmlFor="autoRefresh" className="text-sm">
+                                        Auto refresh
+                                    </Label>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    <Switch
+                                        id="voiceEnabled"
+                                        checked={voiceEnabled}
+                                        onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
+                                        disabled={busy || !voiceSupported}
+                                    />
+                                    <Label htmlFor="voiceEnabled" className="text-sm">
+                                        Voice
+                                    </Label>
+                                </div>
                             </div>
                         </div>
                     </CardHeader>
