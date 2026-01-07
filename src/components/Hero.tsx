@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import * as React from "react"
 import { Link } from "react-router-dom"
 
 import { Badge } from "@/components/ui/badge"
@@ -9,10 +11,126 @@ import { BellRing, Mic, QrCode, Tv2, Volume2 } from "lucide-react"
 import heroImage from "@/assets/images/heroImage.svg"
 import { useSession } from "@/hooks/use-session"
 
+import { studentApi, type Department } from "@/api/student"
+import { api } from "@/lib/http"
+import {
+    Carousel,
+    CarouselContent,
+    CarouselItem,
+    CarouselNext,
+    CarouselPrevious,
+    type CarouselApi,
+} from "@/components/ui/carousel"
+
+type DisplayNowServing = {
+    id: string
+    queueNumber: number
+    windowNumber: number | null
+    calledAt: string | null
+} | null
+
+type DisplayUpNextRow = {
+    id: string
+    queueNumber: number
+}
+
+type DepartmentDisplayResponse = {
+    department: { id: string; name: string }
+    nowServing: DisplayNowServing
+    upNext: DisplayUpNextRow[]
+}
+
+type LiveDeptSnapshot = {
+    data: DepartmentDisplayResponse | null
+    fetchedAt: number | null
+    error?: string
+}
+
+function formatAgo(ms: number) {
+    const sec = Math.max(0, Math.floor(ms / 1000))
+    if (sec < 60) return `${sec}s ago`
+    const min = Math.floor(sec / 60)
+    return `${min}m ago`
+}
+
 export default function Hero() {
     const { user, loading } = useSession()
-
     const dashboardPath = user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
+
+    // ---- Live carousel (departments + now serving/up next) ----
+    const [loadingDepts, setLoadingDepts] = React.useState(true)
+    const [departments, setDepartments] = React.useState<Department[]>([])
+    const [live, setLive] = React.useState<Record<string, LiveDeptSnapshot>>({})
+
+    const [carouselApi, setCarouselApi] = React.useState<CarouselApi | null>(null)
+    const [activeIndex, setActiveIndex] = React.useState(0)
+    const [loadingDeptId, setLoadingDeptId] = React.useState<string | null>(null)
+
+    const activeDept = React.useMemo(() => departments[activeIndex] || null, [departments, activeIndex])
+
+    const fetchDepartments = React.useCallback(async () => {
+        setLoadingDepts(true)
+        try {
+            const res = await studentApi.listDepartments()
+            const list = res.departments ?? []
+            setDepartments(list)
+        } catch {
+            setDepartments([])
+        } finally {
+            setLoadingDepts(false)
+        }
+    }, [])
+
+    const fetchDeptDisplay = React.useCallback(
+        async (deptId: string) => {
+            if (!deptId) return
+            setLoadingDeptId(deptId)
+            try {
+                const res = await api.get<DepartmentDisplayResponse>(`/display/${deptId}`, { auth: false })
+                setLive((prev) => ({
+                    ...prev,
+                    [deptId]: { data: res, fetchedAt: Date.now() },
+                }))
+            } catch (e: any) {
+                setLive((prev) => ({
+                    ...prev,
+                    [deptId]: {
+                        data: prev?.[deptId]?.data ?? null,
+                        fetchedAt: prev?.[deptId]?.fetchedAt ?? null,
+                        error: e?.message ?? "Failed to load",
+                    },
+                }))
+            } finally {
+                setLoadingDeptId((prev) => (prev === deptId ? null : prev))
+            }
+        },
+        [],
+    )
+
+    React.useEffect(() => {
+        void fetchDepartments()
+    }, [fetchDepartments])
+
+    // Track active slide
+    React.useEffect(() => {
+        if (!carouselApi) return
+        const onSelect = () => setActiveIndex(carouselApi.selectedScrollSnap())
+        onSelect()
+        carouselApi.on("select", onSelect)
+        return () => {
+            carouselApi.off("select", onSelect)
+        }
+    }, [carouselApi])
+
+    // Auto-refresh ONLY the currently viewed department (every 5s)
+    React.useEffect(() => {
+        const deptId = activeDept?._id
+        if (!deptId) return
+
+        void fetchDeptDisplay(deptId)
+        const t = window.setInterval(() => void fetchDeptDisplay(deptId), 5000)
+        return () => window.clearInterval(t)
+    }, [activeDept?._id, fetchDeptDisplay])
 
     return (
         <section className="py-12 md:py-16">
@@ -68,7 +186,7 @@ export default function Hero() {
                     </div>
                 </div>
 
-                {/* Right column: portrait image + preview card laid out nicely */}
+                {/* Right column: portrait image + live carousel */}
                 <div className="grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
                     <div className="flex items-start justify-center lg:justify-start">
                         <div className="w-full max-w-70 rounded-xl border bg-card p-3">
@@ -82,38 +200,144 @@ export default function Hero() {
 
                     <Card className="overflow-hidden">
                         <CardHeader>
-                            <CardTitle>Live display preview</CardTitle>
-                            <CardDescription>Now Serving + Up Next (privacy-friendly: queue # only)</CardDescription>
+                            <CardTitle>Live display (all departments)</CardTitle>
+                            <CardDescription>
+                                Swipe through departments — the current slide refreshes every 5 seconds.
+                            </CardDescription>
                         </CardHeader>
-                        <CardContent className="grid gap-4">
-                            <div className="grid gap-2 rounded-lg border p-4">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-sm font-medium">Now Serving</span>
-                                    <Badge>Window 3</Badge>
-                                </div>
-                                <div className="text-3xl font-semibold">Queue #14</div>
-                                <p className="text-xs text-muted-foreground">
-                                    Voice announcement example: “Queue number 14, please proceed to Window 3.”
-                                </p>
-                            </div>
 
-                            <div className="grid gap-2 rounded-lg border p-4">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-sm font-medium">Up Next</span>
-                                    <Badge variant="secondary">Next 5</Badge>
+                        <CardContent className="grid gap-4">
+                            {loadingDepts ? (
+                                <div className="grid gap-3">
+                                    <div className="h-24 w-full rounded-lg border bg-muted" />
+                                    <div className="h-24 w-full rounded-lg border bg-muted" />
                                 </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {["#15", "#16", "#17", "#18", "#19"].map((q) => (
-                                        <Badge key={q} variant="outline">
-                                            {q}
-                                        </Badge>
-                                    ))}
+                            ) : departments.length === 0 ? (
+                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                    No departments available to display.
                                 </div>
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                    <Mic className="h-4 w-4" />
-                                    Voice runs on the display browser (Web Speech API).
-                                </div>
-                            </div>
+                            ) : (
+                                <Carousel
+                                    setApi={setCarouselApi}
+                                    opts={{ align: "start", loop: true }}
+                                    className="w-full"
+                                >
+                                    <CarouselContent>
+                                        {departments.map((d) => {
+                                            const snap = live[d._id]
+                                            const data = snap?.data ?? null
+                                            const isActive = activeDept?._id === d._id
+                                            const isLoadingThis = isActive && loadingDeptId === d._id
+
+                                            const nowServing = data?.nowServing ?? null
+                                            const upNext = data?.upNext ?? []
+
+                                            return (
+                                                <CarouselItem key={d._id}>
+                                                    <div className="grid gap-3 rounded-xl border p-4">
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <div className="min-w-0">
+                                                                <div className="truncate text-sm font-medium">
+                                                                    {d.name}
+                                                                    {d.code ? ` (${d.code})` : ""}
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground">
+                                                                    Department live status
+                                                                </div>
+                                                            </div>
+
+                                                            <Badge variant="secondary">
+                                                                {isActive ? "Live" : "Dept"}
+                                                            </Badge>
+                                                        </div>
+
+                                                        <Separator />
+
+                                                        {/* Now Serving */}
+                                                        <div className="grid gap-2 rounded-lg border p-3">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-sm font-medium">Now Serving</span>
+                                                                <Badge>
+                                                                    {nowServing?.windowNumber
+                                                                        ? `Window ${nowServing.windowNumber}`
+                                                                        : "—"}
+                                                                </Badge>
+                                                            </div>
+
+                                                            {isLoadingThis ? (
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    Loading live data…
+                                                                </div>
+                                                            ) : nowServing ? (
+                                                                <div className="text-3xl font-semibold">
+                                                                    Queue #{nowServing.queueNumber}
+                                                                </div>
+                                                            ) : (
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    No ticket is currently being called.
+                                                                </div>
+                                                            )}
+
+                                                            {snap?.error ? (
+                                                                <div className="text-xs text-destructive">
+                                                                    {snap.error}
+                                                                </div>
+                                                            ) : null}
+                                                        </div>
+
+                                                        {/* Up Next */}
+                                                        <div className="grid gap-2 rounded-lg border p-3">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-sm font-medium">Up Next</span>
+                                                                <Badge variant="secondary">{upNext.length}</Badge>
+                                                            </div>
+
+                                                            {isLoadingThis ? (
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    Loading…
+                                                                </div>
+                                                            ) : upNext.length ? (
+                                                                <div className="flex flex-wrap gap-2">
+                                                                    {upNext.slice(0, 6).map((t) => (
+                                                                        <Badge key={t.id} variant="outline">
+                                                                            #{t.queueNumber}
+                                                                        </Badge>
+                                                                    ))}
+                                                                </div>
+                                                            ) : (
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    No waiting tickets.
+                                                                </div>
+                                                            )}
+
+                                                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                                                <Mic className="h-4 w-4" />
+                                                                Voice runs on the display browser (Web Speech API).
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                            <span>
+                                                                {snap?.fetchedAt
+                                                                    ? `Updated ${formatAgo(Date.now() - snap.fetchedAt)}`
+                                                                    : "Not loaded yet"}
+                                                            </span>
+                                                            <Button asChild size="sm" variant="outline">
+                                                                <Link to={`/display?departmentId=${encodeURIComponent(d._id)}`}>
+                                                                    Open Display
+                                                                </Link>
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                </CarouselItem>
+                                            )
+                                        })}
+                                    </CarouselContent>
+
+                                    <CarouselPrevious />
+                                    <CarouselNext />
+                                </Carousel>
+                            )}
                         </CardContent>
                     </Card>
                 </div>
