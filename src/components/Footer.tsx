@@ -84,8 +84,8 @@ export default function Footer({ variant = "landing" }: FooterProps) {
     // ✅ Student/simple footer
     if (variant === "student") {
         return (
-            <footer className="mt-14 border-t bg-background mx-4">
-                <div className="mx-auto  px-4 py-10">
+            <footer className="mt-14 border-t bg-background">
+                <div className="mx-4  px-4 py-10">
                     <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
                         <div className="flex items-center gap-3">
                             <div className="flex h-9 w-9 items-center justify-center rounded-lg border">
@@ -135,8 +135,8 @@ export default function Footer({ variant = "landing" }: FooterProps) {
 
     // ✅ Landing footer (original behavior)
     return (
-        <footer className="mt-14 border-t bg-background">
-            <div className="mx-auto  px-4 py-10">
+        <footer className="mt-14 border-t bg-background mx-0">
+            <div className="mx-4 px-4 py-10">
                 <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
                     <div className="max-w-md">
                         <div className="flex items-center gap-3">

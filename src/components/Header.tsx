@@ -123,8 +123,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     // ✅ Student/simple header
     if (variant === "student") {
         return (
-            <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur mx-4">
-                <div className="mx-auto flex items-center justify-between px-4 py-3">
+            <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
+                <div className="flex items-center justify-between px-4 py-3 mx-4">
                     {/* ✅ Keep /student home redirection */}
                     <Link to="/student" className="flex items-center gap-3">
                         <div className="flex h-12 w-12 items-center justify-center rounded-lg border">
@@ -226,7 +226,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     // ✅ Landing header (original behavior)
     return (
         <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
-            <div className="mx-auto flex  items-center justify-between px-4 py-3">
+            <div className="mx-4 flex  items-center justify-between px-4 py-3">
                 {/* Brand */}
                 <Link to="/" className="flex items-center gap-3">
                     <div className="flex h-14 w-14 items-center justify-center rounded-lg border">
