@@ -77,7 +77,6 @@ export default function AdminSettingsPage() {
             const res = await authApi.getMyAvatarUrl()
             setAvatarUrl(res.url ?? null)
         } catch (e) {
-            // Avatar is optional; don't hard-fail the page
             setAvatarUrl(null)
         } finally {
             setAvatarLoading(false)
@@ -88,7 +87,6 @@ export default function AdminSettingsPage() {
         ; (async () => {
             setLoading(true)
             try {
-                // Keep inputs synced with most recent storage/session snapshot
                 const latest = getAuthUser()
                 setName(((latest?.name as string | undefined) ?? sessionUser?.name ?? baseName) || "")
                 setEmail(((latest?.email as string | undefined) ?? sessionUser?.email ?? baseEmail) || "")
@@ -102,7 +100,6 @@ export default function AdminSettingsPage() {
 
     function applyAuthSession(token: string, user: any) {
         setAuthSession(token, user, rememberMe)
-        // Keep local form in sync
         if (user?.name !== undefined) setName(user.name)
         if (user?.email !== undefined) setEmail(user.email)
     }
@@ -116,7 +113,6 @@ export default function AdminSettingsPage() {
             return
         }
 
-        // Require current password when changing email (safer)
         const storedEmail = (getAuthUser()?.email as string | undefined) ?? baseEmail
         const isEmailChanging = Boolean(storedEmail && nextEmail && storedEmail.toLowerCase() !== nextEmail)
 
@@ -190,27 +186,35 @@ export default function AdminSettingsPage() {
 
         setAvatarUploading(true)
         try {
-            const presign = await authApi.presignAvatarUpload({
-                contentType: file.type,
-                fileName: file.name,
-            })
+            // First try direct-to-S3 presigned upload (fastest)
+            try {
+                const presign = await authApi.presignAvatarUpload({
+                    contentType: file.type,
+                    fileName: file.name,
+                })
 
-            const putRes = await fetch(presign.uploadUrl, {
-                method: "PUT",
-                headers: { "Content-Type": file.type },
-                body: file,
-            })
+                const putRes = await fetch(presign.uploadUrl, {
+                    method: "PUT",
+                    headers: { "Content-Type": file.type },
+                    body: file,
+                })
 
-            if (!putRes.ok) {
-                throw new Error(`Upload failed (${putRes.status})`)
+                if (!putRes.ok) {
+                    throw new Error(`Upload failed (${putRes.status})`)
+                }
+
+                const resp = await authApi.updateMe({
+                    avatarKey: presign.key,
+                    avatarUrl: presign.objectUrl,
+                })
+
+                applyAuthSession(resp.token, resp.user)
+            } catch (e) {
+                // Fallback: backend-proxy upload (works even if S3 CORS is not configured)
+                const resp = await authApi.uploadMyAvatar(file)
+                applyAuthSession(resp.token, resp.user)
             }
 
-            const resp = await authApi.updateMe({
-                avatarKey: presign.key,
-                avatarUrl: presign.objectUrl,
-            })
-
-            applyAuthSession(resp.token, resp.user)
             await refreshAvatarUrl()
             toast.success("Avatar updated.")
         } catch (e: any) {
@@ -264,7 +268,6 @@ export default function AdminSettingsPage() {
                                         <CardDescription>Upload a profile image.</CardDescription>
                                     </CardHeader>
                                     <CardContent>
-                                        {/* ✅ Center avatar on mobile, keep left-aligned on sm+ */}
                                         <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:justify-start">
                                             <div className="h-24 w-24 overflow-hidden rounded-full border bg-muted">
                                                 {avatarLoading ? (
@@ -278,7 +281,6 @@ export default function AdminSettingsPage() {
                                                 )}
                                             </div>
 
-                                            {/* ✅ Center controls on mobile, keep normal on sm+ */}
                                             <div className="flex w-full flex-col items-center gap-2 sm:w-auto sm:items-start">
                                                 <input
                                                     ref={fileRef}
@@ -355,7 +357,6 @@ export default function AdminSettingsPage() {
                                                 Current password (required only when changing email)
                                             </Label>
 
-                                            {/* ✅ Eye / EyeOff */}
                                             <div className="relative">
                                                 <Input
                                                     id="currentPasswordForProfile"
@@ -401,7 +402,6 @@ export default function AdminSettingsPage() {
                                             <div className="space-y-2">
                                                 <Label htmlFor="currentPassword">Current password</Label>
 
-                                                {/* ✅ Eye / EyeOff */}
                                                 <div className="relative">
                                                     <Input
                                                         id="currentPassword"
@@ -427,7 +427,6 @@ export default function AdminSettingsPage() {
                                             <div className="space-y-2">
                                                 <Label htmlFor="newPassword">New password</Label>
 
-                                                {/* ✅ Eye / EyeOff */}
                                                 <div className="relative">
                                                     <Input
                                                         id="newPassword"
@@ -453,7 +452,6 @@ export default function AdminSettingsPage() {
                                             <div className="space-y-2">
                                                 <Label htmlFor="confirmPassword">Confirm new password</Label>
 
-                                                {/* ✅ Eye / EyeOff */}
                                                 <div className="relative">
                                                     <Input
                                                         id="confirmPassword"
@@ -480,12 +478,7 @@ export default function AdminSettingsPage() {
                                         <Separator />
 
                                         <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                            <Button
-                                                type="button"
-                                                onClick={() => void onSavePassword()}
-                                                disabled={savingPassword}
-                                                className="gap-2"
-                                            >
+                                            <Button type="button" onClick={() => void onSavePassword()} disabled={savingPassword} className="gap-2">
                                                 <Save className="h-4 w-4" />
                                                 {savingPassword ? "Saving…" : "Save password"}
                                             </Button>

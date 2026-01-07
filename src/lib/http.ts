@@ -24,10 +24,52 @@ type RequestOptions = {
     signal?: AbortSignal
 }
 
+function stripTrailingSlash(s: string) {
+    return s.endsWith("/") ? s.slice(0, -1) : s
+}
+
+function normalizeApiBaseUrl(rawBase: string) {
+    const base = String(rawBase ?? "").trim()
+    if (!base) return ""
+
+    if (/^https?:\/\//i.test(base)) return stripTrailingSlash(base)
+
+    if (base.startsWith("//")) {
+        if (typeof window !== "undefined") return stripTrailingSlash(`${window.location.protocol}${base}`)
+        return stripTrailingSlash(`https:${base}`)
+    }
+
+    if (base.startsWith("/")) {
+        if (typeof window !== "undefined") return stripTrailingSlash(`${window.location.origin}${base}`)
+        return stripTrailingSlash(base)
+    }
+
+    if (base.startsWith(":")) {
+        if (typeof window !== "undefined") {
+            return stripTrailingSlash(`${window.location.protocol}//${window.location.hostname}${base}`)
+        }
+        return stripTrailingSlash(`http://localhost${base}`)
+    }
+
+    if (/^[a-z0-9.-]+(:\d+)?(\/.*)?$/i.test(base)) {
+        if (typeof window !== "undefined") return stripTrailingSlash(`${window.location.protocol}//${base}`)
+        return stripTrailingSlash(`http://${base}`)
+    }
+
+    return stripTrailingSlash(base)
+}
+
+function joinUrl(base: string, path: string) {
+    if (!base) return path
+    const b = stripTrailingSlash(base)
+    const p = path.startsWith("/") ? path : `/${path}`
+    return `${b}${p}`
+}
+
 function buildUrl(path: string) {
-    const base = getApiBaseUrl()
+    const base = normalizeApiBaseUrl(getApiBaseUrl())
     const cleanPath = path.startsWith("/") ? path : `/${path}`
-    return `${base}${cleanPath}`
+    return joinUrl(base, cleanPath)
 }
 
 async function parseJsonSafe(res: Response) {
@@ -38,6 +80,11 @@ async function parseJsonSafe(res: Response) {
     } catch {
         return text
     }
+}
+
+function isBlobBody(body: unknown): body is Blob {
+    // File is also a Blob in browsers
+    return typeof Blob !== "undefined" && body instanceof Blob
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -56,18 +103,33 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     // Support FormData
     if (body instanceof FormData) {
         finalBody = body
+    } else if (isBlobBody(body)) {
+        finalBody = body
+        // Only set content-type if caller didn't already set it
+        if (!finalHeaders["Content-Type"] && body.type) finalHeaders["Content-Type"] = body.type
     } else if (body !== undefined) {
         finalHeaders["Content-Type"] = finalHeaders["Content-Type"] || "application/json"
         finalBody = JSON.stringify(body)
     }
 
-    const res = await fetch(buildUrl(path), {
-        method,
-        headers: finalHeaders,
-        body: finalBody,
-        signal,
-        credentials: "include",
-    })
+    const url = buildUrl(path)
+
+    let res: Response
+    try {
+        res = await fetch(url, {
+            method,
+            headers: finalHeaders,
+            body: finalBody,
+            signal,
+            credentials: "include",
+        })
+    } catch (err: any) {
+        throw new ApiError(
+            `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`,
+            0,
+            err
+        )
+    }
 
     const data = await parseJsonSafe(res)
 
@@ -92,15 +154,9 @@ export const api = {
     patch: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "PATCH", body }),
 
-    /**
-     * Preferred DELETE method
-     */
     delete: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "DELETE" }),
 
-    /**
-     * Backwards-compatible alias
-     */
     del: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "DELETE" }),
 }
