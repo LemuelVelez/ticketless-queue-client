@@ -6,6 +6,9 @@ import LoadingPage from "@/pages/loading"
 import LoginPage from "@/pages/authentication/login"
 import NotFoundPage from "@/pages/404"
 
+import ForgotPasswordPage from "@/pages/authentication/password/forgot"
+import ResetPasswordPage from "@/pages/authentication/password/reset"
+
 import AdminDashboardPage from "@/pages/dashboard/admin/dashboard"
 import AdminAccountsPage from "@/pages/dashboard/admin/accounts"
 import AdminDepartmentsPage from "@/pages/dashboard/admin/departments"
@@ -40,7 +43,16 @@ export default function App() {
           {/* ✅ Used only during redirect/session resolve */}
           <Route path="/loading" element={<LoadingRedirect />} />
 
+          {/* Auth */}
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+
+          {/* Supports both:
+              /reset-password?token=...
+              /reset-password/:token
+          */}
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
 
           {/* Admin Routes */}
           <Route

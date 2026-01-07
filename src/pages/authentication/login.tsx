@@ -42,7 +42,14 @@ function canRedirectTo(pathname: string | undefined, role: "ADMIN" | "STAFF") {
     if (!pathname || typeof pathname !== "string") return false
 
     // Never redirect back to auth/loading routes
-    if (pathname === "/login" || pathname === "/loading") return false
+    if (
+        pathname === "/login" ||
+        pathname === "/loading" ||
+        pathname === "/forgot-password" ||
+        pathname.startsWith("/reset-password")
+    ) {
+        return false
+    }
 
     // Role-based protection
     if (pathname.startsWith("/admin")) return role === "ADMIN"

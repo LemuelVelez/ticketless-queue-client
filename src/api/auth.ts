@@ -27,6 +27,9 @@ export type MeResponse = {
     } | null
 }
 
+export type ForgotPasswordResponse = { ok: true }
+export type ResetPasswordResponse = { ok: true }
+
 export const authApi = {
     adminLogin: (email: string, password: string) =>
         api.post<LoginResponse>("/auth/admin/login", { email, password }, { auth: false }),
@@ -51,4 +54,11 @@ export const authApi = {
     },
 
     me: () => api.get<MeResponse>("/auth/me", { auth: true }),
+
+    // ✅ Password reset flow
+    forgotPassword: (email: string) =>
+        api.post<ForgotPasswordResponse>("/auth/password/forgot", { email }, { auth: false }),
+
+    resetPassword: (token: string, password: string) =>
+        api.post<ResetPasswordResponse>("/auth/password/reset", { token, password }, { auth: false }),
 }
