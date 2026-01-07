@@ -1,0 +1,541 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import * as React from "react"
+import { useLocation } from "react-router-dom"
+import { toast } from "sonner"
+import {
+    CheckCircle2,
+    Megaphone,
+    PauseCircle,
+    RefreshCw,
+    Ticket as TicketIcon,
+    Maximize2,
+    Minimize2,
+} from "lucide-react"
+
+import { DashboardLayout } from "@/components/dashboard-layout"
+import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
+import type { DashboardUser } from "@/components/nav-user"
+
+import { useSession } from "@/hooks/use-session"
+import { staffApi, type Ticket as TicketType } from "@/api/staff"
+
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+
+function fmtTime(v?: string | null) {
+    if (!v) return "—"
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return "—"
+    return d.toLocaleString()
+}
+
+function parseBool(v: unknown): boolean {
+    if (typeof v === "boolean") return v
+    if (typeof v !== "string") return false
+    const s = v.trim().toLowerCase()
+    return s === "1" || s === "true" || s === "yes" || s === "y" || s === "on"
+}
+
+export default function StaffServingPage() {
+    const location = useLocation()
+    const { user: sessionUser } = useSession()
+
+    const dashboardUser: DashboardUser | undefined = React.useMemo(() => {
+        if (!sessionUser) return undefined
+        return {
+            name: sessionUser.name ?? "Staff",
+            email: sessionUser.email ?? "",
+            avatarUrl: (sessionUser as any)?.avatarUrl ?? undefined,
+        }
+    }, [sessionUser])
+
+    const [loading, setLoading] = React.useState(true)
+    const [busy, setBusy] = React.useState(false)
+
+    const [departmentId, setDepartmentId] = React.useState<string | null>(null)
+    const [windowInfo, setWindowInfo] = React.useState<{ id: string; name: string; number: number } | null>(null)
+
+    const [current, setCurrent] = React.useState<TicketType | null>(null)
+    const [upNext, setUpNext] = React.useState<TicketType[]>([])
+
+    const [autoRefresh, setAutoRefresh] = React.useState(true)
+
+    // ✅ Presentation mode (full screen overlay + bigger number)
+    const [presentation, setPresentation] = React.useState(false)
+    const presentationRequestedRef = React.useRef(false)
+
+    // ✅ Auto-present once if URL has ?present=1
+    const autoPresentDoneRef = React.useRef(false)
+
+    const assignedOk = Boolean(departmentId && windowInfo?.id)
+
+    const refresh = React.useCallback(async () => {
+        try {
+            const a = await staffApi.myAssignment()
+            setDepartmentId(a.departmentId ?? null)
+            setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
+
+            if (!a.departmentId || !a.window?._id) {
+                setCurrent(null)
+                setUpNext([])
+                return
+            }
+
+            const [c, w] = await Promise.all([
+                staffApi.currentCalledForWindow().catch(() => ({ ticket: null })),
+                staffApi.listWaiting({ limit: 8 }).catch(() => ({ tickets: [] })),
+            ])
+
+            setCurrent(c.ticket ?? null)
+            setUpNext(w.tickets ?? [])
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to load now serving.")
+        }
+    }, [])
+
+    async function enterPresentation() {
+        setPresentation(true)
+
+        // Try to enter browser fullscreen (optional)
+        try {
+            presentationRequestedRef.current = true
+            await document.documentElement.requestFullscreen()
+        } catch {
+            // If blocked (permissions), still keep overlay presentation mode
+            presentationRequestedRef.current = false
+        }
+    }
+
+    async function exitPresentation() {
+        setPresentation(false)
+
+        // Exit fullscreen if we are in it
+        try {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen()
+            }
+        } catch {
+            // ignore
+        } finally {
+            presentationRequestedRef.current = false
+        }
+    }
+
+    React.useEffect(() => {
+        ;(async () => {
+            setLoading(true)
+            try {
+                await refresh()
+            } finally {
+                setLoading(false)
+            }
+        })()
+    }, [refresh])
+
+    // ✅ Auto-enter Presentation Mode when opening /staff/now-serving?present=1
+    React.useEffect(() => {
+        if (autoPresentDoneRef.current) return
+
+        const qs = new URLSearchParams(location.search || "")
+        const shouldPresent = parseBool(qs.get("present"))
+        if (!shouldPresent) return
+
+        autoPresentDoneRef.current = true
+        void enterPresentation()
+         
+    }, [location.search])
+
+    React.useEffect(() => {
+        if (!autoRefresh) return
+        const t = window.setInterval(() => {
+            void refresh()
+        }, 5000)
+        return () => window.clearInterval(t)
+    }, [autoRefresh, refresh])
+
+    // Keep presentation state in sync if user presses ESC to exit fullscreen
+    React.useEffect(() => {
+        const onFsChange = () => {
+            const isFs = typeof document !== "undefined" && !!document.fullscreenElement
+            if (presentation && presentationRequestedRef.current && !isFs) {
+                // user exited fullscreen -> leave presentation mode too
+                presentationRequestedRef.current = false
+                setPresentation(false)
+            }
+        }
+        document.addEventListener("fullscreenchange", onFsChange)
+        return () => document.removeEventListener("fullscreenchange", onFsChange)
+    }, [presentation])
+
+    async function onCallNext() {
+        if (!assignedOk) return toast.error("You are not assigned to a department/window.")
+        setBusy(true)
+        try {
+            const res = await staffApi.callNext()
+            toast.success(`Called #${res.ticket.queueNumber}`)
+            await refresh()
+        } catch (e: any) {
+            toast.error(e?.message ?? "No waiting tickets.")
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function onServed() {
+        if (!current?._id) return
+        setBusy(true)
+        try {
+            await staffApi.markServed(current._id)
+            toast.success(`Marked #${current.queueNumber} as served.`)
+            await refresh()
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to mark served.")
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function onHoldNoShow() {
+        if (!current?._id) return
+        setBusy(true)
+        try {
+            const res = await staffApi.holdNoShow(current._id)
+            toast.success(
+                res.ticket.status === "OUT"
+                    ? `Ticket #${current.queueNumber} is OUT.`
+                    : `Ticket #${current.queueNumber} moved to HOLD.`
+            )
+            await refresh()
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to hold ticket.")
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    // ✅ Presentation overlay (no sidebar padding)
+    if (presentation) {
+        const bigNumberClass = "text-7xl sm:text-8xl md:text-9xl font-semibold tracking-tight leading-none"
+
+        return (
+            <div className="fixed inset-0 z-50 bg-background">
+                <div className="flex h-full w-full flex-col">
+                    {/* Top bar */}
+                    <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="secondary">Dept: {departmentId ?? "—"}</Badge>
+                                <Badge variant="secondary">
+                                    Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
+                                </Badge>
+                                {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                            </div>
+                            <div className="mt-2 text-sm text-muted-foreground">
+                                Auto refresh: {autoRefresh ? "On" : "Off"} • Updates every 5s
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <div className="flex items-center gap-2">
+                                <Switch
+                                    id="autoRefreshPm"
+                                    checked={autoRefresh}
+                                    onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                    disabled={busy}
+                                />
+                                <Label htmlFor="autoRefreshPm" className="text-sm">
+                                    Auto refresh
+                                </Label>
+                            </div>
+
+                            <Button variant="outline" onClick={() => void refresh()} disabled={loading || busy} className="gap-2">
+                                <RefreshCw className="h-4 w-4" />
+                                Refresh
+                            </Button>
+
+                            <Button onClick={() => void onCallNext()} disabled={loading || busy || !assignedOk} className="gap-2">
+                                <Megaphone className="h-4 w-4" />
+                                Call next
+                            </Button>
+
+                            <Button variant="secondary" onClick={() => void exitPresentation()} className="gap-2">
+                                <Minimize2 className="h-4 w-4" />
+                                Exit
+                            </Button>
+                        </div>
+                    </div>
+
+                    {/* Main content */}
+                    <div className="flex min-h-0 flex-1 flex-col gap-6 p-4 lg:flex-row lg:p-8">
+                        {/* Current */}
+                        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border bg-muted p-6">
+                            <div className="flex items-center justify-between">
+                                <div className="text-sm text-muted-foreground">NOW SERVING</div>
+                                {current ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
+                            </div>
+
+                            <div className="mt-4 flex flex-1 flex-col justify-center">
+                                {current ? (
+                                    <>
+                                        <div className={bigNumberClass}>#{current.queueNumber}</div>
+                                        <div className="mt-4 text-lg text-muted-foreground">
+                                            Student ID: {current.studentId ?? "—"}
+                                        </div>
+                                        <div className="mt-1 text-sm text-muted-foreground">
+                                            Called at: {fmtTime((current as any).calledAt)}
+                                        </div>
+                                        <div className="mt-1 text-sm text-muted-foreground">
+                                            Hold attempts: {current.holdAttempts ?? 0}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="text-center text-lg text-muted-foreground">
+                                        No ticket called for your window.
+                                    </div>
+                                )}
+                            </div>
+
+                            <Separator className="my-6" />
+
+                            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={() => void onHoldNoShow()}
+                                    disabled={busy || !current}
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <PauseCircle className="h-4 w-4" />
+                                    Hold / No-show
+                                </Button>
+
+                                <Button
+                                    type="button"
+                                    onClick={() => void onServed()}
+                                    disabled={busy || !current}
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <CheckCircle2 className="h-4 w-4" />
+                                    Mark served
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* Up next */}
+                        <div className="w-full max-w-none rounded-2xl border p-6 lg:w-105">
+                            <div className="flex items-center justify-between">
+                                <div className="text-sm font-medium">UP NEXT</div>
+                                <Badge variant="secondary">{upNext.length}</Badge>
+                            </div>
+
+                            <div className="mt-4 grid gap-3">
+                                {upNext.length === 0 ? (
+                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                        No WAITING tickets.
+                                    </div>
+                                ) : (
+                                    upNext.map((t) => (
+                                        <div key={t._id} className="flex items-center justify-between rounded-xl border p-4">
+                                            <div className="text-3xl font-semibold">#{t.queueNumber}</div>
+                                            <div className="text-right text-xs text-muted-foreground">
+                                                <div>Student: {t.studentId ?? "—"}</div>
+                                                <div>Waiting: {fmtTime((t as any).waitingSince)}</div>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
+    // ✅ Normal dashboard layout
+    return (
+        <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+            <div className="grid w-full min-w-0 grid-cols-1 gap-6">
+                <Card className="min-w-0">
+                    <CardHeader className="gap-2">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                                <CardTitle className="flex items-center gap-2">
+                                    <TicketIcon className="h-5 w-5" />
+                                    Now Serving
+                                </CardTitle>
+                                <CardDescription>
+                                    Display view for your window — open with <b>?present=1</b> to auto-enter Presentation Mode.
+                                </CardDescription>
+                            </div>
+
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => void refresh()}
+                                    disabled={loading || busy}
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <RefreshCw className="h-4 w-4" />
+                                    Refresh
+                                </Button>
+
+                                <Button
+                                    onClick={() => void onCallNext()}
+                                    disabled={loading || busy || !assignedOk}
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <Megaphone className="h-4 w-4" />
+                                    Call next
+                                </Button>
+
+                                <Button
+                                    variant="secondary"
+                                    onClick={() => void enterPresentation()}
+                                    disabled={busy}
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <Maximize2 className="h-4 w-4" />
+                                    Presentation
+                                </Button>
+                            </div>
+                        </div>
+
+                        <Separator />
+
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                                <Badge variant="secondary">Dept: {departmentId ?? "—"}</Badge>
+                                <Badge variant="secondary">
+                                    Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
+                                </Badge>
+                                {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <Switch
+                                    id="autoRefresh"
+                                    checked={autoRefresh}
+                                    onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                    disabled={busy}
+                                />
+                                <Label htmlFor="autoRefresh" className="text-sm">
+                                    Auto refresh
+                                </Label>
+                            </div>
+                        </div>
+                    </CardHeader>
+
+                    <CardContent className="min-w-0">
+                        {loading ? (
+                            <div className="space-y-3">
+                                <Skeleton className="h-48 w-full" />
+                                <Skeleton className="h-40 w-full" />
+                            </div>
+                        ) : (
+                            <div className="grid gap-6 lg:grid-cols-12">
+                                {/* Current */}
+                                <Card className="lg:col-span-7">
+                                    <CardHeader>
+                                        <CardTitle>Current ticket</CardTitle>
+                                        <CardDescription>Showing the latest ticket called to your window.</CardDescription>
+                                    </CardHeader>
+
+                                    <CardContent className="space-y-4">
+                                        {current ? (
+                                            <>
+                                                <div className="rounded-2xl border bg-muted p-6">
+                                                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                                        <div className="min-w-0">
+                                                            <div className="text-sm text-muted-foreground">NOW SERVING</div>
+                                                            <div className="mt-1 text-6xl font-semibold tracking-tight">
+                                                                #{current.queueNumber}
+                                                            </div>
+                                                            <div className="mt-2 text-sm text-muted-foreground">
+                                                                Student ID: {current.studentId ?? "—"}
+                                                            </div>
+                                                            <div className="text-sm text-muted-foreground">
+                                                                Called at: {fmtTime((current as any).calledAt)}
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="flex flex-col items-start gap-2 md:items-end">
+                                                            <Badge>CALLED</Badge>
+                                                            <div className="text-xs text-muted-foreground">
+                                                                Hold attempts: {current.holdAttempts ?? 0}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                                    <Button
+                                                        type="button"
+                                                        variant="secondary"
+                                                        onClick={() => void onHoldNoShow()}
+                                                        disabled={busy}
+                                                        className="w-full gap-2 sm:w-auto"
+                                                    >
+                                                        <PauseCircle className="h-4 w-4" />
+                                                        Hold / No-show
+                                                    </Button>
+
+                                                    <Button
+                                                        type="button"
+                                                        onClick={() => void onServed()}
+                                                        disabled={busy}
+                                                        className="w-full gap-2 sm:w-auto"
+                                                    >
+                                                        <CheckCircle2 className="h-4 w-4" />
+                                                        Mark served
+                                                    </Button>
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                                No ticket is currently called for your window.
+                                            </div>
+                                        )}
+                                    </CardContent>
+                                </Card>
+
+                                {/* Up next */}
+                                <Card className="lg:col-span-5">
+                                    <CardHeader>
+                                        <CardTitle>Up next</CardTitle>
+                                        <CardDescription>Next waiting tickets (oldest first).</CardDescription>
+                                    </CardHeader>
+
+                                    <CardContent>
+                                        {upNext.length === 0 ? (
+                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                                No WAITING tickets.
+                                            </div>
+                                        ) : (
+                                            <div className="grid gap-3">
+                                                {upNext.map((t) => (
+                                                    <div key={t._id} className="flex items-center justify-between rounded-xl border p-4">
+                                                        <div className="text-2xl font-semibold">#{t.queueNumber}</div>
+                                                        <div className="text-right text-xs text-muted-foreground">
+                                                            <div>Student: {t.studentId ?? "—"}</div>
+                                                            <div>Waiting: {fmtTime((t as any).waitingSince)}</div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+        </DashboardLayout>
+    )
+}

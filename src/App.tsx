@@ -19,6 +19,7 @@ import AdminSettingsPage from "@/pages/dashboard/admin/settings"
 
 import StaffDashboardPage from "@/pages/dashboard/staff/dashboard"
 import StaffQueuePage from "@/pages/dashboard/staff/queue"
+import StaffServingPage from "@/pages/dashboard/staff/serving"
 
 import { SessionProvider, useSession } from "@/hooks/use-session"
 import { RoleGuard } from "@/lib/roleguard"
@@ -99,6 +100,7 @@ export default function App() {
           >
             <Route path="/staff/dashboard" element={<StaffDashboardPage />} />
             <Route path="/staff/queue" element={<StaffQueuePage />} />
+            <Route path="/staff/now-serving" element={<StaffServingPage />} />
           </Route>
 
           <Route path="*" element={<NotFoundPage />} />
