@@ -102,9 +102,10 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                             </div>
                         </div>
 
+                        {/* ✅ Student footer buttons link back to landing; ✅ remove Login button */}
                         <div className="flex flex-wrap gap-2">
                             <Button variant="outline" asChild>
-                                <Link to="/student">Home</Link>
+                                <Link to="/">Home</Link>
                             </Button>
 
                             <Button asChild>
@@ -113,10 +114,6 @@ export default function Footer({ variant = "landing" }: FooterProps) {
 
                             <Button variant="outline" asChild>
                                 <Link to="/display">Public Display</Link>
-                            </Button>
-
-                            <Button variant="outline" asChild disabled={loading}>
-                                <Link to={authTo}>{authLabel}</Link>
                             </Button>
                         </div>
                     </div>

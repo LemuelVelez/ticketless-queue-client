@@ -53,6 +53,13 @@ function formatAgo(ms: number) {
     return `${min}m ago`
 }
 
+function hasQueue(data: DepartmentDisplayResponse | null | undefined) {
+    if (!data) return false
+    const hasNow = Boolean(data.nowServing && typeof data.nowServing.queueNumber === "number")
+    const hasUpNext = Array.isArray(data.upNext) && data.upNext.length > 0
+    return hasNow || hasUpNext
+}
+
 export default function Hero() {
     const { user, loading } = useSession()
     const dashboardPath = user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
@@ -64,7 +71,9 @@ export default function Hero() {
 
     const [carouselApi, setCarouselApi] = React.useState<CarouselApi | null>(null)
     const [activeIndex, setActiveIndex] = React.useState(0)
-    const [loadingDeptId, setLoadingDeptId] = React.useState<string | null>(null)
+
+    // Track loading per department (helps when we prefetch many)
+    const [loadingDeptIds, setLoadingDeptIds] = React.useState<Record<string, boolean>>({})
 
     const activeDept = React.useMemo(() => departments[activeIndex] || null, [departments, activeIndex])
 
@@ -81,35 +90,59 @@ export default function Hero() {
         }
     }, [])
 
-    const fetchDeptDisplay = React.useCallback(
-        async (deptId: string) => {
-            if (!deptId) return
-            setLoadingDeptId(deptId)
-            try {
-                const res = await api.get<DepartmentDisplayResponse>(`/display/${deptId}`, { auth: false })
-                setLive((prev) => ({
-                    ...prev,
-                    [deptId]: { data: res, fetchedAt: Date.now() },
-                }))
-            } catch (e: any) {
-                setLive((prev) => ({
-                    ...prev,
-                    [deptId]: {
-                        data: prev?.[deptId]?.data ?? null,
-                        fetchedAt: prev?.[deptId]?.fetchedAt ?? null,
-                        error: e?.message ?? "Failed to load",
-                    },
-                }))
-            } finally {
-                setLoadingDeptId((prev) => (prev === deptId ? null : prev))
-            }
-        },
-        [],
-    )
+    const fetchDeptDisplay = React.useCallback(async (deptId: string) => {
+        if (!deptId) return
+        setLoadingDeptIds((prev) => ({ ...prev, [deptId]: true }))
+        try {
+            const res = await api.get<DepartmentDisplayResponse>(`/display/${deptId}`, { auth: false })
+            setLive((prev) => ({
+                ...prev,
+                [deptId]: { data: res, fetchedAt: Date.now(), error: undefined },
+            }))
+        } catch (e: any) {
+            setLive((prev) => ({
+                ...prev,
+                [deptId]: {
+                    data: prev?.[deptId]?.data ?? null,
+                    fetchedAt: prev?.[deptId]?.fetchedAt ?? null,
+                    error: e?.message ?? "Failed to load",
+                },
+            }))
+        } finally {
+            setLoadingDeptIds((prev) => {
+                const next = { ...prev }
+                delete next[deptId]
+                return next
+            })
+        }
+    }, [])
+
+    const prefetchAllDisplays = React.useCallback(async () => {
+        if (!departments.length) return
+        const ids = departments.map((d) => d._id).filter(Boolean)
+        await Promise.allSettled(ids.map((id) => fetchDeptDisplay(id)))
+    }, [departments, fetchDeptDisplay])
 
     React.useEffect(() => {
         void fetchDepartments()
     }, [fetchDepartments])
+
+    // Keep activeIndex valid if departments change
+    React.useEffect(() => {
+        if (!departments.length) {
+            setActiveIndex(0)
+            return
+        }
+        if (activeIndex > departments.length - 1) {
+            setActiveIndex(0)
+            try {
+                carouselApi?.scrollTo(0)
+            } catch {
+                // ignore
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [departments.length])
 
     // Track active slide
     React.useEffect(() => {
@@ -122,15 +155,52 @@ export default function Hero() {
         }
     }, [carouselApi])
 
-    // Auto-refresh ONLY the currently viewed department (every 5s)
+    // Prefetch once after departments load (no periodic refresh to avoid UI glitching)
     React.useEffect(() => {
-        const deptId = activeDept?._id
-        if (!deptId) return
+        if (loadingDepts) return
+        if (!departments.length) return
+        void prefetchAllDisplays()
+    }, [loadingDepts, departments.length, prefetchAllDisplays])
 
-        void fetchDeptDisplay(deptId)
-        const t = window.setInterval(() => void fetchDeptDisplay(deptId), 5000)
+    // ✅ Auto-scroll horizontally when there are other departments with queues
+    React.useEffect(() => {
+        if (!carouselApi) return
+        if (!departments.length) return
+
+        const queueIndexes = departments
+            .map((d, idx) => ({ idx, has: hasQueue(live[d._id]?.data ?? null) }))
+            .filter((x) => x.has)
+            .map((x) => x.idx)
+
+        // No queues anywhere -> don't auto-scroll
+        if (queueIndexes.length === 0) return
+
+        // Only one department has queues -> jump to it (if not already there) and stop
+        if (queueIndexes.length === 1) {
+            const onlyIdx = queueIndexes[0]
+            if (activeIndex !== onlyIdx) {
+                try {
+                    carouselApi.scrollTo(onlyIdx)
+                } catch {
+                    // ignore
+                }
+            }
+            return
+        }
+
+        // More than one queued dept -> rotate through queued departments
+        const t = window.setInterval(() => {
+            const sorted = [...queueIndexes].sort((a, b) => a - b)
+            const nextIdx = sorted.find((i) => i > activeIndex) ?? sorted[0]
+            try {
+                carouselApi.scrollTo(nextIdx)
+            } catch {
+                // ignore
+            }
+        }, 6500)
+
         return () => window.clearInterval(t)
-    }, [activeDept?._id, fetchDeptDisplay])
+    }, [carouselApi, departments, live, activeIndex])
 
     return (
         <section className="py-12 md:py-16">
@@ -201,9 +271,7 @@ export default function Hero() {
                     <Card className="overflow-hidden">
                         <CardHeader>
                             <CardTitle>Live display (all departments)</CardTitle>
-                            <CardDescription>
-                                Swipe through departments — the current slide refreshes every 5 seconds.
-                            </CardDescription>
+                            <CardDescription>Auto-scrolls horizontally when other departments have queues.</CardDescription>
                         </CardHeader>
 
                         <CardContent className="grid gap-4">
@@ -217,17 +285,13 @@ export default function Hero() {
                                     No departments available to display.
                                 </div>
                             ) : (
-                                <Carousel
-                                    setApi={setCarouselApi}
-                                    opts={{ align: "start", loop: true }}
-                                    className="w-full"
-                                >
+                                <Carousel setApi={setCarouselApi} opts={{ align: "start", loop: true }} className="w-full">
                                     <CarouselContent>
                                         {departments.map((d) => {
                                             const snap = live[d._id]
                                             const data = snap?.data ?? null
                                             const isActive = activeDept?._id === d._id
-                                            const isLoadingThis = isActive && loadingDeptId === d._id
+                                            const isLoadingThis = isActive && Boolean(loadingDeptIds[d._id])
 
                                             const nowServing = data?.nowServing ?? null
                                             const upNext = data?.upNext ?? []
@@ -241,14 +305,10 @@ export default function Hero() {
                                                                     {d.name}
                                                                     {d.code ? ` (${d.code})` : ""}
                                                                 </div>
-                                                                <div className="text-xs text-muted-foreground">
-                                                                    Department live status
-                                                                </div>
+                                                                <div className="text-xs text-muted-foreground">Department live status</div>
                                                             </div>
 
-                                                            <Badge variant="secondary">
-                                                                {isActive ? "Live" : "Dept"}
-                                                            </Badge>
+                                                            <Badge variant="secondary">{isActive ? "Live" : "Dept"}</Badge>
                                                         </div>
 
                                                         <Separator />
@@ -258,20 +318,14 @@ export default function Hero() {
                                                             <div className="flex items-center justify-between">
                                                                 <span className="text-sm font-medium">Now Serving</span>
                                                                 <Badge>
-                                                                    {nowServing?.windowNumber
-                                                                        ? `Window ${nowServing.windowNumber}`
-                                                                        : "—"}
+                                                                    {nowServing?.windowNumber ? `Window ${nowServing.windowNumber}` : "—"}
                                                                 </Badge>
                                                             </div>
 
                                                             {isLoadingThis ? (
-                                                                <div className="text-sm text-muted-foreground">
-                                                                    Loading live data…
-                                                                </div>
+                                                                <div className="text-sm text-muted-foreground">Loading live data…</div>
                                                             ) : nowServing ? (
-                                                                <div className="text-3xl font-semibold">
-                                                                    Queue #{nowServing.queueNumber}
-                                                                </div>
+                                                                <div className="text-3xl font-semibold">Queue #{nowServing.queueNumber}</div>
                                                             ) : (
                                                                 <div className="text-sm text-muted-foreground">
                                                                     No ticket is currently being called.
@@ -279,9 +333,7 @@ export default function Hero() {
                                                             )}
 
                                                             {snap?.error ? (
-                                                                <div className="text-xs text-destructive">
-                                                                    {snap.error}
-                                                                </div>
+                                                                <div className="text-xs text-destructive">{snap.error}</div>
                                                             ) : null}
                                                         </div>
 
@@ -293,9 +345,7 @@ export default function Hero() {
                                                             </div>
 
                                                             {isLoadingThis ? (
-                                                                <div className="text-sm text-muted-foreground">
-                                                                    Loading…
-                                                                </div>
+                                                                <div className="text-sm text-muted-foreground">Loading…</div>
                                                             ) : upNext.length ? (
                                                                 <div className="flex flex-wrap gap-2">
                                                                     {upNext.slice(0, 6).map((t) => (
@@ -305,9 +355,7 @@ export default function Hero() {
                                                                     ))}
                                                                 </div>
                                                             ) : (
-                                                                <div className="text-sm text-muted-foreground">
-                                                                    No waiting tickets.
-                                                                </div>
+                                                                <div className="text-sm text-muted-foreground">No waiting tickets.</div>
                                                             )}
 
                                                             <div className="flex items-center gap-2 text-xs text-muted-foreground">

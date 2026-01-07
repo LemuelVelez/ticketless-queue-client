@@ -125,8 +125,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         return (
             <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
                 <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-                    {/* Brand */}
-                    <Link to="/student" className="flex items-center gap-3">
+                    {/* Brand -> ✅ redirect to landing page */}
+                    <Link to="/" className="flex items-center gap-3">
                         <div className="flex h-12 w-12 items-center justify-center rounded-lg border">
                             <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
                         </div>
@@ -143,18 +143,18 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                         </div>
                     </Link>
 
-                    {/* Desktop actions */}
+                    {/* Desktop actions (✅ no Login button for students) */}
                     <div className="hidden items-center gap-2 md:flex">
                         <Button variant="outline" asChild>
-                            <Link to="/student">Home</Link>
+                            <Link to="/">Home</Link>
                         </Button>
 
                         <Button asChild>
                             <Link to="/join">Join Queue</Link>
                         </Button>
 
-                        <Button variant="outline" asChild disabled={loading}>
-                            <Link to={authTo}>{authLabel}</Link>
+                        <Button variant="outline" asChild>
+                            <Link to="/display">Public Display</Link>
                         </Button>
                     </div>
 
@@ -188,7 +188,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
 
                                 <div className="mt-6 flex flex-col gap-2">
                                     <Button variant="ghost" className="w-full justify-start" asChild>
-                                        <Link to="/student" onClick={() => setSheetOpen(false)}>
+                                        <Link to="/" onClick={() => setSheetOpen(false)}>
                                             Home
                                         </Link>
                                     </Button>
@@ -204,18 +204,6 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                             Public Display
                                         </Link>
                                     </Button>
-
-                                    <div className="mt-4 border-t pt-4">
-                                        <Button
-                                            variant="outline"
-                                            className="w-full"
-                                            asChild
-                                            onClick={() => setSheetOpen(false)}
-                                            disabled={loading}
-                                        >
-                                            <Link to={authTo}>{authLabel}</Link>
-                                        </Button>
-                                    </div>
                                 </div>
                             </SheetContent>
                         </Sheet>
