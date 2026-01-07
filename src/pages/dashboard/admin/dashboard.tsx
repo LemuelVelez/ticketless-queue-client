@@ -2,7 +2,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { BarChart3, RefreshCw, ShieldCheck, Users } from "lucide-react"
+import { BarChart3, Building2, FileText, LayoutGrid, RefreshCw, ShieldCheck, Users } from "lucide-react"
 import { format } from "date-fns"
 import {
     Bar,
@@ -24,7 +24,14 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
-import { adminApi, type AuditLogsResponse, type Department } from "@/api/admin"
+import {
+    adminApi,
+    type AuditLogsResponse,
+    type Department,
+    type ReportsSummaryResponse,
+    type ServiceWindow,
+    type TicketStatus,
+} from "@/api/admin"
 import { useSession } from "@/hooks/use-session"
 
 import { DataTable } from "@/components/data-table"
@@ -49,8 +56,14 @@ type AccountUser = {
     assignedWindow: string | null
 }
 
+type AuditLog = AuditLogsResponse["logs"] extends (infer U)[] ? U : any
+
 function safeRole(role?: string): AccountRole {
     return role === "ADMIN" ? "ADMIN" : "STAFF"
+}
+
+function isEnabledFlag(value: boolean | undefined) {
+    return value !== false
 }
 
 function formatNumber(n: number | null | undefined) {
@@ -58,11 +71,24 @@ function formatNumber(n: number | null | undefined) {
     return new Intl.NumberFormat().format(n)
 }
 
+function formatDuration(ms: number | null | undefined) {
+    if (ms === null || ms === undefined || Number.isNaN(ms)) return "—"
+    if (ms <= 0) return "0m"
+    const totalSec = Math.round(ms / 1000)
+    const min = Math.floor(totalSec / 60)
+    const sec = totalSec % 60
+    if (min <= 0) return `${sec}s`
+    return sec ? `${min}m ${sec}s` : `${min}m`
+}
+
 function ymdKey(d: Date) {
     return format(d, "yyyy-MM-dd")
 }
 
-type AuditLog = AuditLogsResponse["logs"] extends (infer U)[] ? U : any
+function getStatusCount(byStatus: Partial<Record<TicketStatus, number>> | undefined, s: TicketStatus) {
+    const v = byStatus?.[s]
+    return typeof v === "number" ? v : 0
+}
 
 const CHART = {
     c1: "var(--chart-1)",
@@ -88,8 +114,12 @@ export default function AdminDashboardPage() {
     const [refreshing, setRefreshing] = React.useState(false)
 
     const [departments, setDepartments] = React.useState<Department[]>([])
+    const [windows, setWindows] = React.useState<ServiceWindow[]>([])
     const [accounts, setAccounts] = React.useState<AccountUser[]>([])
     const [audit, setAudit] = React.useState<AuditLogsResponse | null>(null)
+
+    // ✅ Reports overview snapshot (same date range as dashboard)
+    const [reportsSummary, setReportsSummary] = React.useState<ReportsSummaryResponse | null>(null)
 
     const [rangeDays, setRangeDays] = React.useState<7 | 30>(7)
 
@@ -131,8 +161,9 @@ export default function AdminDashboardPage() {
     const fetchAll = React.useCallback(async () => {
         setLoading(true)
         try {
-            const [deptRes, staffRes, auditRes] = await Promise.all([
+            const [deptRes, winRes, staffRes, auditRes, reportRes] = await Promise.all([
                 adminApi.listDepartments(),
+                adminApi.listWindows(),
                 adminApi.listStaff(),
                 adminApi.listAuditLogs({
                     page: 1,
@@ -140,11 +171,20 @@ export default function AdminDashboardPage() {
                     from: fromStr,
                     to: toStr,
                 } as any),
+                adminApi
+                    .getReportsSummary({ from: fromStr, to: toStr, departmentId: undefined })
+                    .catch((e) => {
+                        const msg = e instanceof Error ? e.message : "Failed to load reports snapshot."
+                        toast.error(msg)
+                        return null
+                    }),
             ])
 
             setDepartments(deptRes.departments ?? [])
+            setWindows(winRes.windows ?? [])
             setAccounts(((staffRes.staff ?? []) as any[]).map((u) => ({ ...u, role: safeRole(u.role) })))
             setAudit(auditRes as any)
+            setReportsSummary(reportRes)
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed to load dashboard data."
             toast.error(msg)
@@ -173,6 +213,34 @@ export default function AdminDashboardPage() {
         return m
     }, [departments])
 
+    const deptStats = React.useMemo(() => {
+        const total = departments.length
+        const enabled = departments.filter((d) => isEnabledFlag(d.enabled)).length
+        return { total, enabled, disabled: total - enabled }
+    }, [departments])
+
+    const windowStats = React.useMemo(() => {
+        const total = windows.length
+        const enabled = windows.filter((w) => isEnabledFlag(w.enabled)).length
+        return { total, enabled, disabled: total - enabled }
+    }, [windows])
+
+    const windowsByDept = React.useMemo(() => {
+        const map = new Map<string, number>()
+        for (const w of windows) {
+            const deptId = w.department ?? "unassigned"
+            map.set(deptId, (map.get(deptId) ?? 0) + 1)
+        }
+        return Array.from(map.entries())
+            .map(([deptId, count]) => ({
+                deptId,
+                name: deptId === "unassigned" ? "Unassigned" : deptNameById.get(deptId) ?? "Unknown",
+                count,
+            }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 8)
+    }, [windows, deptNameById])
+
     const accountStats = React.useMemo(() => {
         const total = accounts.length
         const active = accounts.filter((a) => a.active).length
@@ -191,14 +259,14 @@ export default function AdminDashboardPage() {
             counts.set(deptId, (counts.get(deptId) ?? 0) + 1)
         }
 
-        const rows = Array.from(counts.entries()).map(([deptId, count]) => ({
-            deptId,
-            name: deptId === "unassigned" ? "Unassigned" : deptNameById.get(deptId) ?? "Unknown",
-            count,
-        }))
-
-        rows.sort((a, b) => b.count - a.count)
-        return rows.slice(0, 8)
+        return Array.from(counts.entries())
+            .map(([deptId, count]) => ({
+                deptId,
+                name: deptId === "unassigned" ? "Unassigned" : deptNameById.get(deptId) ?? "Unknown",
+                count,
+            }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 8)
     }, [accounts, deptNameById])
 
     const audits = React.useMemo(() => (audit?.logs ?? []) as AuditLog[], [audit])
@@ -260,6 +328,62 @@ export default function AdminDashboardPage() {
             })
             .slice(0, 10)
     }, [audits])
+
+    const recentDepartments = React.useMemo(() => {
+        return [...departments]
+            .sort((a, b) => {
+                const ae = isEnabledFlag(a.enabled)
+                const be = isEnabledFlag(b.enabled)
+                if (ae !== be) return ae ? -1 : 1
+                return (a.name ?? "").localeCompare(b.name ?? "")
+            })
+            .slice(0, 10)
+    }, [departments])
+
+    const recentWindows = React.useMemo(() => {
+        return [...windows]
+            .sort((a, b) => {
+                const ae = isEnabledFlag(a.enabled)
+                const be = isEnabledFlag(b.enabled)
+                if (ae !== be) return ae ? -1 : 1
+                const da = deptNameById.get(a.department) ?? ""
+                const db = deptNameById.get(b.department) ?? ""
+                if (da !== db) return da.localeCompare(db)
+                return Number(a.number ?? 0) - Number(b.number ?? 0)
+            })
+            .slice(0, 10)
+    }, [windows, deptNameById])
+
+    // ✅ Reports overview derived values
+    const reportTotals = reportsSummary?.totals
+    const rptTotal = reportTotals?.total ?? 0
+    const rptServed = getStatusCount(reportTotals?.byStatus, "SERVED")
+    const rptWaiting = getStatusCount(reportTotals?.byStatus, "WAITING")
+    const rptCalled = getStatusCount(reportTotals?.byStatus, "CALLED")
+    const rptHold = getStatusCount(reportTotals?.byStatus, "HOLD")
+    const rptOut = getStatusCount(reportTotals?.byStatus, "OUT")
+
+    const ticketStatusPie = React.useMemo(
+        () => [
+            { name: "SERVED", value: rptServed },
+            { name: "WAITING", value: rptWaiting },
+            { name: "CALLED", value: rptCalled },
+            { name: "HOLD", value: rptHold },
+            { name: "OUT", value: rptOut },
+        ],
+        [rptServed, rptWaiting, rptCalled, rptHold, rptOut],
+    )
+
+    const topServedDepts = React.useMemo(() => {
+        const rows = ((reportsSummary as any)?.departments ?? []) as any[]
+        return [...rows]
+            .map((r) => ({
+                name: String(r?.name ?? "Department"),
+                served: Number(r?.served ?? 0),
+            }))
+            .sort((a, b) => b.served - a.served)
+            .slice(0, 8)
+    }, [reportsSummary])
 
     const accountColumns = React.useMemo<ColumnDef<AccountUser>[]>(
         () => [
@@ -362,7 +486,62 @@ export default function AdminDashboardPage() {
         [],
     )
 
-    const pieData = React.useMemo(
+    const departmentColumns = React.useMemo<ColumnDef<Department>[]>(
+        () => [
+            {
+                accessorKey: "name",
+                header: "Department",
+                cell: ({ row }) => (
+                    <div className="min-w-0">
+                        <div className="truncate font-medium">{row.original.name ?? "—"}</div>
+                        <div className="truncate text-xs text-muted-foreground">Code: {row.original.code || "—"}</div>
+                    </div>
+                ),
+            },
+            {
+                accessorKey: "enabled",
+                header: "Status",
+                cell: ({ row }) => (
+                    <Badge variant={isEnabledFlag(row.original.enabled) ? "default" : "secondary"}>
+                        {isEnabledFlag(row.original.enabled) ? "Enabled" : "Disabled"}
+                    </Badge>
+                ),
+            },
+        ],
+        [],
+    )
+
+    const windowColumns = React.useMemo<ColumnDef<ServiceWindow>[]>(
+        () => [
+            {
+                accessorKey: "name",
+                header: "Window",
+                cell: ({ row }) => (
+                    <div className="min-w-0">
+                        <div className="truncate font-medium">
+                            {row.original.name ?? "—"}{" "}
+                            <span className="text-muted-foreground">(#{row.original.number ?? "—"})</span>
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                            Dept: {deptNameById.get(row.original.department) ?? "—"}
+                        </div>
+                    </div>
+                ),
+            },
+            {
+                accessorKey: "enabled",
+                header: "Status",
+                cell: ({ row }) => (
+                    <Badge variant={isEnabledFlag(row.original.enabled) ? "default" : "secondary"}>
+                        {isEnabledFlag(row.original.enabled) ? "Enabled" : "Disabled"}
+                    </Badge>
+                ),
+            },
+        ],
+        [deptNameById],
+    )
+
+    const accountStatusPie = React.useMemo(
         () => [
             { name: "Active", value: accountStats.active },
             { name: "Inactive", value: accountStats.inactive },
@@ -378,13 +557,24 @@ export default function AdminDashboardPage() {
         [accountStats.admins, accountStats.staff],
     )
 
+    const deptStatusPie = React.useMemo(
+        () => [
+            { name: "Enabled", value: deptStats.enabled },
+            { name: "Disabled", value: deptStats.disabled },
+        ],
+        [deptStats.enabled, deptStats.disabled],
+    )
+
+    const winStatusPie = React.useMemo(
+        () => [
+            { name: "Enabled", value: windowStats.enabled },
+            { name: "Disabled", value: windowStats.disabled },
+        ],
+        [windowStats.enabled, windowStats.disabled],
+    )
+
     return (
-        <DashboardLayout
-            title="Admin dashboard"
-            navItems={ADMIN_NAV_ITEMS}
-            user={dashboardUser}
-            activePath={location.pathname}
-        >
+        <DashboardLayout title="Admin dashboard" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 <Card className="min-w-0">
                     <CardHeader className="gap-2">
@@ -394,10 +584,7 @@ export default function AdminDashboardPage() {
                                     <BarChart3 className="h-5 w-5" />
                                     Overview
                                 </CardTitle>
-                                <CardDescription>
-                                    Snapshot of <span className="font-medium">Accounts</span> and{" "}
-                                    <span className="font-medium">Audit logs</span>.
-                                </CardDescription>
+                                <CardDescription>Key snapshot across accounts, departments, windows, tickets, and audits.</CardDescription>
                             </div>
 
                             {/* ✅ Mobile: vertical controls; Desktop unchanged */}
@@ -433,17 +620,39 @@ export default function AdminDashboardPage() {
                                     Refresh
                                 </Button>
 
+                                {/* ✅ Match App.tsx routes (/admin/*) */}
                                 <Button asChild className="w-full sm:w-auto">
-                                    <Link to="/dashboard/admin/accounts" className="gap-2">
+                                    <Link to="/admin/accounts" className="gap-2">
                                         <Users className="h-4 w-4" />
-                                        Manage accounts
+                                        Accounts
                                     </Link>
                                 </Button>
 
                                 <Button asChild variant="secondary" className="w-full sm:w-auto">
-                                    <Link to="/dashboard/admin/audits" className="gap-2">
+                                    <Link to="/admin/audit-logs" className="gap-2">
                                         <ShieldCheck className="h-4 w-4" />
-                                        View audits
+                                        Audit logs
+                                    </Link>
+                                </Button>
+
+                                <Button asChild variant="secondary" className="w-full sm:w-auto">
+                                    <Link to="/admin/departments" className="gap-2">
+                                        <Building2 className="h-4 w-4" />
+                                        Departments
+                                    </Link>
+                                </Button>
+
+                                <Button asChild variant="secondary" className="w-full sm:w-auto">
+                                    <Link to="/admin/windows" className="gap-2">
+                                        <LayoutGrid className="h-4 w-4" />
+                                        Windows
+                                    </Link>
+                                </Button>
+
+                                <Button asChild variant="secondary" className="w-full sm:w-auto">
+                                    <Link to="/admin/reports" className="gap-2">
+                                        <FileText className="h-4 w-4" />
+                                        Reports
                                     </Link>
                                 </Button>
                             </div>
@@ -453,8 +662,13 @@ export default function AdminDashboardPage() {
 
                         {/* ✅ Mobile: vertical badges; Desktop unchanged */}
                         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                            <Badge variant="secondary">Audit range: {fromStr} → {toStr}</Badge>
+                            <Badge variant="secondary">
+                                Audit range: {fromStr} → {toStr}
+                            </Badge>
                             <Badge variant="secondary">Accounts: {formatNumber(accountStats.total)}</Badge>
+                            <Badge variant="secondary">Departments: {formatNumber(deptStats.total)}</Badge>
+                            <Badge variant="secondary">Windows: {formatNumber(windowStats.total)}</Badge>
+                            <Badge variant="secondary">Tickets: {reportsSummary ? formatNumber(rptTotal) : "—"}</Badge>
                             <Badge variant="secondary">Audits (loaded): {formatNumber(audit?.logs?.length ?? 0)}</Badge>
                         </div>
                     </CardHeader>
@@ -488,12 +702,36 @@ export default function AdminDashboardPage() {
                                             <CardTitle className="text-sm text-muted-foreground">Roles</CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">
-                                                {formatNumber(accountStats.admins + accountStats.staff)}
-                                            </div>
+                                            <div className="text-2xl font-semibold">{formatNumber(accountStats.admins + accountStats.staff)}</div>
                                             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                                                 <Badge variant="default">ADMIN: {formatNumber(accountStats.admins)}</Badge>
                                                 <Badge variant="secondary">STAFF: {formatNumber(accountStats.staff)}</Badge>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card>
+                                        <CardHeader className="pb-2">
+                                            <CardTitle className="text-sm text-muted-foreground">Departments</CardTitle>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="text-2xl font-semibold">{formatNumber(deptStats.total)}</div>
+                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">Enabled: {formatNumber(deptStats.enabled)}</Badge>
+                                                <Badge variant="secondary">Disabled: {formatNumber(deptStats.disabled)}</Badge>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card>
+                                        <CardHeader className="pb-2">
+                                            <CardTitle className="text-sm text-muted-foreground">Windows</CardTitle>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="text-2xl font-semibold">{formatNumber(windowStats.total)}</div>
+                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">Enabled: {formatNumber(windowStats.enabled)}</Badge>
+                                                <Badge variant="secondary">Disabled: {formatNumber(windowStats.disabled)}</Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
@@ -520,9 +758,22 @@ export default function AdminDashboardPage() {
                                             <div className="text-xs text-muted-foreground">Occurrences (within range)</div>
                                         </CardContent>
                                     </Card>
+
+                                    <Card>
+                                        <CardHeader className="pb-2">
+                                            <CardTitle className="text-sm text-muted-foreground">Tickets (reports)</CardTitle>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="text-2xl font-semibold">{reportsSummary ? formatNumber(rptTotal) : "—"}</div>
+                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">SERVED: {reportsSummary ? formatNumber(rptServed) : "—"}</Badge>
+                                                <Badge variant="secondary">WAITING: {reportsSummary ? formatNumber(rptWaiting) : "—"}</Badge>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
                                 </div>
 
-                                {/* Charts */}
+                                {/* Charts (Accounts + Staff/Audits) */}
                                 <div className="mt-6 grid gap-6 lg:grid-cols-12">
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
@@ -532,26 +783,16 @@ export default function AdminDashboardPage() {
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
-                                                    <Tooltip
-                                                        contentStyle={tooltipContentStyle}
-                                                        labelStyle={tooltipLabelStyle}
-                                                        itemStyle={tooltipItemStyle}
-                                                    />
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
                                                     <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Pie
-                                                        data={pieData}
-                                                        dataKey="value"
-                                                        nameKey="name"
-                                                        outerRadius={80}
-                                                        stroke="var(--background)"
-                                                    >
+                                                    <Pie data={accountStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
                                                         <Cell fill={CHART.c1} />
                                                         <Cell fill={CHART.c2} />
                                                     </Pie>
                                                 </PieChart>
                                             </ResponsiveContainer>
 
-                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap text-sm">
+                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
                                                 <Badge variant="default">Active: {formatNumber(accountStats.active)}</Badge>
                                                 <Badge variant="secondary">Inactive: {formatNumber(accountStats.inactive)}</Badge>
                                             </div>
@@ -566,26 +807,16 @@ export default function AdminDashboardPage() {
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
-                                                    <Tooltip
-                                                        contentStyle={tooltipContentStyle}
-                                                        labelStyle={tooltipLabelStyle}
-                                                        itemStyle={tooltipItemStyle}
-                                                    />
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
                                                     <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Pie
-                                                        data={rolePieData}
-                                                        dataKey="value"
-                                                        nameKey="name"
-                                                        outerRadius={80}
-                                                        stroke="var(--background)"
-                                                    >
+                                                    <Pie data={rolePieData} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
                                                         <Cell fill={CHART.c4} />
                                                         <Cell fill={CHART.c5} />
                                                     </Pie>
                                                 </PieChart>
                                             </ResponsiveContainer>
 
-                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap text-sm">
+                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
                                                 <Badge variant="default">ADMIN: {formatNumber(accountStats.admins)}</Badge>
                                                 <Badge variant="secondary">STAFF: {formatNumber(accountStats.staff)}</Badge>
                                             </div>
@@ -614,11 +845,7 @@ export default function AdminDashboardPage() {
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip
-                                                        contentStyle={tooltipContentStyle}
-                                                        labelStyle={tooltipLabelStyle}
-                                                        itemStyle={tooltipItemStyle}
-                                                    />
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
                                                     <Bar dataKey="count" fill={CHART.c1} />
                                                 </BarChart>
                                             </ResponsiveContainer>
@@ -626,6 +853,186 @@ export default function AdminDashboardPage() {
                                     </Card>
                                 </div>
 
+                                {/* Charts (Departments + Windows) */}
+                                <div className="mt-6 grid gap-6 lg:grid-cols-12">
+                                    <Card className="lg:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle>Departments status</CardTitle>
+                                            <CardDescription>Enabled vs disabled</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="h-64">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <PieChart>
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
+                                                    <Pie data={deptStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                        <Cell fill={CHART.c1} />
+                                                        <Cell fill={CHART.c2} />
+                                                    </Pie>
+                                                </PieChart>
+                                            </ResponsiveContainer>
+
+                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
+                                                <Badge variant="default">Enabled: {formatNumber(deptStats.enabled)}</Badge>
+                                                <Badge variant="secondary">Disabled: {formatNumber(deptStats.disabled)}</Badge>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card className="lg:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle>Windows status</CardTitle>
+                                            <CardDescription>Enabled vs disabled</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="h-64">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <PieChart>
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
+                                                    <Pie data={winStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                        <Cell fill={CHART.c4} />
+                                                        <Cell fill={CHART.c5} />
+                                                    </Pie>
+                                                </PieChart>
+                                            </ResponsiveContainer>
+
+                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
+                                                <Badge variant="default">Enabled: {formatNumber(windowStats.enabled)}</Badge>
+                                                <Badge variant="secondary">Disabled: {formatNumber(windowStats.disabled)}</Badge>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card className="lg:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle>Windows by department</CardTitle>
+                                            <CardDescription>Top departments (by window count)</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="h-64">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart data={windowsByDept}>
+                                                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                                                    <XAxis
+                                                        dataKey="name"
+                                                        interval={0}
+                                                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                                                        axisLine={{ stroke: "var(--border)" }}
+                                                        tickLine={{ stroke: "var(--border)" }}
+                                                    />
+                                                    <YAxis
+                                                        allowDecimals={false}
+                                                        tick={{ fill: "var(--muted-foreground)" }}
+                                                        axisLine={{ stroke: "var(--border)" }}
+                                                        tickLine={{ stroke: "var(--border)" }}
+                                                    />
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Bar dataKey="count" fill={CHART.c2} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </CardContent>
+                                    </Card>
+                                </div>
+
+                                {/* ✅ Reports overview */}
+                                <div className="mt-6 grid gap-6 lg:grid-cols-12">
+                                    <Card className="lg:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle>Ticket status</CardTitle>
+                                            <CardDescription>
+                                                Reports snapshot ({fromStr} → {toStr})
+                                            </CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="h-64">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <PieChart>
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
+                                                    <Pie data={ticketStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                        <Cell fill={CHART.c1} />
+                                                        <Cell fill={CHART.c2} />
+                                                        <Cell fill={CHART.c3} />
+                                                        <Cell fill={CHART.c4} />
+                                                        <Cell fill={CHART.c5} />
+                                                    </Pie>
+                                                </PieChart>
+                                            </ResponsiveContainer>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card className="lg:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle>Tickets summary</CardTitle>
+                                            <CardDescription>Totals and averages</CardDescription>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="text-2xl font-semibold">{reportsSummary ? formatNumber(rptTotal) : "—"}</div>
+                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap text-sm">
+                                                <Badge variant="default">SERVED: {reportsSummary ? formatNumber(rptServed) : "—"}</Badge>
+                                                <Badge variant="secondary">WAITING: {reportsSummary ? formatNumber(rptWaiting) : "—"}</Badge>
+                                                <Badge variant="secondary">CALLED: {reportsSummary ? formatNumber(rptCalled) : "—"}</Badge>
+                                                <Badge variant="secondary">HOLD: {reportsSummary ? formatNumber(rptHold) : "—"}</Badge>
+                                                <Badge variant="secondary">OUT: {reportsSummary ? formatNumber(rptOut) : "—"}</Badge>
+                                            </div>
+
+                                            <Separator className="my-4" />
+
+                                            <div className="grid grid-cols-1 gap-3">
+                                                <div className="rounded-lg border p-3">
+                                                    <div className="text-xs text-muted-foreground">Avg wait time</div>
+                                                    <div className="mt-1 text-lg font-semibold">
+                                                        {reportsSummary ? formatDuration(reportTotals?.avgWaitMs) : "—"}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground">From join → called</div>
+                                                </div>
+
+                                                <div className="rounded-lg border p-3">
+                                                    <div className="text-xs text-muted-foreground">Avg service time</div>
+                                                    <div className="mt-1 text-lg font-semibold">
+                                                        {reportsSummary ? formatDuration(reportTotals?.avgServiceMs) : "—"}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground">From called → served</div>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                                <Button asChild variant="outline" className="w-full sm:w-auto">
+                                                    <Link to="/admin/reports">Open full reports</Link>
+                                                </Button>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card className="lg:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle>Top departments</CardTitle>
+                                            <CardDescription>By SERVED count</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="h-64">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart data={topServedDepts}>
+                                                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                                                    <XAxis
+                                                        dataKey="name"
+                                                        interval={0}
+                                                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                                                        axisLine={{ stroke: "var(--border)" }}
+                                                        tickLine={{ stroke: "var(--border)" }}
+                                                    />
+                                                    <YAxis
+                                                        allowDecimals={false}
+                                                        tick={{ fill: "var(--muted-foreground)" }}
+                                                        axisLine={{ stroke: "var(--border)" }}
+                                                        tickLine={{ stroke: "var(--border)" }}
+                                                    />
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Bar dataKey="served" fill={CHART.c3} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </CardContent>
+                                    </Card>
+                                </div>
+
+                                {/* Charts (Audits) */}
                                 <div className="mt-6 grid gap-6 lg:grid-cols-12">
                                     <Card className="lg:col-span-7">
                                         <CardHeader>
@@ -648,20 +1055,9 @@ export default function AdminDashboardPage() {
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip
-                                                        contentStyle={tooltipContentStyle}
-                                                        labelStyle={tooltipLabelStyle}
-                                                        itemStyle={tooltipItemStyle}
-                                                    />
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
                                                     <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Line
-                                                        type="monotone"
-                                                        dataKey="count"
-                                                        stroke={CHART.c3}
-                                                        strokeWidth={2}
-                                                        dot={false}
-                                                        activeDot={{ r: 4 }}
-                                                    />
+                                                    <Line type="monotone" dataKey="count" stroke={CHART.c3} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                                                 </LineChart>
                                             </ResponsiveContainer>
                                         </CardContent>
@@ -691,11 +1087,7 @@ export default function AdminDashboardPage() {
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip
-                                                        contentStyle={tooltipContentStyle}
-                                                        labelStyle={tooltipLabelStyle}
-                                                        itemStyle={tooltipItemStyle}
-                                                    />
+                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
                                                     <Bar dataKey="count" fill={CHART.c2} />
                                                 </BarChart>
                                             </ResponsiveContainer>
@@ -717,11 +1109,9 @@ export default function AdminDashboardPage() {
                                                 searchColumnId="name"
                                                 searchPlaceholder="Search name…"
                                             />
-
-                                            {/* ✅ Mobile: vertical actions; Desktop unchanged */}
                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
                                                 <Button asChild variant="outline" className="w-full sm:w-auto">
-                                                    <Link to="/dashboard/admin/accounts">Open full accounts</Link>
+                                                    <Link to="/admin/accounts">Open full accounts</Link>
                                                 </Button>
                                             </div>
                                         </CardContent>
@@ -739,11 +1129,51 @@ export default function AdminDashboardPage() {
                                                 searchColumnId="action"
                                                 searchPlaceholder="Search action…"
                                             />
-
-                                            {/* ✅ Mobile: vertical actions; Desktop unchanged */}
                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
                                                 <Button asChild variant="outline" className="w-full sm:w-auto">
-                                                    <Link to="/dashboard/admin/audits">Open full audits</Link>
+                                                    <Link to="/admin/audit-logs">Open full audit logs</Link>
+                                                </Button>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                </div>
+
+                                <div className="mt-6 grid gap-6 lg:grid-cols-12">
+                                    <Card className="min-w-0 lg:col-span-6">
+                                        <CardHeader>
+                                            <CardTitle>Departments preview</CardTitle>
+                                            <CardDescription>Quick view (top 10)</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="min-w-0">
+                                            <DataTable
+                                                columns={departmentColumns}
+                                                data={recentDepartments}
+                                                searchColumnId="name"
+                                                searchPlaceholder="Search department…"
+                                            />
+                                            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                                <Button asChild variant="outline" className="w-full sm:w-auto">
+                                                    <Link to="/admin/departments">Open full departments</Link>
+                                                </Button>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card className="min-w-0 lg:col-span-6">
+                                        <CardHeader>
+                                            <CardTitle>Windows preview</CardTitle>
+                                            <CardDescription>Quick view (top 10)</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="min-w-0">
+                                            <DataTable
+                                                columns={windowColumns}
+                                                data={recentWindows}
+                                                searchColumnId="name"
+                                                searchPlaceholder="Search window…"
+                                            />
+                                            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                                <Button asChild variant="outline" className="w-full sm:w-auto">
+                                                    <Link to="/admin/windows">Open full windows</Link>
                                                 </Button>
                                             </div>
                                         </CardContent>
