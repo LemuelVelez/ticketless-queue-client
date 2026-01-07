@@ -123,7 +123,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     // ✅ Student/simple header
     if (variant === "student") {
         return (
-            <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
+            <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur mx-4">
                 <div className="mx-auto flex items-center justify-between px-4 py-3">
                     {/* ✅ Keep /student home redirection */}
                     <Link to="/student" className="flex items-center gap-3">

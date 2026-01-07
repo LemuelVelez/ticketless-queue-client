@@ -11,7 +11,7 @@ import { Separator } from "@/components/ui/separator"
 
 export default function LandingPage() {
     return (
-        <div className="min-h-screen bg-background text-foreground mx-auto">
+        <div className="min-h-screen bg-background text-foreground mx-4">
             <Header />
 
             <main className="mx-auto  px-4">
