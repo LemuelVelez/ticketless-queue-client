@@ -20,22 +20,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
-import {
-    Dialog,
-    DialogContent,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 import {
     DropdownMenu,
@@ -109,10 +96,7 @@ export default function AdminDepartmentsPage() {
     const fetchAll = React.useCallback(async () => {
         setLoading(true)
         try {
-            const [deptRes, winRes] = await Promise.all([
-                adminApi.listDepartments(),
-                adminApi.listWindows(),
-            ])
+            const [deptRes, winRes] = await Promise.all([adminApi.listDepartments(), adminApi.listWindows()])
             setDepartments(deptRes.departments ?? [])
             setWindows(winRes.windows ?? [])
         } catch (e) {
@@ -229,8 +213,9 @@ export default function AdminDepartmentsPage() {
             user={dashboardUser}
             activePath={location.pathname}
         >
-            <div className="grid gap-6">
-                <Card>
+            {/* ✅ Responsiveness fix: define columns + allow shrink */}
+            <div className="grid w-full min-w-0 grid-cols-1 gap-6">
+                <Card className="min-w-0">
                     <CardHeader className="gap-2">
                         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
@@ -240,12 +225,13 @@ export default function AdminDepartmentsPage() {
                                 </CardDescription>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2">
+                            {/* ✅ XS stack; desktop unchanged */}
+                            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                 <Button
                                     variant="outline"
                                     onClick={() => void fetchAll()}
                                     disabled={loading || saving}
-                                    className="gap-2"
+                                    className="w-full gap-2 sm:w-auto"
                                 >
                                     <RefreshCw className="h-4 w-4" />
                                     Refresh
@@ -257,13 +243,13 @@ export default function AdminDepartmentsPage() {
                                         setCreateDeptOpen(true)
                                     }}
                                     disabled={saving}
-                                    className="gap-2"
+                                    className="w-full gap-2 sm:w-auto"
                                 >
                                     <Plus className="h-4 w-4" />
                                     New department
                                 </Button>
 
-                                <Button asChild variant="secondary" className="gap-2">
+                                <Button asChild variant="secondary" className="w-full gap-2 sm:w-auto">
                                     <a href="/admin/windows">
                                         <LayoutGrid className="h-4 w-4" />
                                         Manage windows
@@ -289,16 +275,16 @@ export default function AdminDepartmentsPage() {
                         </div>
                     </CardHeader>
 
-                    <CardContent>
+                    <CardContent className="min-w-0">
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <Input
                                 value={deptQ}
                                 onChange={(e) => setDeptQ(e.target.value)}
                                 placeholder="Search departments…"
-                                className="w-full md:w-96"
+                                className="w-full min-w-0 md:w-96"
                             />
 
-                            <Tabs value={deptStatusTab} onValueChange={(v) => setDeptStatusTab(v as any)}>
+                            <Tabs value={deptStatusTab} onValueChange={(v) => setDeptStatusTab(v as any)} className="w-full md:w-auto">
                                 <TabsList className="grid w-full grid-cols-3 md:w-80">
                                     <TabsTrigger value="all">All</TabsTrigger>
                                     <TabsTrigger value="enabled">Enabled</TabsTrigger>
@@ -317,7 +303,8 @@ export default function AdminDepartmentsPage() {
                                     <Skeleton className="h-10 w-full" />
                                 </div>
                             ) : (
-                                <div className="rounded-lg border">
+                                // ✅ Prevent page overflow from table
+                                <div className="rounded-lg border overflow-x-auto">
                                     <Table>
                                         <TableHeader>
                                             <TableRow>
@@ -335,7 +322,7 @@ export default function AdminDepartmentsPage() {
                                                 return (
                                                     <TableRow key={d._id}>
                                                         <TableCell className="font-medium">
-                                                            <div className="flex flex-col">
+                                                            <div className="flex min-w-0 flex-col">
                                                                 <span className="truncate">{d.name}</span>
                                                                 <span className="truncate text-xs text-muted-foreground md:hidden">
                                                                     {d.code || "—"}
@@ -422,7 +409,8 @@ export default function AdminDepartmentsPage() {
                         </div>
                     </div>
 
-                    <DialogFooter className="gap-2 sm:gap-0">
+                    {/* ✅ Mobile footer fix (no w-full + mr-2 overflow) */}
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -431,12 +419,12 @@ export default function AdminDepartmentsPage() {
                                 resetCreateDeptForm()
                             }}
                             disabled={saving}
-                            className="mr-2"
+                            className="w-full sm:w-auto sm:mr-2"
                         >
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleCreateDept()} disabled={saving}>
+                        <Button type="button" onClick={() => void handleCreateDept()} disabled={saving} className="w-full sm:w-auto">
                             {saving ? "Creating…" : "Create"}
                         </Button>
                     </DialogFooter>
@@ -453,11 +441,7 @@ export default function AdminDepartmentsPage() {
                     <div className="grid gap-4">
                         <div className="grid gap-2">
                             <Label htmlFor="e-dept-name">Name</Label>
-                            <Input
-                                id="e-dept-name"
-                                value={eDeptName}
-                                onChange={(e) => setEDeptName(e.target.value)}
-                            />
+                            <Input id="e-dept-name" value={eDeptName} onChange={(e) => setEDeptName(e.target.value)} />
                         </div>
 
                         <div className="grid gap-2">
@@ -481,7 +465,8 @@ export default function AdminDepartmentsPage() {
                         </div>
                     </div>
 
-                    <DialogFooter className="gap-2 sm:gap-0">
+                    {/* ✅ Mobile footer fix */}
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -490,12 +475,12 @@ export default function AdminDepartmentsPage() {
                                 setSelectedDept(null)
                             }}
                             disabled={saving}
-                            className="mr-2"
+                            className="w-full sm:w-auto sm:mr-2"
                         >
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleSaveDept()} disabled={saving}>
+                        <Button type="button" onClick={() => void handleSaveDept()} disabled={saving} className="w-full sm:w-auto">
                             {saving ? "Saving…" : "Save"}
                         </Button>
                     </DialogFooter>

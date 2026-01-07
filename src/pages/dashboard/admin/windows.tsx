@@ -20,22 +20,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
-import {
-    Dialog,
-    DialogContent,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 import {
     DropdownMenu,
@@ -46,13 +33,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -116,18 +97,12 @@ export default function AdminWindowsPage() {
         return m
     }, [departments])
 
-    const enabledDepartments = React.useMemo(
-        () => departments.filter((d) => isEnabledFlag(d.enabled)),
-        [departments],
-    )
+    const enabledDepartments = React.useMemo(() => departments.filter((d) => isEnabledFlag(d.enabled)), [departments])
 
     const fetchAll = React.useCallback(async () => {
         setLoading(true)
         try {
-            const [deptRes, winRes] = await Promise.all([
-                adminApi.listDepartments(),
-                adminApi.listWindows(),
-            ])
+            const [deptRes, winRes] = await Promise.all([adminApi.listDepartments(), adminApi.listWindows()])
             setDepartments(deptRes.departments ?? [])
             setWindows(winRes.windows ?? [])
         } catch (e) {
@@ -240,14 +215,10 @@ export default function AdminWindowsPage() {
     }, [windows])
 
     return (
-        <DashboardLayout
-            title="Windows"
-            navItems={ADMIN_NAV_ITEMS}
-            user={dashboardUser}
-            activePath={location.pathname}
-        >
-            <div className="grid gap-6">
-                <Card>
+        <DashboardLayout title="Windows" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+            {/* ✅ Responsiveness fix: define columns + allow shrink */}
+            <div className="grid w-full min-w-0 grid-cols-1 gap-6">
+                <Card className="min-w-0">
                     <CardHeader className="gap-2">
                         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
@@ -257,12 +228,13 @@ export default function AdminWindowsPage() {
                                 </CardDescription>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2">
+                            {/* ✅ XS stack; desktop unchanged */}
+                            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                 <Button
                                     variant="outline"
                                     onClick={() => void fetchAll()}
                                     disabled={loading || saving}
-                                    className="gap-2"
+                                    className="w-full gap-2 sm:w-auto"
                                 >
                                     <RefreshCw className="h-4 w-4" />
                                     Refresh
@@ -274,13 +246,13 @@ export default function AdminWindowsPage() {
                                         setCreateWinOpen(true)
                                     }}
                                     disabled={saving}
-                                    className="gap-2"
+                                    className="w-full gap-2 sm:w-auto"
                                 >
                                     <Plus className="h-4 w-4" />
                                     New window
                                 </Button>
 
-                                <Button asChild variant="secondary" className="gap-2">
+                                <Button asChild variant="secondary" className="w-full gap-2 sm:w-auto">
                                     <a href="/admin/departments">
                                         <Building2 className="h-4 w-4" />
                                         View departments
@@ -305,18 +277,18 @@ export default function AdminWindowsPage() {
                         </div>
                     </CardHeader>
 
-                    <CardContent>
+                    <CardContent className="min-w-0">
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                            <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
                                 <Input
                                     value={winQ}
                                     onChange={(e) => setWinQ(e.target.value)}
                                     placeholder="Search windows…"
-                                    className="w-full md:w-80"
+                                    className="w-full min-w-0 md:w-80"
                                 />
 
                                 <Select value={winDeptFilter} onValueChange={setWinDeptFilter}>
-                                    <SelectTrigger className="w-full md:w-80">
+                                    <SelectTrigger className="w-full min-w-0 md:w-80">
                                         <SelectValue placeholder="Filter by department" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -330,7 +302,7 @@ export default function AdminWindowsPage() {
                                 </Select>
                             </div>
 
-                            <Tabs value={winStatusTab} onValueChange={(v) => setWinStatusTab(v as any)}>
+                            <Tabs value={winStatusTab} onValueChange={(v) => setWinStatusTab(v as any)} className="w-full md:w-auto">
                                 <TabsList className="grid w-full grid-cols-3 md:w-80">
                                     <TabsTrigger value="all">All</TabsTrigger>
                                     <TabsTrigger value="enabled">Enabled</TabsTrigger>
@@ -349,7 +321,8 @@ export default function AdminWindowsPage() {
                                     <Skeleton className="h-10 w-full" />
                                 </div>
                             ) : (
-                                <div className="rounded-lg border">
+                                // ✅ Prevent page overflow from table
+                                <div className="rounded-lg border overflow-x-auto">
                                     <Table>
                                         <TableHeader>
                                             <TableRow>
@@ -366,7 +339,7 @@ export default function AdminWindowsPage() {
                                                 return (
                                                     <TableRow key={w._id}>
                                                         <TableCell className="font-medium">
-                                                            <div className="flex flex-col">
+                                                            <div className="flex min-w-0 flex-col">
                                                                 <span className="truncate">
                                                                     {w.name}{" "}
                                                                     <span className="text-muted-foreground">(#{w.number})</span>
@@ -433,11 +406,8 @@ export default function AdminWindowsPage() {
                     <div className="grid gap-4">
                         <div className="grid gap-2">
                             <Label>Department</Label>
-                            <Select
-                                value={cWinDeptId || "none"}
-                                onValueChange={(v) => setCWinDeptId(v === "none" ? "" : v)}
-                            >
-                                <SelectTrigger>
+                            <Select value={cWinDeptId || "none"} onValueChange={(v) => setCWinDeptId(v === "none" ? "" : v)}>
+                                <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select department" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -449,9 +419,7 @@ export default function AdminWindowsPage() {
                                     ))}
                                 </SelectContent>
                             </Select>
-                            <p className="text-xs text-muted-foreground">
-                                Only enabled departments are selectable here.
-                            </p>
+                            <p className="text-xs text-muted-foreground">Only enabled departments are selectable here.</p>
                         </div>
 
                         <div className="grid gap-2">
@@ -476,7 +444,8 @@ export default function AdminWindowsPage() {
                         </div>
                     </div>
 
-                    <DialogFooter className="gap-2 sm:gap-0">
+                    {/* ✅ Mobile footer fix */}
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -485,12 +454,12 @@ export default function AdminWindowsPage() {
                                 resetCreateWinForm()
                             }}
                             disabled={saving}
-                            className="mr-2"
+                            className="w-full sm:w-auto sm:mr-2"
                         >
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleCreateWin()} disabled={saving}>
+                        <Button type="button" onClick={() => void handleCreateWin()} disabled={saving} className="w-full sm:w-auto">
                             {saving ? "Creating…" : "Create"}
                         </Button>
                     </DialogFooter>
@@ -507,10 +476,7 @@ export default function AdminWindowsPage() {
                     <div className="grid gap-4">
                         <div className="grid gap-2">
                             <Label>Department</Label>
-                            <Input
-                                value={selectedWin ? (deptById.get(selectedWin.department)?.name ?? "—") : ""}
-                                readOnly
-                            />
+                            <Input value={selectedWin ? deptById.get(selectedWin.department)?.name ?? "—" : ""} readOnly />
                             <p className="text-xs text-muted-foreground">
                                 Window department can’t be changed (create a new window instead).
                             </p>
@@ -518,11 +484,7 @@ export default function AdminWindowsPage() {
 
                         <div className="grid gap-2">
                             <Label htmlFor="e-win-name">Window name</Label>
-                            <Input
-                                id="e-win-name"
-                                value={eWinName}
-                                onChange={(e) => setEWinName(e.target.value)}
-                            />
+                            <Input id="e-win-name" value={eWinName} onChange={(e) => setEWinName(e.target.value)} />
                         </div>
 
                         <div className="grid gap-2">
@@ -547,7 +509,8 @@ export default function AdminWindowsPage() {
                         </div>
                     </div>
 
-                    <DialogFooter className="gap-2 sm:gap-0">
+                    {/* ✅ Mobile footer fix */}
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
                             variant="outline"
@@ -556,12 +519,12 @@ export default function AdminWindowsPage() {
                                 setSelectedWin(null)
                             }}
                             disabled={saving}
-                            className="mr-2"
+                            className="w-full sm:w-auto sm:mr-2"
                         >
                             Cancel
                         </Button>
 
-                        <Button type="button" onClick={() => void handleSaveWin()} disabled={saving}>
+                        <Button type="button" onClick={() => void handleSaveWin()} disabled={saving} className="w-full sm:w-auto">
                             {saving ? "Saving…" : "Save"}
                         </Button>
                     </DialogFooter>
