@@ -35,7 +35,7 @@ export const STAFF_NAV_ITEMS: NavMainItem[] = [
     { title: "Dashboard", href: "/staff/dashboard", icon: LayoutDashboard },
     { title: "Queue", href: "/staff/queue", icon: Ticket },
     { title: "Now Serving", href: "/staff/now-serving", icon: Megaphone },
-    { title: "Public Display", href: "/display", icon: Monitor },
+    { title: "Public Display", href: "/staff/display", icon: Monitor },
     { title: "Reports", href: "/staff/reports", icon: BarChart3 },
     { title: "Settings", href: "/staff/settings", icon: Settings },
 ]
