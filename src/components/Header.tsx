@@ -124,7 +124,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     if (variant === "student") {
         return (
             <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
-                <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+                <div className="mx-auto flex items-center justify-between px-4 py-3">
                     {/* ✅ Keep /student home redirection */}
                     <Link to="/student" className="flex items-center gap-3">
                         <div className="flex h-12 w-12 items-center justify-center rounded-lg border">
@@ -226,7 +226,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     // ✅ Landing header (original behavior)
     return (
         <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
-            <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+            <div className="mx-auto flex  items-center justify-between px-4 py-3">
                 {/* Brand */}
                 <Link to="/" className="flex items-center gap-3">
                     <div className="flex h-14 w-14 items-center justify-center rounded-lg border">
@@ -260,8 +260,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                                 navigationMenuTriggerStyle(),
                                                 "relative",
                                                 isActive &&
-                                                    "bg-accent text-accent-foreground " +
-                                                        "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
+                                                "bg-accent text-accent-foreground " +
+                                                "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
                                             )}
                                         >
                                             <a
@@ -328,8 +328,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                             className={cn(
                                                 "relative w-full justify-start",
                                                 isActive &&
-                                                    "bg-accent text-accent-foreground " +
-                                                        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
+                                                "bg-accent text-accent-foreground " +
+                                                "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
                                             )}
                                             asChild
                                         >

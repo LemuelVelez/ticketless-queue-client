@@ -11,10 +11,10 @@ import { Separator } from "@/components/ui/separator"
 
 export default function LandingPage() {
     return (
-        <div className="min-h-screen bg-background text-foreground">
+        <div className="min-h-screen bg-background text-foreground mx-auto">
             <Header />
 
-            <main className="mx-auto max-w-6xl px-4">
+            <main className="mx-auto  px-4">
                 <Hero />
 
                 <Separator className="my-12" />

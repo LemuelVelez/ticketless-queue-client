@@ -364,7 +364,7 @@ export default function Hero() {
                                                             </div>
                                                         </div>
 
-                                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                        <div className="flex flex-col-reverse items-center justify-between text-xs text-muted-foreground">
                                                             <span>
                                                                 {snap?.fetchedAt
                                                                     ? `Updated ${formatAgo(Date.now() - snap.fetchedAt)}`
