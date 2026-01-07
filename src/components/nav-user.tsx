@@ -43,7 +43,15 @@ export type DashboardUser = {
 type NavUserProps = {
     user: DashboardUser
     className?: string
+
+    /**
+     * Optional manual override.
+     * If not provided, it auto-routes based on the logged-in role:
+     * - ADMIN -> /admin/settings
+     * - STAFF -> /staff/settings
+     */
     settingsHref?: string
+
     /**
      * Where to navigate after logout confirmation.
      * Default: /login
@@ -79,7 +87,7 @@ function pickNonEmptyString(v: unknown): string {
 export function NavUser({
     user,
     className,
-    settingsHref = "/staff/settings",
+    settingsHref,
     logoutHref = "/login",
     dropdownSide = "right",
     dropdownAlign = "end",
@@ -92,7 +100,7 @@ export function NavUser({
     const resolvedDropdownSide: NavUserProps["dropdownSide"] = isMobile ? "top" : dropdownSide
 
     const navigate = useNavigate()
-    const { logout } = useSession()
+    const { logout, user: sessionUser } = useSession()
 
     const [logoutOpen, setLogoutOpen] = React.useState(false)
 
@@ -118,6 +126,27 @@ export function NavUser({
 
     const displayName = propName || storedName || "User"
     const displayEmail = propEmail || storedEmail || "—"
+
+    // ✅ Role-based settings redirect (fix)
+    const role = pickNonEmptyString((sessionUser as any)?.role) || pickNonEmptyString((storedUser as any)?.role) || "STAFF"
+    const autoSettingsHref = role === "ADMIN" ? "/admin/settings" : "/staff/settings"
+
+    // If caller explicitly passed settingsHref, respect it.
+    // Otherwise auto-route based on role.
+    const resolvedSettingsHref = (() => {
+        const manual = pickNonEmptyString(settingsHref)
+        if (manual) return manual
+
+        return autoSettingsHref
+    })()
+
+    // Extra safety: if a wrong default was passed in old usage, correct it by role.
+    const finalSettingsHref =
+        role === "ADMIN" && resolvedSettingsHref === "/staff/settings"
+            ? "/admin/settings"
+            : role !== "ADMIN" && resolvedSettingsHref === "/admin/settings"
+                ? "/staff/settings"
+                : resolvedSettingsHref
 
     // ---- Avatar resolution (prop -> storage -> signed URL fallback) ----
     const propAvatarUrl = pickNonEmptyString((user as any)?.avatarUrl)
@@ -225,11 +254,18 @@ export function NavUser({
                             <DropdownMenuSeparator />
 
                             <DropdownMenuGroup>
-                                <DropdownMenuItem asChild>
-                                    <a href={settingsHref} className="flex items-center gap-2">
+                                {/* ✅ Fix: use SPA navigation instead of <a href>, and auto-route by role */}
+                                <DropdownMenuItem
+                                    className="cursor-pointer"
+                                    onSelect={(e) => {
+                                        e.preventDefault()
+                                        navigate(finalSettingsHref)
+                                    }}
+                                >
+                                    <div className="flex items-center gap-2">
                                         <Settings className="h-4 w-4" />
                                         Settings
-                                    </a>
+                                    </div>
                                 </DropdownMenuItem>
                             </DropdownMenuGroup>
 
