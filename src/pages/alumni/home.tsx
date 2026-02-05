@@ -2,7 +2,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { Home, QrCode, Monitor, Maximize2, Ticket, User } from "lucide-react"
+import { Home, Ticket, User, Monitor } from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
@@ -21,7 +21,7 @@ function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
 }
 
-export default function StudentHomePage() {
+export default function AlumniHomePage() {
     const location = useLocation()
 
     const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
@@ -74,11 +74,6 @@ export default function StudentHomePage() {
         return `/display?departmentId=${encodeURIComponent(departmentId)}`
     }, [departmentId])
 
-    const presentUrl = React.useMemo(() => {
-        if (!departmentId) return "/display?present=1"
-        return `/display?departmentId=${encodeURIComponent(departmentId)}&present=1`
-    }, [departmentId])
-
     return (
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
@@ -88,25 +83,25 @@ export default function StudentHomePage() {
                     <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary" className="gap-2">
                             <Home className="h-3.5 w-3.5" />
-                            Student
+                            Alumni
                         </Badge>
                         {selectedDept?.name ? <Badge variant="outline">{selectedDept.name}</Badge> : null}
                     </div>
 
-                    <h1 className="mt-3 text-2xl font-semibold tracking-tight">Student Portal</h1>
+                    <h1 className="mt-3 text-2xl font-semibold tracking-tight">Alumni Portal</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Select your department, then open the page you need.
+                        Choose your department, then join queue, check your active ticket, or manage your profile.
                     </p>
                 </div>
 
                 <Card className="min-w-0">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
-                            <QrCode className="h-5 w-5" />
-                            Quick Start
+                            <Ticket className="h-5 w-5" />
+                            Quick Access
                         </CardTitle>
                         <CardDescription>
-                            Uses shadcn/ui controls built on Radix UI primitives (accessible select/buttons/switches).
+                            Built with shadcn/ui components (Radix UI primitives) for accessible controls and dialogs.
                         </CardDescription>
                     </CardHeader>
 
@@ -141,10 +136,10 @@ export default function StudentHomePage() {
 
                                 <Separator />
 
-                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                     <Button asChild className="gap-2" disabled={!departments.length}>
                                         <Link to={joinUrl}>
-                                            <QrCode className="h-4 w-4" />
+                                            <Ticket className="h-4 w-4" />
                                             Join Queue
                                         </Link>
                                     </Button>
@@ -163,23 +158,16 @@ export default function StudentHomePage() {
                                         </Link>
                                     </Button>
 
-                                    <Button asChild variant="outline" className="gap-2" disabled={!departments.length}>
+                                    <Button asChild variant="ghost" className="gap-2" disabled={!departments.length}>
                                         <Link to={displayUrl}>
                                             <Monitor className="h-4 w-4" />
                                             Public Display
                                         </Link>
                                     </Button>
-
-                                    <Button asChild variant="secondary" className="gap-2" disabled={!departments.length}>
-                                        <Link to={presentUrl}>
-                                            <Maximize2 className="h-4 w-4" />
-                                            Presentation
-                                        </Link>
-                                    </Button>
                                 </div>
 
                                 <div className="rounded-lg border p-4 text-xs text-muted-foreground">
-                                    Tip: For TV/monitor viewing, open <b>Presentation</b> for fullscreen mode.
+                                    Tip: Use <b>My Tickets</b> to quickly check your current active queue number.
                                 </div>
                             </>
                         )}

@@ -22,27 +22,32 @@ export type NavMainItem = {
     items?: Array<{ title: string; href: string }>
 }
 
-export type ParticipantNavRole = "STUDENT" | "GUEST"
+export type ParticipantNavRole = "STUDENT" | "ALUMNI" | "GUEST"
 
 /**
- * Participant nav (authenticated student/guest pages).
+ * Participant nav (authenticated participant pages).
+ * GUEST is intentionally mapped to ALUMNI routes.
  */
 export const STUDENT_NAV_ITEMS: NavMainItem[] = [
-    { title: "Home", href: "/", icon: Home },
-    { title: "Join Queue", href: "/queue/join", icon: Ticket },
-    { title: "My Tickets", href: "/queue/my-tickets", icon: GraduationCap },
-    { title: "Profile", href: "/profile", icon: User },
+    { title: "Home", href: "/student/home", icon: Home },
+    { title: "Join Queue", href: "/student/join", icon: Ticket },
+    { title: "My Tickets", href: "/student/my-tickets", icon: GraduationCap },
+    { title: "Profile", href: "/student/profile", icon: User },
 ]
 
-export const GUEST_NAV_ITEMS: NavMainItem[] = [
-    { title: "Home", href: "/", icon: Home },
-    { title: "Join Queue", href: "/queue/join", icon: Ticket },
-    { title: "My Tickets", href: "/queue/my-tickets", icon: Ticket },
-    { title: "Profile", href: "/profile", icon: User },
+export const ALUMNI_NAV_ITEMS: NavMainItem[] = [
+    { title: "Home", href: "/alumni/home", icon: Home },
+    { title: "Join Queue", href: "/alumni/join", icon: Ticket },
+    { title: "My Tickets", href: "/alumni/my-tickets", icon: Ticket },
+    { title: "Profile", href: "/alumni/profile", icon: User },
 ]
+
+// Guest uses the same pages/routes as Alumni
+export const GUEST_NAV_ITEMS: NavMainItem[] = ALUMNI_NAV_ITEMS
 
 export const PARTICIPANT_NAV_ITEMS: Record<ParticipantNavRole, NavMainItem[]> = {
     STUDENT: STUDENT_NAV_ITEMS,
+    ALUMNI: ALUMNI_NAV_ITEMS,
     GUEST: GUEST_NAV_ITEMS,
 }
 

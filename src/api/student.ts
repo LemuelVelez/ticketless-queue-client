@@ -112,6 +112,71 @@ export type AlumniVisitorLoginPayload = {
     [key: string]: any
 }
 
+export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "SERVED" | "OUT"
+
+export type Ticket = {
+    _id: string
+    department?: string | Department | { _id?: string; id?: string; name?: string; enabled?: boolean } | null
+    dateKey: string
+    queueNumber: number
+    studentId?: string
+    phone?: string
+    status: TicketStatus
+    windowNumber?: number | null
+    calledAt?: string | null
+    waitingSince?: string | null
+    createdAt?: string
+    updatedAt?: string
+    [key: string]: any
+}
+
+export type JoinQueuePayload = {
+    // Legacy/public flow
+    departmentId?: string
+    studentId?: string
+    phone?: string
+
+    // Participant-session flow
+    transactionKeys?: string[]
+    presentDirectlyToDisplayMonitor?: boolean
+    shouldDisplayImmediately?: boolean
+
+    [key: string]: any
+}
+
+export type JoinQueueResponse = {
+    ticket: Ticket
+    join?: {
+        ticketId: string
+        queueNumber: number
+        dateKey: string
+        status: TicketStatus
+        windowNumber?: number
+        staffAssigned?: string
+        accountName?: string
+        nameOfPersonInCharge?: string
+        canPresentDirectlyToDisplayMonitor?: boolean
+        voiceAnnouncement?: string
+        [key: string]: any
+    }
+    [key: string]: any
+}
+
+export type FindActiveTicketResponse = {
+    ticket: Ticket | null
+    [key: string]: any
+}
+
+export type GetTicketResponse = {
+    ticket: Ticket | null
+    transactions?: {
+        transactionKeys?: string[]
+        transactionLabels?: string[]
+        participantType?: string
+    } | null
+    [key: string]: any
+}
+
 export type PresentToDisplayPayload = {
     ticketId: string
     [key: string]: any
@@ -119,6 +184,7 @@ export type PresentToDisplayPayload = {
 
 export type PresentToDisplayResponse = {
     ok?: boolean
+    ticket?: Ticket
     [key: string]: any
 }
 
@@ -155,8 +221,8 @@ function persistToken<T extends ParticipantAuthResponse>(res: T): T {
     return res
 }
 
-export const guestApi = {
-    // Public departments (for signup dropdown)
+export const studentApi = {
+    // Public departments (for dropdowns)
     listDepartments: () => api.get<{ departments: Department[] }>("/public/departments", { auth: false }),
 
     // Participant signup
@@ -217,7 +283,29 @@ export const guestApi = {
         }
     },
 
-    // Display monitor presence (participant-auth required)
+    // Queue endpoints (supports both legacy and participant-session payloads)
+    joinQueue: (payload: JoinQueuePayload) =>
+        api.post<JoinQueueResponse>("/public/tickets/join", payload, {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
+
+    findActiveByStudent: (payload: { departmentId: string; studentId: string }) =>
+        api.get<FindActiveTicketResponse>(
+            `/public/tickets?departmentId=${encodeURIComponent(payload.departmentId)}&studentId=${encodeURIComponent(payload.studentId)}`,
+            {
+                auth: false,
+                headers: participantAuthHeaders(),
+            }
+        ),
+
+    getTicket: (id: string) =>
+        api.get<GetTicketResponse>(`/public/tickets/${encodeURIComponent(String(id).trim())}`, {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
+
+    // Display monitor presence (participant-auth/session token supported)
     presentToDisplayMonitor: (payload: PresentToDisplayPayload) =>
         api.post<PresentToDisplayResponse>("/public/tickets/present", payload, {
             auth: false,
@@ -231,3 +319,6 @@ export const guestApi = {
             headers: participantAuthHeaders(),
         }),
 }
+
+// Compatibility alias for modules that still import guestApi from student.ts
+export const guestApi = studentApi

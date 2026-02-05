@@ -21,6 +21,10 @@ function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
 }
 
+function normalizeMobile(value: string) {
+    return value.replace(/[^\d+]/g, "").trim()
+}
+
 function deptNameFromTicketDepartment(dept: any, fallback?: string) {
     if (!dept) return fallback ?? "—"
     if (typeof dept === "string") return fallback ?? "—"
@@ -44,20 +48,19 @@ function statusBadgeVariant(status?: string) {
     }
 }
 
-export default function StudentJoinPage() {
+export default function AlumniJoinPage() {
     const location = useLocation()
 
     const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
     const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
-    const preStudentId = React.useMemo(() => pickNonEmptyString(qs.get("studentId")), [qs])
+    const preMobile = React.useMemo(() => pickNonEmptyString(qs.get("mobileNumber") || qs.get("phone")), [qs])
     const ticketId = React.useMemo(() => pickNonEmptyString(qs.get("ticketId") || qs.get("id")), [qs])
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
 
     const [departmentId, setDepartmentId] = React.useState<string>("")
-    const [studentId, setStudentId] = React.useState<string>(preStudentId)
-    const [phone, setPhone] = React.useState<string>("")
+    const [mobileNumber, setMobileNumber] = React.useState<string>(preMobile)
 
     const [busy, setBusy] = React.useState(false)
     const [ticket, setTicket] = React.useState<Ticket | null>(null)
@@ -75,10 +78,10 @@ export default function StudentJoinPage() {
     const myTicketsUrl = React.useMemo(() => {
         const q = new URLSearchParams()
         if (departmentId) q.set("departmentId", departmentId)
-        if (studentId.trim()) q.set("studentId", studentId.trim())
+        if (mobileNumber.trim()) q.set("mobileNumber", mobileNumber.trim())
         const qsStr = q.toString()
         return `/queue/my-tickets${qsStr ? `?${qsStr}` : ""}`
-    }, [departmentId, studentId])
+    }, [departmentId, mobileNumber])
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -111,7 +114,9 @@ export default function StudentJoinPage() {
                 typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
 
             if (deptIdFromTicket) setDepartmentId(deptIdFromTicket)
-            if ((res.ticket as any)?.studentId) setStudentId(String((res.ticket as any).studentId))
+
+            const sid = pickNonEmptyString((res.ticket as any)?.studentId)
+            if (sid) setMobileNumber(sid)
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load ticket.")
         } finally {
@@ -128,13 +133,17 @@ export default function StudentJoinPage() {
     }, [loadTicketById])
 
     async function onFindActive() {
-        const sid = studentId.trim()
+        const mobile = normalizeMobile(mobileNumber)
         if (!departmentId) return toast.error("Please select a department.")
-        if (!sid) return toast.error("Please enter your Student ID.")
+        if (!mobile) return toast.error("Please enter your mobile number.")
 
         setBusy(true)
         try {
-            const res = await studentApi.findActiveByStudent({ departmentId, studentId: sid })
+            const res = await studentApi.findActiveByStudent({
+                departmentId,
+                studentId: mobile,
+            })
+
             if (res.ticket) {
                 setTicket(res.ticket)
                 toast.success("Active ticket found.")
@@ -150,18 +159,17 @@ export default function StudentJoinPage() {
     }
 
     async function onJoin() {
-        const sid = studentId.trim()
-        const ph = phone.trim()
+        const mobile = normalizeMobile(mobileNumber)
 
         if (!departmentId) return toast.error("Please select a department.")
-        if (!sid) return toast.error("Student ID is required.")
+        if (!mobile) return toast.error("Mobile number is required.")
 
         setBusy(true)
         try {
             const res = await studentApi.joinQueue({
                 departmentId,
-                studentId: sid,
-                phone: ph || undefined,
+                studentId: mobile, // legacy compatible identifier field
+                phone: mobile,
             })
             setTicket(res.ticket)
             toast.success("You are now in the queue.")
@@ -192,16 +200,16 @@ export default function StudentJoinPage() {
                 <div className="mb-6">
                     <h1 className="text-2xl font-semibold tracking-tight">Join Queue</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Select your department and enter Student ID to get your queue number.
+                        Select department and enter your mobile number to receive your queue number.
                     </p>
                 </div>
 
                 <div className="grid gap-6">
                     <Card className="min-w-0">
                         <CardHeader>
-                            <CardTitle>Queue Entry</CardTitle>
+                            <CardTitle>Alumni Queue Entry</CardTitle>
                             <CardDescription>
-                                If you already joined today, use <b>Find my ticket</b>.
+                                If you already joined today, use <b>Find my ticket</b> instead.
                             </CardDescription>
                         </CardHeader>
 
@@ -236,37 +244,24 @@ export default function StudentJoinPage() {
                                         </div>
 
                                         <div className="space-y-2 min-w-0">
-                                            <Label htmlFor="studentId">Student ID</Label>
+                                            <Label htmlFor="mobile">Mobile Number</Label>
                                             <Input
-                                                id="studentId"
-                                                value={studentId}
-                                                onChange={(e) => setStudentId(e.target.value)}
-                                                placeholder="e.g. TC-20-A-00001"
-                                                autoComplete="off"
-                                                inputMode="text"
+                                                id="mobile"
+                                                value={mobileNumber}
+                                                onChange={(e) => setMobileNumber(e.target.value)}
+                                                placeholder="e.g. 09xxxxxxxxx or +639xxxxxxxxx"
+                                                autoComplete="tel"
+                                                inputMode="tel"
                                                 disabled={busy}
                                             />
                                         </div>
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <Label htmlFor="phone">Phone (optional)</Label>
-                                        <Input
-                                            id="phone"
-                                            value={phone}
-                                            onChange={(e) => setPhone(e.target.value)}
-                                            placeholder="e.g. 09xxxxxxxxx"
-                                            autoComplete="tel"
-                                            inputMode="tel"
-                                            disabled={busy}
-                                        />
                                     </div>
 
                                     <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                                         <Button type="button" variant="outline" onClick={() => void onFindActive()} disabled={busy}>
                                             Find my ticket
                                         </Button>
-                                        <Button type="button" onClick={() => void onJoin()} disabled={busy || !departmentId || !studentId.trim()}>
+                                        <Button type="button" onClick={() => void onJoin()} disabled={busy || !departmentId || !normalizeMobile(mobileNumber)}>
                                             {busy ? "Please wait…" : "Join Queue"}
                                         </Button>
                                     </div>

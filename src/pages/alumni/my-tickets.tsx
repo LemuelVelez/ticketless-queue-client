@@ -2,11 +2,12 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
+import { Ticket, RefreshCw } from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { studentApi, type Department, type Ticket } from "@/api/student"
+import { studentApi, type Department, type Ticket as TicketType } from "@/api/student"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -15,10 +16,15 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
+}
+
+function normalizeMobile(value: string) {
+    return value.replace(/[^\d+]/g, "").trim()
 }
 
 function deptNameFromTicketDepartment(dept: any, fallback?: string) {
@@ -44,41 +50,28 @@ function statusBadgeVariant(status?: string) {
     }
 }
 
-export default function StudentJoinPage() {
+export default function AlumniMyTicketsPage() {
     const location = useLocation()
 
     const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
     const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
-    const preStudentId = React.useMemo(() => pickNonEmptyString(qs.get("studentId")), [qs])
+    const preMobile = React.useMemo(() => pickNonEmptyString(qs.get("mobileNumber") || qs.get("phone")), [qs])
     const ticketId = React.useMemo(() => pickNonEmptyString(qs.get("ticketId") || qs.get("id")), [qs])
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
 
     const [departmentId, setDepartmentId] = React.useState<string>("")
-    const [studentId, setStudentId] = React.useState<string>(preStudentId)
-    const [phone, setPhone] = React.useState<string>("")
+    const [mobileNumber, setMobileNumber] = React.useState<string>(preMobile)
 
+    const [ticket, setTicket] = React.useState<TicketType | null>(null)
     const [busy, setBusy] = React.useState(false)
-    const [ticket, setTicket] = React.useState<Ticket | null>(null)
+    const [autoRefresh, setAutoRefresh] = React.useState(false)
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
         [departments, departmentId],
     )
-
-    const publicDisplayUrl = React.useMemo(() => {
-        if (!departmentId) return ""
-        return `/display?departmentId=${encodeURIComponent(departmentId)}`
-    }, [departmentId])
-
-    const myTicketsUrl = React.useMemo(() => {
-        const q = new URLSearchParams()
-        if (departmentId) q.set("departmentId", departmentId)
-        if (studentId.trim()) q.set("studentId", studentId.trim())
-        const qsStr = q.toString()
-        return `/queue/my-tickets${qsStr ? `?${qsStr}` : ""}`
-    }, [departmentId, studentId])
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -99,6 +92,32 @@ export default function StudentJoinPage() {
         }
     }, [preDeptId])
 
+    const findActive = React.useCallback(async () => {
+        const mobile = normalizeMobile(mobileNumber)
+        if (!departmentId) return toast.error("Please select a department.")
+        if (!mobile) return toast.error("Please enter your mobile number.")
+
+        setBusy(true)
+        try {
+            const res = await studentApi.findActiveByStudent({
+                departmentId,
+                studentId: mobile,
+            })
+
+            setTicket(res.ticket ?? null)
+
+            if (res.ticket) {
+                toast.success("Active ticket found.")
+            } else {
+                toast.message("No active ticket found for today.")
+            }
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to find active ticket.")
+        } finally {
+            setBusy(false)
+        }
+    }, [departmentId, mobileNumber])
+
     const loadTicketById = React.useCallback(async () => {
         if (!ticketId) return
         setBusy(true)
@@ -111,7 +130,9 @@ export default function StudentJoinPage() {
                 typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
 
             if (deptIdFromTicket) setDepartmentId(deptIdFromTicket)
-            if ((res.ticket as any)?.studentId) setStudentId(String((res.ticket as any).studentId))
+
+            const sid = pickNonEmptyString((res.ticket as any)?.studentId)
+            if (sid) setMobileNumber(sid)
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load ticket.")
         } finally {
@@ -127,62 +148,34 @@ export default function StudentJoinPage() {
         void loadTicketById()
     }, [loadTicketById])
 
-    async function onFindActive() {
-        const sid = studentId.trim()
-        if (!departmentId) return toast.error("Please select a department.")
-        if (!sid) return toast.error("Please enter your Student ID.")
+    React.useEffect(() => {
+        if (!autoRefresh) return
+        if (!departmentId || !normalizeMobile(mobileNumber)) return
 
-        setBusy(true)
-        try {
-            const res = await studentApi.findActiveByStudent({ departmentId, studentId: sid })
-            if (res.ticket) {
-                setTicket(res.ticket)
-                toast.success("Active ticket found.")
-            } else {
-                setTicket(null)
-                toast.message("No active ticket found for today.")
-            }
-        } catch (e: any) {
-            toast.error(e?.message ?? "Failed to find active ticket.")
-        } finally {
-            setBusy(false)
-        }
-    }
+        const t = window.setInterval(() => {
+            void findActive()
+        }, 7000)
 
-    async function onJoin() {
-        const sid = studentId.trim()
-        const ph = phone.trim()
-
-        if (!departmentId) return toast.error("Please select a department.")
-        if (!sid) return toast.error("Student ID is required.")
-
-        setBusy(true)
-        try {
-            const res = await studentApi.joinQueue({
-                departmentId,
-                studentId: sid,
-                phone: ph || undefined,
-            })
-            setTicket(res.ticket)
-            toast.success("You are now in the queue.")
-        } catch (e: any) {
-            const status = (e as any)?.status
-            const existing = (e as any)?.data?.ticket
-            if (status === 409 && existing) {
-                setTicket(existing as Ticket)
-                toast.message("You already have an active ticket for today.")
-                return
-            }
-            toast.error(e?.message ?? "Failed to join queue.")
-        } finally {
-            setBusy(false)
-        }
-    }
+        return () => window.clearInterval(t)
+    }, [autoRefresh, departmentId, mobileNumber, findActive])
 
     const ticketDeptName = React.useMemo(() => {
         if (!ticket) return "—"
         return deptNameFromTicketDepartment(ticket.department, selectedDept?.name)
     }, [ticket, selectedDept?.name])
+
+    const joinUrl = React.useMemo(() => {
+        const q = new URLSearchParams()
+        if (departmentId) q.set("departmentId", departmentId)
+        if (mobileNumber.trim()) q.set("mobileNumber", mobileNumber.trim())
+        const qsStr = q.toString()
+        return `/queue/join${qsStr ? `?${qsStr}` : ""}`
+    }, [departmentId, mobileNumber])
+
+    const displayUrl = React.useMemo(() => {
+        if (!departmentId) return "/display"
+        return `/display?departmentId=${encodeURIComponent(departmentId)}`
+    }, [departmentId])
 
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -190,25 +183,25 @@ export default function StudentJoinPage() {
 
             <main className="mx-auto w-full max-w-3xl px-4 py-10">
                 <div className="mb-6">
-                    <h1 className="text-2xl font-semibold tracking-tight">Join Queue</h1>
+                    <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+                        <Ticket className="h-6 w-6" />
+                        My Tickets
+                    </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Select your department and enter Student ID to get your queue number.
+                        Lookup your current active queue ticket using your mobile number.
                     </p>
                 </div>
 
                 <div className="grid gap-6">
                     <Card className="min-w-0">
                         <CardHeader>
-                            <CardTitle>Queue Entry</CardTitle>
-                            <CardDescription>
-                                If you already joined today, use <b>Find my ticket</b>.
-                            </CardDescription>
+                            <CardTitle>Find Active Ticket</CardTitle>
+                            <CardDescription>Enter your department and mobile number.</CardDescription>
                         </CardHeader>
 
                         <CardContent className="space-y-5">
                             {loadingDepts ? (
                                 <div className="space-y-3">
-                                    <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                 </div>
@@ -230,45 +223,44 @@ export default function StudentJoinPage() {
                                                     ))}
                                                 </SelectContent>
                                             </Select>
-                                            {!departments.length ? (
-                                                <div className="text-xs text-muted-foreground">No departments available.</div>
-                                            ) : null}
                                         </div>
 
                                         <div className="space-y-2 min-w-0">
-                                            <Label htmlFor="studentId">Student ID</Label>
+                                            <Label htmlFor="mobile">Mobile Number</Label>
                                             <Input
-                                                id="studentId"
-                                                value={studentId}
-                                                onChange={(e) => setStudentId(e.target.value)}
-                                                placeholder="e.g. TC-20-A-00001"
-                                                autoComplete="off"
-                                                inputMode="text"
+                                                id="mobile"
+                                                value={mobileNumber}
+                                                onChange={(e) => setMobileNumber(e.target.value)}
+                                                placeholder="e.g. 09xxxxxxxxx"
+                                                autoComplete="tel"
+                                                inputMode="tel"
                                                 disabled={busy}
                                             />
                                         </div>
                                     </div>
 
-                                    <div className="space-y-2">
-                                        <Label htmlFor="phone">Phone (optional)</Label>
-                                        <Input
-                                            id="phone"
-                                            value={phone}
-                                            onChange={(e) => setPhone(e.target.value)}
-                                            placeholder="e.g. 09xxxxxxxxx"
-                                            autoComplete="tel"
-                                            inputMode="tel"
-                                            disabled={busy}
-                                        />
-                                    </div>
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <Switch
+                                                id="autoRefresh"
+                                                checked={autoRefresh}
+                                                onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                                disabled={busy}
+                                            />
+                                            <Label htmlFor="autoRefresh" className="text-sm">
+                                                Auto refresh every 7s
+                                            </Label>
+                                        </div>
 
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                        <Button type="button" variant="outline" onClick={() => void onFindActive()} disabled={busy}>
-                                            Find my ticket
-                                        </Button>
-                                        <Button type="button" onClick={() => void onJoin()} disabled={busy || !departmentId || !studentId.trim()}>
-                                            {busy ? "Please wait…" : "Join Queue"}
-                                        </Button>
+                                        <div className="flex gap-2">
+                                            <Button variant="outline" onClick={() => void findActive()} disabled={busy}>
+                                                {busy ? "Please wait…" : "Find Ticket"}
+                                            </Button>
+                                            <Button onClick={() => void findActive()} disabled={busy} className="gap-2">
+                                                <RefreshCw className="h-4 w-4" />
+                                                Refresh
+                                            </Button>
+                                        </div>
                                     </div>
                                 </>
                             )}
@@ -278,8 +270,8 @@ export default function StudentJoinPage() {
                     {ticket ? (
                         <Card className="min-w-0">
                             <CardHeader>
-                                <CardTitle>Your Ticket</CardTitle>
-                                <CardDescription>Keep this page open or take a screenshot.</CardDescription>
+                                <CardTitle>Active Ticket</CardTitle>
+                                <CardDescription>Current ticket details for today.</CardDescription>
                             </CardHeader>
 
                             <CardContent className="space-y-4">
@@ -311,17 +303,24 @@ export default function StudentJoinPage() {
                                 </div>
 
                                 <div className="grid gap-2 sm:grid-cols-2">
-                                    <Button asChild variant="outline" className="w-full" disabled={!departmentId}>
-                                        <Link to={publicDisplayUrl}>Open Public Display</Link>
+                                    <Button asChild variant="outline" className="w-full">
+                                        <Link to={displayUrl}>Open Public Display</Link>
                                     </Button>
-
                                     <Button asChild variant="secondary" className="w-full">
-                                        <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                        <Link to={joinUrl}>Join Again</Link>
                                     </Button>
                                 </div>
                             </CardContent>
                         </Card>
-                    ) : null}
+                    ) : (
+                        <Card>
+                            <CardContent className="pt-6">
+                                <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                    No active ticket loaded yet. Use <b>Find Ticket</b> above.
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
                 </div>
             </main>
 
