@@ -70,7 +70,7 @@ export function DashboardLayout({
                 </SidebarFooter>
             </Sidebar>
 
-            <SidebarInset>
+            <SidebarInset className="min-w-0">
                 <DashboardHeader
                     title={title}
                     user={user}
@@ -81,7 +81,7 @@ export function DashboardLayout({
                     {headerRightSlot}
                 </DashboardHeader>
 
-                <main className="flex-1 p-4 md:p-6">{children}</main>
+                <main className="flex-1 p-4 md:p-6 min-w-0">{children}</main>
             </SidebarInset>
         </SidebarProvider>
     )

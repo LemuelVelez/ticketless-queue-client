@@ -45,9 +45,26 @@ export type Ticket = {
     [key: string]: any
 }
 
+export type JoinQueuePayload = {
+    departmentId: string
+    studentId?: string
+    phone?: string
+    [key: string]: any
+}
+
 export type ListDepartmentsResponse = { departments: Department[] }
 export type TicketResponse = { ticket: Ticket }
 export type FindActiveTicketResponse = { ticket: Ticket | null }
+
+export type PresentToDisplayPayload = {
+    ticketId: string
+    [key: string]: any
+}
+
+export type PresentToDisplayResponse = {
+    ok: boolean
+    [key: string]: any
+}
 
 function toQuery(params?: Record<string, string | number | boolean | undefined | null>) {
     const qs = new URLSearchParams()
@@ -64,10 +81,18 @@ export const studentApi = {
     // Public
     listDepartments: () => api.get<ListDepartmentsResponse>("/public/departments", { auth: false }),
 
-    joinQueue: (payload: { departmentId: string; studentId: string; phone?: string }) =>
+    joinQueue: (payload: JoinQueuePayload) =>
         api.post<TicketResponse>("/public/tickets/join", payload, { auth: false }),
 
     getTicket: (id: string) => api.get<TicketResponse>(`/public/tickets/${encodeURIComponent(id)}`, { auth: false }),
+
+    // Display monitor presence
+    presentToDisplayMonitor: (payload: PresentToDisplayPayload) =>
+        api.post<PresentToDisplayResponse>("/public/tickets/present", payload, { auth: false }),
+
+    // Backward-compatible alias endpoint
+    presentToDisplayMonitorLegacy: (payload: PresentToDisplayPayload) =>
+        api.post<PresentToDisplayResponse>("/public/tickets/present-to-display-monitor", payload, { auth: false }),
 
     // Optional helper: find active ticket for today
     findActiveByStudent: (opts: { departmentId: string; studentId: string }) =>
