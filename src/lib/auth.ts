@@ -4,7 +4,15 @@ const SS_TOKEN_KEY = "qp_auth_token_session"
 const LS_USER_KEY = "qp_auth_user"
 const SS_USER_KEY = "qp_auth_user_session"
 
+// Participant (student/guest) auth keys
+const LS_PARTICIPANT_TOKEN_KEY = "qp_participant_token"
+const SS_PARTICIPANT_TOKEN_KEY = "qp_participant_token_session"
+
+const LS_PARTICIPANT_USER_KEY = "qp_participant_user"
+const SS_PARTICIPANT_USER_KEY = "qp_participant_user_session"
+
 export type AuthStorage = "local" | "session" | null
+export type ParticipantStorage = "local" | "session" | null
 
 export type StoredAuthUser = {
     id: string
@@ -22,6 +30,28 @@ export type StoredAuthUser = {
     [key: string]: unknown
 }
 
+export type StoredParticipantUser = {
+    id?: string
+    _id?: string
+    type?: string
+
+    // Common identity fields
+    name?: string
+    firstName?: string
+    middleName?: string
+    lastName?: string
+
+    tcNumber?: string
+    studentId?: string
+    mobileNumber?: string
+    phone?: string
+
+    departmentId?: string
+    departmentCode?: string
+
+    [key: string]: unknown
+}
+
 function canUseStorage(): boolean {
     return typeof window !== "undefined" && !!window.localStorage && !!window.sessionStorage
 }
@@ -34,60 +64,66 @@ function mergeDefined<T extends Record<string, unknown>>(base: T | null, patch: 
     return out as T
 }
 
-export function setAuthToken(token: string, rememberMe: boolean) {
-    if (!canUseStorage()) return
-
-    if (rememberMe) {
-        localStorage.setItem(LS_TOKEN_KEY, token)
-        sessionStorage.removeItem(SS_TOKEN_KEY)
-    } else {
-        sessionStorage.setItem(SS_TOKEN_KEY, token)
-        localStorage.removeItem(LS_TOKEN_KEY)
-    }
-}
-
-export function getAuthToken(): string | null {
+function hasStorageToken(localKey: string, sessionKey: string): AuthStorage {
     if (!canUseStorage()) return null
-    return localStorage.getItem(LS_TOKEN_KEY) || sessionStorage.getItem(SS_TOKEN_KEY)
-}
-
-export function clearAuthToken() {
-    if (!canUseStorage()) return
-    localStorage.removeItem(LS_TOKEN_KEY)
-    sessionStorage.removeItem(SS_TOKEN_KEY)
-}
-
-export function getAuthStorage(): AuthStorage {
-    if (!canUseStorage()) return null
-    if (localStorage.getItem(LS_TOKEN_KEY)) return "local"
-    if (sessionStorage.getItem(SS_TOKEN_KEY)) return "session"
+    if (localStorage.getItem(localKey)) return "local"
+    if (sessionStorage.getItem(sessionKey)) return "session"
     return null
 }
 
-export function setAuthUser(user: StoredAuthUser, rememberMe: boolean) {
+function setScopedToken(localKey: string, sessionKey: string, token: string, rememberMe: boolean) {
     if (!canUseStorage()) return
 
-    /**
-     * Fix: don't wipe fields (like email) when callers update the stored user
-     * with a partial user (e.g. /auth/me response missing email).
-     */
-    const prev = getAuthUser<StoredAuthUser>()
+    const clean = String(token ?? "").trim()
+    if (!clean) return
+
+    if (rememberMe) {
+        localStorage.setItem(localKey, clean)
+        sessionStorage.removeItem(sessionKey)
+    } else {
+        sessionStorage.setItem(sessionKey, clean)
+        localStorage.removeItem(localKey)
+    }
+}
+
+function getScopedToken(localKey: string, sessionKey: string): string | null {
+    if (!canUseStorage()) return null
+    return localStorage.getItem(localKey) || sessionStorage.getItem(sessionKey)
+}
+
+function clearScopedToken(localKey: string, sessionKey: string) {
+    if (!canUseStorage()) return
+    localStorage.removeItem(localKey)
+    sessionStorage.removeItem(sessionKey)
+}
+
+function setScopedUser<T extends Record<string, unknown>>(
+    localKey: string,
+    sessionKey: string,
+    user: T,
+    rememberMe: boolean,
+    readCurrent: () => T | null,
+) {
+    if (!canUseStorage()) return
+
+    // Merge so partial updates won't wipe stored fields
+    const prev = readCurrent()
     const merged = mergeDefined(prev, user)
     const raw = JSON.stringify(merged)
 
     if (rememberMe) {
-        localStorage.setItem(LS_USER_KEY, raw)
-        sessionStorage.removeItem(SS_USER_KEY)
+        localStorage.setItem(localKey, raw)
+        sessionStorage.removeItem(sessionKey)
     } else {
-        sessionStorage.setItem(SS_USER_KEY, raw)
-        localStorage.removeItem(LS_USER_KEY)
+        sessionStorage.setItem(sessionKey, raw)
+        localStorage.removeItem(localKey)
     }
 }
 
-export function getAuthUser<T extends StoredAuthUser = StoredAuthUser>(): T | null {
+function getScopedUser<T extends Record<string, unknown>>(localKey: string, sessionKey: string): T | null {
     if (!canUseStorage()) return null
 
-    const raw = localStorage.getItem(LS_USER_KEY) || sessionStorage.getItem(SS_USER_KEY)
+    const raw = localStorage.getItem(localKey) || sessionStorage.getItem(sessionKey)
     if (!raw) return null
     try {
         return JSON.parse(raw) as T
@@ -96,10 +132,41 @@ export function getAuthUser<T extends StoredAuthUser = StoredAuthUser>(): T | nu
     }
 }
 
-export function clearAuthUser() {
+function clearScopedUser(localKey: string, sessionKey: string) {
     if (!canUseStorage()) return
-    localStorage.removeItem(LS_USER_KEY)
-    sessionStorage.removeItem(SS_USER_KEY)
+    localStorage.removeItem(localKey)
+    sessionStorage.removeItem(sessionKey)
+}
+
+// ------------------------------
+// Staff/Admin auth session
+// ------------------------------
+export function setAuthToken(token: string, rememberMe: boolean) {
+    setScopedToken(LS_TOKEN_KEY, SS_TOKEN_KEY, token, rememberMe)
+}
+
+export function getAuthToken(): string | null {
+    return getScopedToken(LS_TOKEN_KEY, SS_TOKEN_KEY)
+}
+
+export function clearAuthToken() {
+    clearScopedToken(LS_TOKEN_KEY, SS_TOKEN_KEY)
+}
+
+export function getAuthStorage(): AuthStorage {
+    return hasStorageToken(LS_TOKEN_KEY, SS_TOKEN_KEY)
+}
+
+export function setAuthUser(user: StoredAuthUser, rememberMe: boolean) {
+    setScopedUser(LS_USER_KEY, SS_USER_KEY, user, rememberMe, () => getAuthUser<StoredAuthUser>())
+}
+
+export function getAuthUser<T extends StoredAuthUser = StoredAuthUser>(): T | null {
+    return getScopedUser<T>(LS_USER_KEY, SS_USER_KEY)
+}
+
+export function clearAuthUser() {
+    clearScopedUser(LS_USER_KEY, SS_USER_KEY)
 }
 
 export function setAuthSession(token: string, user: StoredAuthUser, rememberMe: boolean) {
@@ -110,4 +177,68 @@ export function setAuthSession(token: string, user: StoredAuthUser, rememberMe: 
 export function clearAuthSession() {
     clearAuthToken()
     clearAuthUser()
+}
+
+// ------------------------------
+// Participant (Student/Guest) auth session
+// ------------------------------
+export function setParticipantToken(token: string, rememberMe = true) {
+    setScopedToken(LS_PARTICIPANT_TOKEN_KEY, SS_PARTICIPANT_TOKEN_KEY, token, rememberMe)
+}
+
+export function getParticipantToken(): string | null {
+    return getScopedToken(LS_PARTICIPANT_TOKEN_KEY, SS_PARTICIPANT_TOKEN_KEY)
+}
+
+export function clearParticipantToken() {
+    clearScopedToken(LS_PARTICIPANT_TOKEN_KEY, SS_PARTICIPANT_TOKEN_KEY)
+}
+
+export function getParticipantStorage(): ParticipantStorage {
+    return hasStorageToken(LS_PARTICIPANT_TOKEN_KEY, SS_PARTICIPANT_TOKEN_KEY)
+}
+
+export function setParticipantUser(user: StoredParticipantUser, rememberMe = true) {
+    setScopedUser(
+        LS_PARTICIPANT_USER_KEY,
+        SS_PARTICIPANT_USER_KEY,
+        user,
+        rememberMe,
+        () => getParticipantUser<StoredParticipantUser>(),
+    )
+}
+
+export function getParticipantUser<T extends StoredParticipantUser = StoredParticipantUser>(): T | null {
+    return getScopedUser<T>(LS_PARTICIPANT_USER_KEY, SS_PARTICIPANT_USER_KEY)
+}
+
+export function clearParticipantUser() {
+    clearScopedUser(LS_PARTICIPANT_USER_KEY, SS_PARTICIPANT_USER_KEY)
+}
+
+export function setParticipantSession(token: string, user?: StoredParticipantUser, rememberMe = true) {
+    setParticipantToken(token, rememberMe)
+    if (user) setParticipantUser(user, rememberMe)
+}
+
+export function clearParticipantSession() {
+    clearParticipantToken()
+    clearParticipantUser()
+}
+
+/**
+ * Convenience helper used by HTTP clients that can work with either:
+ * - "staff" (admin/staff auth token)
+ * - "participant" (student/guest token)
+ */
+export function getAnyAuthToken(prefer: "staff" | "participant" = "staff"): string | null {
+    if (prefer === "participant") {
+        return getParticipantToken() || getAuthToken()
+    }
+    return getAuthToken() || getParticipantToken()
+}
+
+export function clearAllAuthSessions() {
+    clearAuthSession()
+    clearParticipantSession()
 }

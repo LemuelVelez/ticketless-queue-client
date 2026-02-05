@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { getApiBaseUrl } from "@/lib/env"
-import { getAuthToken } from "@/lib/auth"
+import { getAnyAuthToken, getAuthToken, getParticipantToken } from "@/lib/auth"
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+export type RequestAuthMode = boolean | "staff" | "participant" | "auto"
 
 export class ApiError extends Error {
     status: number
@@ -20,7 +21,14 @@ type RequestOptions = {
     method?: HttpMethod
     body?: unknown
     headers?: Record<string, string>
-    auth?: boolean
+    /**
+     * auth modes:
+     * - true / "staff": use staff/admin token (default)
+     * - "participant": use participant token
+     * - "auto": prefer staff token, fallback to participant token
+     * - false: no token
+     */
+    auth?: RequestAuthMode
     signal?: AbortSignal
 }
 
@@ -72,9 +80,43 @@ function buildUrl(path: string) {
     return joinUrl(base, cleanPath)
 }
 
-async function parseJsonSafe(res: Response) {
+function hasHeader(headers: Record<string, string>, key: string) {
+    const target = key.toLowerCase()
+    return Object.keys(headers).some((k) => k.toLowerCase() === target)
+}
+
+function getHeader(headers: Record<string, string>, key: string): string | undefined {
+    const target = key.toLowerCase()
+    const foundKey = Object.keys(headers).find((k) => k.toLowerCase() === target)
+    return foundKey ? headers[foundKey] : undefined
+}
+
+function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
+    const mode: RequestAuthMode = auth === undefined ? true : auth
+
+    if (mode === false) return null
+    if (mode === true || mode === "staff") return getAuthToken()
+    if (mode === "participant") return getParticipantToken()
+    return getAnyAuthToken("staff")
+}
+
+async function parseResponseSafe(res: Response) {
+    if (res.status === 204) return null
+
     const text = await res.text()
     if (!text) return null
+
+    const contentType = String(res.headers.get("content-type") || "").toLowerCase()
+    const looksJson = contentType.includes("application/json") || contentType.includes("+json")
+
+    if (looksJson) {
+        try {
+            return JSON.parse(text)
+        } catch {
+            // Fall through and return text for better diagnostics
+        }
+    }
+
     try {
         return JSON.parse(text)
     } catch {
@@ -87,6 +129,15 @@ function isBlobBody(body: unknown): body is Blob {
     return typeof Blob !== "undefined" && body instanceof Blob
 }
 
+function isBodyInitLike(body: unknown): body is BodyInit {
+    if (typeof body === "string") return true
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) return true
+    if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) return true
+    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body)) return true
+    if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) return true
+    return false
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = "GET", body, headers = {}, auth = true, signal } = options
 
@@ -95,8 +146,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         ...headers,
     }
 
-    const token = auth ? getAuthToken() : null
-    if (token) finalHeaders.Authorization = `Bearer ${token}`
+    // Respect caller-provided Authorization header.
+    if (!hasHeader(finalHeaders, "Authorization")) {
+        const token = resolveAuthToken(auth)
+        if (token) finalHeaders.Authorization = `Bearer ${token}`
+    }
 
     let finalBody: BodyInit | undefined
 
@@ -106,10 +160,24 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     } else if (isBlobBody(body)) {
         finalBody = body
         // Only set content-type if caller didn't already set it
-        if (!finalHeaders["Content-Type"] && body.type) finalHeaders["Content-Type"] = body.type
+        if (!hasHeader(finalHeaders, "Content-Type") && body.type) {
+            finalHeaders["Content-Type"] = body.type
+        }
     } else if (body !== undefined) {
-        finalHeaders["Content-Type"] = finalHeaders["Content-Type"] || "application/json"
-        finalBody = JSON.stringify(body)
+        if (isBodyInitLike(body)) {
+            finalBody = body
+            if (
+                typeof body === "string" &&
+                !hasHeader(finalHeaders, "Content-Type")
+            ) {
+                finalHeaders["Content-Type"] = "text/plain;charset=UTF-8"
+            }
+        } else {
+            if (!hasHeader(finalHeaders, "Content-Type")) {
+                finalHeaders["Content-Type"] = "application/json"
+            }
+            finalBody = JSON.stringify(body)
+        }
     }
 
     const url = buildUrl(path)
@@ -131,10 +199,15 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         )
     }
 
-    const data = await parseJsonSafe(res)
+    const data = await parseResponseSafe(res)
 
     if (!res.ok) {
-        const message = (data as any)?.message || res.statusText || "Request failed"
+        const message =
+            (data as any)?.message ||
+            getHeader(finalHeaders, "X-Error-Message") ||
+            res.statusText ||
+            "Request failed"
+
         throw new ApiError(message, res.status, data)
     }
 

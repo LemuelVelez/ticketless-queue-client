@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { api } from "@/lib/http"
 
-export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
+export type ParticipantType = "STUDENT" | "GUEST" | "ALUMNI_VISITOR" | "VISITOR"
 
 export type Department = {
     _id: string
@@ -10,51 +10,107 @@ export type Department = {
     enabled?: boolean
 }
 
-export type TicketDepartment =
-    | string
-    | {
-        _id?: string
-        id?: string
-        name?: string
-        enabled?: boolean
-    }
+export type Participant = {
+    id?: string
+    _id?: string
+    type?: ParticipantType
+    name?: string
+    email?: string
 
-export type Ticket = {
-    _id: string
-    department: TicketDepartment
-    dateKey: string
-    queueNumber: number
-
-    studentId: string
+    // Identity fields
+    studentId?: string
+    tcNumber?: string
+    mobileNumber?: string
     phone?: string
 
-    status: TicketStatus
-    holdAttempts: number
-
-    waitingSince?: string
-    window?: string
-    windowNumber?: number
-
-    calledAt?: string
-    servedAt?: string
-    outAt?: string
-
-    createdAt?: string
-    updatedAt?: string
+    // Profile fields
+    firstName?: string
+    middleName?: string
+    lastName?: string
+    departmentId?: string
+    departmentCode?: string
 
     [key: string]: any
 }
 
-export type JoinQueuePayload = {
+export type ParticipantTransaction = {
+    key: string
+    label: string
+    scope?: "INTERNAL" | "EXTERNAL"
+    [key: string]: any
+}
+
+export type ParticipantAuthResponse = {
+    ok?: boolean
+    token?: string
+    sessionToken?: string
+    participant?: Participant | null
+    availableTransactions?: ParticipantTransaction[]
+    [key: string]: any
+}
+
+export type ParticipantSessionResponse = {
+    session?: {
+        expiresAt?: string
+    } | null
+    participant?: Participant | null
+    availableTransactions?: ParticipantTransaction[]
+    [key: string]: any
+}
+
+export type StudentSignupPayload = {
+    firstName: string
+    middleName?: string
+    lastName: string
+    name?: string
+
+    tcNumber: string
     departmentId: string
+    mobileNumber: string
+    pin: string
+
+    // compatibility aliases
     studentId?: string
     phone?: string
+    password?: string
     [key: string]: any
 }
 
-export type ListDepartmentsResponse = { departments: Department[] }
-export type TicketResponse = { ticket: Ticket }
-export type FindActiveTicketResponse = { ticket: Ticket | null }
+export type AlumniVisitorSignupPayload = {
+    firstName: string
+    middleName?: string
+    lastName: string
+    name?: string
+
+    departmentId: string
+    mobileNumber: string
+    pin: string
+
+    // compatibility aliases
+    phone?: string
+    password?: string
+    [key: string]: any
+}
+
+export type StudentLoginPayload = {
+    tcNumber: string
+    pin: string
+
+    // compatibility aliases
+    studentId?: string
+    password?: string
+    [key: string]: any
+}
+
+export type AlumniVisitorLoginPayload = {
+    mobileNumber: string
+    pin: string
+
+    // compatibility aliases
+    phone?: string
+    password?: string
+    [key: string]: any
+}
 
 export type PresentToDisplayPayload = {
     ticketId: string
@@ -62,39 +118,116 @@ export type PresentToDisplayPayload = {
 }
 
 export type PresentToDisplayResponse = {
-    ok: boolean
+    ok?: boolean
     [key: string]: any
 }
 
-function toQuery(params?: Record<string, string | number | boolean | undefined | null>) {
-    const qs = new URLSearchParams()
-    if (!params) return ""
-    for (const [k, v] of Object.entries(params)) {
-        if (v === undefined || v === null || v === "") continue
-        qs.set(k, String(v))
-    }
-    const s = qs.toString()
-    return s ? `?${s}` : ""
+const PARTICIPANT_TOKEN_KEY = "qp_participant_token"
+
+export const participantAuthStorage = {
+    getToken(): string | null {
+        if (typeof window === "undefined") return null
+        return localStorage.getItem(PARTICIPANT_TOKEN_KEY)
+    },
+
+    setToken(token: string) {
+        if (typeof window === "undefined") return
+        const clean = String(token ?? "").trim()
+        if (!clean) return
+        localStorage.setItem(PARTICIPANT_TOKEN_KEY, clean)
+    },
+
+    clearToken() {
+        if (typeof window === "undefined") return
+        localStorage.removeItem(PARTICIPANT_TOKEN_KEY)
+    },
 }
 
-export const studentApi = {
-    // Public
-    listDepartments: () => api.get<ListDepartmentsResponse>("/public/departments", { auth: false }),
+function participantAuthHeaders(): Record<string, string> | undefined {
+    const token = participantAuthStorage.getToken()
+    if (!token) return undefined
+    return { Authorization: `Bearer ${token}` }
+}
 
-    joinQueue: (payload: JoinQueuePayload) =>
-        api.post<TicketResponse>("/public/tickets/join", payload, { auth: false }),
+function persistToken<T extends ParticipantAuthResponse>(res: T): T {
+    const token = res?.token || res?.sessionToken
+    if (token) participantAuthStorage.setToken(token)
+    return res
+}
 
-    getTicket: (id: string) => api.get<TicketResponse>(`/public/tickets/${encodeURIComponent(id)}`, { auth: false }),
+export const guestApi = {
+    // Public departments (for signup dropdown)
+    listDepartments: () => api.get<{ departments: Department[] }>("/public/departments", { auth: false }),
 
-    // Display monitor presence
+    // Participant signup
+    signupStudent: async (payload: StudentSignupPayload) =>
+        persistToken(
+            await api.post<ParticipantAuthResponse>("/public/auth/signup/student", payload, { auth: false })
+        ),
+
+    signupAlumniVisitor: async (payload: AlumniVisitorSignupPayload) =>
+        persistToken(
+            await api.post<ParticipantAuthResponse>("/public/auth/signup/alumni-visitor", payload, { auth: false })
+        ),
+
+    // Guest alias
+    signupGuest: async (payload: AlumniVisitorSignupPayload) =>
+        persistToken(
+            await api.post<ParticipantAuthResponse>("/public/auth/signup/guest", payload, { auth: false })
+        ),
+
+    // Participant login
+    loginStudent: async (payload: StudentLoginPayload) =>
+        persistToken(
+            await api.post<ParticipantAuthResponse>("/public/auth/login/student", payload, { auth: false })
+        ),
+
+    loginAlumniVisitor: async (payload: AlumniVisitorLoginPayload) =>
+        persistToken(
+            await api.post<ParticipantAuthResponse>("/public/auth/login/alumni-visitor", payload, { auth: false })
+        ),
+
+    // Guest alias
+    loginGuest: async (payload: AlumniVisitorLoginPayload) =>
+        persistToken(
+            await api.post<ParticipantAuthResponse>("/public/auth/login/guest", payload, { auth: false })
+        ),
+
+    // Session
+    getSession: () =>
+        api.get<ParticipantSessionResponse>("/public/auth/session", {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
+
+    restoreSession: () =>
+        api.post<ParticipantSessionResponse>("/public/auth/session", {}, {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
+
+    logout: async () => {
+        try {
+            return await api.post<{ ok: true }>("/public/auth/logout", {}, {
+                auth: false,
+                headers: participantAuthHeaders(),
+            })
+        } finally {
+            participantAuthStorage.clearToken()
+        }
+    },
+
+    // Display monitor presence (participant-auth required)
     presentToDisplayMonitor: (payload: PresentToDisplayPayload) =>
-        api.post<PresentToDisplayResponse>("/public/tickets/present", payload, { auth: false }),
+        api.post<PresentToDisplayResponse>("/public/tickets/present", payload, {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
 
     // Backward-compatible alias endpoint
     presentToDisplayMonitorLegacy: (payload: PresentToDisplayPayload) =>
-        api.post<PresentToDisplayResponse>("/public/tickets/present-to-display-monitor", payload, { auth: false }),
-
-    // Optional helper: find active ticket for today
-    findActiveByStudent: (opts: { departmentId: string; studentId: string }) =>
-        api.get<FindActiveTicketResponse>(`/public/tickets${toQuery(opts as any)}`, { auth: false }),
+        api.post<PresentToDisplayResponse>("/public/tickets/present-to-display-monitor", payload, {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
 }

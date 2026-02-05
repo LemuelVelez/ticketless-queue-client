@@ -9,8 +9,9 @@ import {
     LayoutGrid,
     ShieldCheck,
     Megaphone,
-    QrCode,
     Home,
+    User,
+    GraduationCap,
 } from "lucide-react"
 
 export type NavMainItem = {
@@ -21,15 +22,29 @@ export type NavMainItem = {
     items?: Array<{ title: string; href: string }>
 }
 
+export type ParticipantNavRole = "STUDENT" | "GUEST"
+
 /**
- * ✅ Student nav (public pages — no login, no dashboard)
- * Use this for student-facing layouts/pages.
+ * Participant nav (authenticated student/guest pages).
  */
 export const STUDENT_NAV_ITEMS: NavMainItem[] = [
-    { title: "Home", href: "/student", icon: Home },
-    { title: "Join Queue", href: "/join", icon: QrCode },
-    { title: "Public Display", href: "/display", icon: Monitor },
+    { title: "Home", href: "/", icon: Home },
+    { title: "Join Queue", href: "/queue/join", icon: Ticket },
+    { title: "My Tickets", href: "/queue/my-tickets", icon: GraduationCap },
+    { title: "Profile", href: "/profile", icon: User },
 ]
+
+export const GUEST_NAV_ITEMS: NavMainItem[] = [
+    { title: "Home", href: "/", icon: Home },
+    { title: "Join Queue", href: "/queue/join", icon: Ticket },
+    { title: "My Tickets", href: "/queue/my-tickets", icon: Ticket },
+    { title: "Profile", href: "/profile", icon: User },
+]
+
+export const PARTICIPANT_NAV_ITEMS: Record<ParticipantNavRole, NavMainItem[]> = {
+    STUDENT: STUDENT_NAV_ITEMS,
+    GUEST: GUEST_NAV_ITEMS,
+}
 
 export const STAFF_NAV_ITEMS: NavMainItem[] = [
     { title: "Dashboard", href: "/staff/dashboard", icon: LayoutDashboard },

@@ -17,11 +17,25 @@ function isRoleArray(allowed: AllowedRoles): allowed is ReadonlyArray<UserRole> 
     return Array.isArray(allowed)
 }
 
+export function isUserRole(value: unknown): value is UserRole {
+    return value === ROLE.ADMIN || value === ROLE.STAFF
+}
+
+export function toUserRole(value: unknown, fallback: UserRole = "STAFF"): UserRole {
+    return isUserRole(value) ? value : fallback
+}
+
 /**
  * Normalize a role or list of roles into a plain mutable array.
+ * Also de-dupes values while preserving input order.
  */
 export function normalizeAllowedRoles(allowed: AllowedRoles): UserRole[] {
-    return isRoleArray(allowed) ? Array.from(allowed) : [allowed]
+    const list = isRoleArray(allowed) ? Array.from(allowed) : [allowed]
+    const out: UserRole[] = []
+    for (const role of list) {
+        if (!out.includes(role)) out.push(role)
+    }
+    return out
 }
 
 /**

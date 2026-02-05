@@ -1,15 +1,23 @@
 import React from "react"
 import { Navigate, useLocation } from "react-router-dom"
+import type { UserRole } from "@/api/auth"
 import type { AllowedRoles } from "@/lib/rolebase"
-import { hasAllowedRole } from "@/lib/rolebase"
+import { ROLE, canAccessRole } from "@/lib/rolebase"
 import { useSession } from "@/hooks/use-session"
 
 export type RoleGuardProps = {
     /**
      * Roles that are allowed to access the children.
      * Example: "ADMIN" or ["ADMIN", "STAFF"]
+     * Default: ["ADMIN", "STAFF"]
      */
-    allow: AllowedRoles
+    allow?: AllowedRoles
+
+    /**
+     * Optional minimum role rank required.
+     * Example: minRole="STAFF" allows STAFF and ADMIN.
+     */
+    minRole?: UserRole
 
     /**
      * Where to send unauthenticated users.
@@ -40,7 +48,8 @@ export type RoleGuardProps = {
  */
 export function RoleGuard(props: RoleGuardProps) {
     const {
-        allow,
+        allow = [ROLE.ADMIN, ROLE.STAFF],
+        minRole,
         children,
         redirectTo = "/login",
         unauthorizedTo = "/",
@@ -62,7 +71,8 @@ export function RoleGuard(props: RoleGuardProps) {
         })
     }
 
-    if (!hasAllowedRole(user.role, allow)) {
+    const allowed = canAccessRole(user.role, { anyOf: allow, min: minRole })
+    if (!allowed) {
         return React.createElement(Navigate, {
             to: unauthorizedTo,
             replace: true,
