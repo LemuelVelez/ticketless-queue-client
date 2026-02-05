@@ -21,7 +21,7 @@ import logo from "@/assets/images/logo.svg"
 type HeaderProps = {
     /**
      * "landing" = section anchors + scroll spy (default)
-     * "student" = simple header for public pages like /join, /display, /student
+     * "student" = simple header for student/guest participant pages
      */
     variant?: "landing" | "student"
 }
@@ -39,13 +39,55 @@ const sectionIds = navItems
     .filter((href) => href.startsWith("#"))
     .map((href) => href.slice(1))
 
+function getHomePath(role: string | undefined) {
+    switch (role) {
+        case "ADMIN":
+            return "/admin/dashboard"
+        case "STAFF":
+            return "/staff/dashboard"
+        case "STUDENT":
+            return "/student/home"
+        case "ALUMNI":
+        case "GUEST":
+        default:
+            return "/alumni/home"
+    }
+}
+
+function getJoinPath(role: string | undefined) {
+    switch (role) {
+        case "STAFF":
+            return "/staff/queue"
+        case "STUDENT":
+            return "/student/join"
+        case "ALUMNI":
+        case "GUEST":
+        case "ADMIN":
+        default:
+            return "/alumni/join"
+    }
+}
+
+function getParticipantBase(role: string | undefined) {
+    return role === "STUDENT" ? "/student" : "/alumni"
+}
+
+function getParticipantLabel(role: string | undefined) {
+    return role === "STUDENT" ? "Student" : "Guest"
+}
+
 export default function Header({ variant = "landing" }: HeaderProps) {
     const { user, loading } = useSession()
-    const dashboardPath = useMemo(() => (user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"), [user])
 
+    const role = user?.role
     const showDashboard = !loading && !!user
-    const authLabel = showDashboard ? "Dashboard" : "Login"
-    const authTo = showDashboard ? dashboardPath : "/login"
+    const authTo = showDashboard ? getHomePath(role) : "/login"
+    const authLabel = showDashboard ? (role === "ADMIN" || role === "STAFF" ? "Dashboard" : "My Home") : "Login"
+
+    const landingJoinTo = useMemo(() => getJoinPath(role), [role])
+
+    const participantBase = useMemo(() => getParticipantBase(role), [role])
+    const participantLabel = useMemo(() => getParticipantLabel(role), [role])
 
     // ✅ Hooks must not be conditional
     const [activeHref, setActiveHref] = useState<string>("")
@@ -67,9 +109,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     useEffect(() => {
         if (variant !== "landing") return
 
-        const sections = sectionIds
-            .map((id) => document.getElementById(id))
-            .filter(Boolean) as HTMLElement[]
+        const sections = sectionIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[]
 
         if (!sections.length) return
 
@@ -120,13 +160,12 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         setSheetOpen(false)
     }
 
-    // ✅ Student/simple header
+    // ✅ Student/Guest simple header
     if (variant === "student") {
         return (
             <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
-                <div className="flex items-center justify-between px-4 py-3 mx-4">
-                    {/* ✅ Keep /student home redirection */}
-                    <Link to="/student" className="flex items-center gap-3">
+                <div className="mx-4 flex items-center justify-between px-4 py-3">
+                    <Link to={`${participantBase}/home`} className="flex items-center gap-3">
                         <div className="flex h-12 w-12 items-center justify-center rounded-lg border">
                             <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
                         </div>
@@ -134,31 +173,33 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                             <div className="flex items-center gap-2">
                                 <span className="text-sm font-semibold">QueuePass</span>
                                 <Badge variant="secondary" className="hidden sm:inline-flex">
-                                    Student
+                                    {participantLabel}
                                 </Badge>
                             </div>
-                            <p className="hidden text-xs text-muted-foreground sm:block">
-                                Join queue + view live public display
-                            </p>
+                            <p className="hidden text-xs text-muted-foreground sm:block">Join queue and track your tickets</p>
                         </div>
                     </Link>
 
-                    {/* ✅ Student header: add Landing Page link; remove Login button */}
+                    {/* Desktop actions */}
                     <div className="hidden items-center gap-2 md:flex">
                         <Button variant="outline" asChild>
                             <Link to="/">Landing Page</Link>
                         </Button>
 
                         <Button variant="outline" asChild>
-                            <Link to="/student">Home</Link>
+                            <Link to={`${participantBase}/home`}>Home</Link>
                         </Button>
 
                         <Button asChild>
-                            <Link to="/join">Join Queue</Link>
+                            <Link to={`${participantBase}/join`}>Join Queue</Link>
                         </Button>
 
                         <Button variant="outline" asChild>
-                            <Link to="/display">Public Display</Link>
+                            <Link to={`${participantBase}/my-tickets`}>My Tickets</Link>
+                        </Button>
+
+                        <Button variant="outline" asChild>
+                            <Link to={`${participantBase}/profile`}>Profile</Link>
                         </Button>
                     </div>
 
@@ -182,9 +223,9 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                             <div className="leading-tight">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <span className="font-semibold">QueuePass</span>
-                                                    <Badge variant="secondary">Student</Badge>
+                                                    <Badge variant="secondary">{participantLabel}</Badge>
                                                 </div>
-                                                <p className="mt-1 text-xs text-muted-foreground">Public student pages</p>
+                                                <p className="mt-1 text-xs text-muted-foreground">Student & guest pages</p>
                                             </div>
                                         </div>
                                     </SheetTitle>
@@ -198,20 +239,26 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                     </Button>
 
                                     <Button variant="ghost" className="w-full justify-start" asChild>
-                                        <Link to="/student" onClick={() => setSheetOpen(false)}>
+                                        <Link to={`${participantBase}/home`} onClick={() => setSheetOpen(false)}>
                                             Home
                                         </Link>
                                     </Button>
 
                                     <Button className="w-full" asChild>
-                                        <Link to="/join" onClick={() => setSheetOpen(false)}>
+                                        <Link to={`${participantBase}/join`} onClick={() => setSheetOpen(false)}>
                                             Join Queue
                                         </Link>
                                     </Button>
 
                                     <Button variant="outline" className="w-full" asChild>
-                                        <Link to="/display" onClick={() => setSheetOpen(false)}>
-                                            Public Display
+                                        <Link to={`${participantBase}/my-tickets`} onClick={() => setSheetOpen(false)}>
+                                            My Tickets
+                                        </Link>
+                                    </Button>
+
+                                    <Button variant="outline" className="w-full" asChild>
+                                        <Link to={`${participantBase}/profile`} onClick={() => setSheetOpen(false)}>
+                                            Profile
                                         </Link>
                                     </Button>
                                 </div>
@@ -223,10 +270,10 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         )
     }
 
-    // ✅ Landing header (original behavior)
+    // ✅ Landing header (scroll-spy + auth)
     return (
         <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
-            <div className="mx-4 flex  items-center justify-between px-4 py-3">
+            <div className="mx-4 flex items-center justify-between px-4 py-3">
                 {/* Brand */}
                 <Link to="/" className="flex items-center gap-3">
                     <div className="flex h-14 w-14 items-center justify-center rounded-lg border">
@@ -284,7 +331,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                         </Button>
 
                         <Button asChild>
-                            <a href="/join">Join Queue</a>
+                            <Link to={landingJoinTo}>Join Queue</Link>
                         </Button>
                     </div>
                 </div>
@@ -356,9 +403,9 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                     </Button>
 
                                     <Button className="w-full" asChild>
-                                        <a href="/join" onClick={() => setSheetOpen(false)}>
+                                        <Link to={landingJoinTo} onClick={() => setSheetOpen(false)}>
                                             Join Queue
-                                        </a>
+                                        </Link>
                                     </Button>
                                 </div>
                             </div>

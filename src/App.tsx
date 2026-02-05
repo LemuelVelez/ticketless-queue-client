@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner"
 import LandingPage from "@/pages/landing"
 import LoadingPage from "@/pages/loading"
 import LoginPage from "@/pages/authentication/login"
+import RegisterPage from "@/pages/authentication/register"
 import NotFoundPage from "@/pages/404"
 
 import ForgotPasswordPage from "@/pages/authentication/password/forgot"
@@ -26,23 +27,50 @@ import StaffSettingsPage from "@/pages/dashboard/staff/settings"
 
 import StudentHomePage from "@/pages/student/home"
 import StudentJoinPage from "@/pages/student/join"
-import StudentDisplayPage from "@/pages/student/display"
+import StudentMyTicketsPage from "@/pages/student/my-tickets"
+import StudentProfilePage from "@/pages/student/profile"
+
+import AlumniHomePage from "@/pages/alumni/home"
+import AlumniJoinPage from "@/pages/alumni/join"
+import AlumniMyTicketsPage from "@/pages/alumni/my-tickets"
+import AlumniProfilePage from "@/pages/alumni/profile"
 
 import { SessionProvider, useSession } from "@/hooks/use-session"
 import { RoleGuard } from "@/lib/roleguard"
 
+type ShortcutTarget = "home" | "join" | "my-tickets" | "profile"
+
+function getShortcutPath(role: string | undefined, target: ShortcutTarget) {
+  switch (role) {
+    case "ADMIN":
+      return "/admin/dashboard"
+    case "STAFF":
+      if (target === "join") return "/staff/queue"
+      return "/staff/dashboard"
+    case "STUDENT":
+      return `/student/${target}`
+    case "ALUMNI":
+    case "GUEST":
+    default:
+      return `/alumni/${target}`
+  }
+}
+
 function LoadingRedirect() {
   const { user, loading } = useSession()
 
-  // Show loading screen ONLY while resolving session / redirecting
+  if (loading) return <LoadingPage />
+  if (!user) return <Navigate to="/login" replace />
+
+  return <Navigate to={getShortcutPath(user.role, "home")} replace />
+}
+
+function ParticipantShortcutRedirect({ target }: { target: ShortcutTarget }) {
+  const { user, loading } = useSession()
+
   if (loading) return <LoadingPage />
 
-  if (!user) {
-    return <Navigate to="/login" replace />
-  }
-
-  const to = user.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
-  return <Navigate to={to} replace />
+  return <Navigate to={getShortcutPath(user?.role, target)} replace />
 }
 
 export default function App() {
@@ -52,24 +80,35 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
 
-          {/* ✅ Public student routes */}
-          <Route path="/student" element={<StudentHomePage />} />
-          <Route path="/join" element={<StudentJoinPage />} />
-          <Route path="/display" element={<StudentDisplayPage />} />
-
           {/* ✅ Used only during redirect/session resolve */}
           <Route path="/loading" element={<LoadingRedirect />} />
 
           {/* Auth */}
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-
-          {/* Supports both:
-              /reset-password?token=...
-              /reset-password/:token
-          */}
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+
+          {/* ✅ Student routes */}
+          <Route path="/student" element={<Navigate to="/student/home" replace />} />
+          <Route path="/student/home" element={<StudentHomePage />} />
+          <Route path="/student/join" element={<StudentJoinPage />} />
+          <Route path="/student/my-tickets" element={<StudentMyTicketsPage />} />
+          <Route path="/student/profile" element={<StudentProfilePage />} />
+
+          {/* ✅ Guest/Alumni routes */}
+          <Route path="/alumni" element={<Navigate to="/alumni/home" replace />} />
+          <Route path="/alumni/home" element={<AlumniHomePage />} />
+          <Route path="/alumni/join" element={<AlumniJoinPage />} />
+          <Route path="/alumni/my-tickets" element={<AlumniMyTicketsPage />} />
+          <Route path="/alumni/profile" element={<AlumniProfilePage />} />
+
+          {/* ✅ Friendly shared shortcuts */}
+          <Route path="/home" element={<ParticipantShortcutRedirect target="home" />} />
+          <Route path="/join" element={<ParticipantShortcutRedirect target="join" />} />
+          <Route path="/my-tickets" element={<ParticipantShortcutRedirect target="my-tickets" />} />
+          <Route path="/profile" element={<ParticipantShortcutRedirect target="profile" />} />
 
           {/* Admin Routes */}
           <Route
@@ -89,11 +128,7 @@ export default function App() {
             <Route path="/admin/departments" element={<AdminDepartmentsPage />} />
             <Route path="/admin/windows" element={<AdminWindowsPage />} />
             <Route path="/admin/reports" element={<AdminReportsPage />} />
-
-            {/* ✅ Audit Logs */}
             <Route path="/admin/audit-logs" element={<AdminAuditsPage />} />
-
-            {/* ✅ Settings */}
             <Route path="/admin/settings" element={<AdminSettingsPage />} />
           </Route>
 

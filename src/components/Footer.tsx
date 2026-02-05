@@ -12,7 +12,7 @@ import { QrCode } from "lucide-react"
 type FooterProps = {
     /**
      * "landing" = section links + scroll spy (default)
-     * "student" = minimal footer for public student pages
+     * "student" = minimal footer for student/guest participant pages
      */
     variant?: "landing" | "student"
 }
@@ -30,12 +30,54 @@ const sectionIds = exploreItems
     .filter((href) => href.startsWith("#"))
     .map((href) => href.slice(1))
 
+function getHomePath(role: string | undefined) {
+    switch (role) {
+        case "ADMIN":
+            return "/admin/dashboard"
+        case "STAFF":
+            return "/staff/dashboard"
+        case "STUDENT":
+            return "/student/home"
+        case "ALUMNI":
+        case "GUEST":
+        default:
+            return "/alumni/home"
+    }
+}
+
+function getJoinPath(role: string | undefined) {
+    switch (role) {
+        case "STAFF":
+            return "/staff/queue"
+        case "STUDENT":
+            return "/student/join"
+        case "ALUMNI":
+        case "GUEST":
+        case "ADMIN":
+        default:
+            return "/alumni/join"
+    }
+}
+
+function getParticipantBase(role: string | undefined) {
+    return role === "STUDENT" ? "/student" : "/alumni"
+}
+
+function getParticipantLabel(role: string | undefined) {
+    return role === "STUDENT" ? "Student" : "Guest"
+}
+
 export default function Footer({ variant = "landing" }: FooterProps) {
     const { user, loading } = useSession()
-    const dashboardPath = useMemo(() => (user?.role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"), [user])
+
+    const role = user?.role
+    const dashboardPath = useMemo(() => getHomePath(role), [role])
+    const joinPath = useMemo(() => getJoinPath(role), [role])
+    const participantBase = useMemo(() => getParticipantBase(role), [role])
+    const participantLabel = useMemo(() => getParticipantLabel(role), [role])
 
     const showDashboard = !loading && !!user
-    const authLabel = showDashboard ? "Dashboard" : "Login"
+    const authLabel = showDashboard ? (role === "ADMIN" || role === "STAFF" ? "Dashboard" : "My Home") : "Login"
     const authTo = showDashboard ? dashboardPath : "/login"
 
     // ✅ Hooks must not be conditional
@@ -56,9 +98,7 @@ export default function Footer({ variant = "landing" }: FooterProps) {
     useEffect(() => {
         if (variant !== "landing") return
 
-        const sections = sectionIds
-            .map((id) => document.getElementById(id))
-            .filter(Boolean) as HTMLElement[]
+        const sections = sectionIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[]
 
         if (!sections.length) return
 
@@ -81,11 +121,11 @@ export default function Footer({ variant = "landing" }: FooterProps) {
         return () => observer.disconnect()
     }, [variant])
 
-    // ✅ Student/simple footer
+    // ✅ Student/Guest simple footer
     if (variant === "student") {
         return (
             <footer className="mt-14 border-t bg-background">
-                <div className="mx-4  px-4 py-10">
+                <div className="mx-4 px-4 py-10">
                     <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
                         <div className="flex items-center gap-3">
                             <div className="flex h-9 w-9 items-center justify-center rounded-lg border">
@@ -94,30 +134,31 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                             <div className="leading-tight">
                                 <div className="flex items-center gap-2">
                                     <span className="text-sm font-semibold">QueuePass</span>
-                                    <Badge variant="secondary">Student</Badge>
+                                    <Badge variant="secondary">{participantLabel}</Badge>
                                 </div>
-                                <p className="text-xs text-muted-foreground">
-                                    Join the queue and view live updates on the public display.
-                                </p>
+                                <p className="text-xs text-muted-foreground">Join the queue and monitor your ticket progress.</p>
                             </div>
                         </div>
 
-                        {/* ✅ Add Landing Page link; keep /student; remove Login button */}
                         <div className="flex flex-wrap gap-2">
                             <Button variant="outline" asChild>
                                 <Link to="/">Landing Page</Link>
                             </Button>
 
                             <Button variant="outline" asChild>
-                                <Link to="/student">Home</Link>
+                                <Link to={`${participantBase}/home`}>Home</Link>
                             </Button>
 
                             <Button asChild>
-                                <Link to="/join">Join Queue</Link>
+                                <Link to={`${participantBase}/join`}>Join Queue</Link>
                             </Button>
 
                             <Button variant="outline" asChild>
-                                <Link to="/display">Public Display</Link>
+                                <Link to={`${participantBase}/my-tickets`}>My Tickets</Link>
+                            </Button>
+
+                            <Button variant="outline" asChild>
+                                <Link to={`${participantBase}/profile`}>Profile</Link>
                             </Button>
                         </div>
                     </div>
@@ -133,9 +174,9 @@ export default function Footer({ variant = "landing" }: FooterProps) {
         )
     }
 
-    // ✅ Landing footer (original behavior)
+    // ✅ Landing footer (original behavior + fixed role-aware routes)
     return (
-        <footer className="mt-14 border-t bg-background mx-0">
+        <footer className="mx-0 mt-14 border-t bg-background">
             <div className="mx-4 px-4 py-10">
                 <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
                     <div className="max-w-md">
@@ -149,8 +190,7 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                                     <Badge variant="secondary">Ticketless</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    QR-based student ID queueing with SMS notification, voice announcement, and public
-                                    display.
+                                    QR-based student ID queueing with SMS notification, voice announcement, and public display.
                                 </p>
                             </div>
                         </div>
@@ -163,7 +203,7 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                             </Button>
 
                             <Button asChild>
-                                <a href="/join">Join Queue</a>
+                                <Link to={joinPath}>Join Queue</Link>
                             </Button>
                         </div>
                     </div>

@@ -8,7 +8,7 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
-import { adminApi, type Department, type ServiceWindow } from "@/api/admin"
+import { adminApi, type Department, type ServiceWindow, type StaffUser } from "@/api/admin"
 import { useSession } from "@/hooks/use-session"
 
 import { Button } from "@/components/ui/button"
@@ -68,6 +68,7 @@ export default function AdminWindowsPage() {
 
     const [departments, setDepartments] = React.useState<Department[]>([])
     const [windows, setWindows] = React.useState<ServiceWindow[]>([])
+    const [staffUsers, setStaffUsers] = React.useState<StaffUser[]>([])
 
     // filters
     const [winQ, setWinQ] = React.useState("")
@@ -97,14 +98,41 @@ export default function AdminWindowsPage() {
         return m
     }, [departments])
 
+    const staffAssignedByWindow = React.useMemo(() => {
+        const m = new Map<string, { count: number; names: string[] }>()
+        for (const s of staffUsers ?? []) {
+            if (s.role !== "STAFF") continue
+            if (!s.active) continue
+            if (!s.assignedWindow) continue
+
+            const key = s.assignedWindow
+            const current = m.get(key) ?? { count: 0, names: [] }
+            current.count += 1
+            if (s.name?.trim()) current.names.push(s.name.trim())
+            m.set(key, current)
+        }
+
+        for (const [k, v] of m.entries()) {
+            v.names.sort((a, b) => a.localeCompare(b))
+            m.set(k, v)
+        }
+
+        return m
+    }, [staffUsers])
+
     const enabledDepartments = React.useMemo(() => departments.filter((d) => isEnabledFlag(d.enabled)), [departments])
 
     const fetchAll = React.useCallback(async () => {
         setLoading(true)
         try {
-            const [deptRes, winRes] = await Promise.all([adminApi.listDepartments(), adminApi.listWindows()])
+            const [deptRes, winRes, staffRes] = await Promise.all([
+                adminApi.listDepartments(),
+                adminApi.listWindows(),
+                adminApi.listStaff(),
+            ])
             setDepartments(deptRes.departments ?? [])
             setWindows(winRes.windows ?? [])
+            setStaffUsers(staffRes.staff ?? [])
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed to load windows."
             toast.error(msg)
@@ -328,6 +356,7 @@ export default function AdminWindowsPage() {
                                             <TableRow>
                                                 <TableHead>Window</TableHead>
                                                 <TableHead className="hidden md:table-cell">Department</TableHead>
+                                                <TableHead className="hidden md:table-cell">Staff assigned</TableHead>
                                                 <TableHead className="text-right">Status</TableHead>
                                                 <TableHead className="w-14" />
                                             </TableRow>
@@ -336,6 +365,10 @@ export default function AdminWindowsPage() {
                                         <TableBody>
                                             {winRows.map((w) => {
                                                 const deptName = deptById.get(w.department)?.name ?? "—"
+                                                const assigned = staffAssignedByWindow.get(w._id)
+                                                const assignedCount = assigned?.count ?? 0
+                                                const assignedNames = assigned?.names ?? []
+
                                                 return (
                                                     <TableRow key={w._id}>
                                                         <TableCell className="font-medium">
@@ -347,11 +380,27 @@ export default function AdminWindowsPage() {
                                                                 <span className="truncate text-xs text-muted-foreground md:hidden">
                                                                     {deptName}
                                                                 </span>
+                                                                <span className="truncate text-xs text-muted-foreground md:hidden">
+                                                                    Staff assigned: {assignedCount}
+                                                                </span>
                                                             </div>
                                                         </TableCell>
 
                                                         <TableCell className="hidden md:table-cell">
                                                             <span className="text-muted-foreground">{deptName}</span>
+                                                        </TableCell>
+
+                                                        <TableCell className="hidden md:table-cell">
+                                                            {assignedCount > 0 ? (
+                                                                <div className="min-w-0">
+                                                                    <Badge variant="secondary">{assignedCount}</Badge>
+                                                                    <p className="mt-1 truncate text-xs text-muted-foreground" title={assignedNames.join(", ")}>
+                                                                        {assignedNames.join(", ")}
+                                                                    </p>
+                                                                </div>
+                                                            ) : (
+                                                                <span className="text-muted-foreground">—</span>
+                                                            )}
                                                         </TableCell>
 
                                                         <TableCell className="text-right">{statusBadge(w.enabled)}</TableCell>
@@ -382,7 +431,7 @@ export default function AdminWindowsPage() {
 
                                             {winRows.length === 0 ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                                                    <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
                                                         No windows match your filters.
                                                     </TableCell>
                                                 </TableRow>
