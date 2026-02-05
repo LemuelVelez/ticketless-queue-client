@@ -42,11 +42,40 @@ export type Ticket = {
 export type MyAssignmentResponse = {
     departmentId: string | null
     window: ServiceWindow | null
+    handledDepartmentIds?: string[]
 }
 
 export type TicketResponse = { ticket: Ticket }
 export type CurrentCalledResponse = { ticket: Ticket | null }
 export type ListTicketsResponse = { tickets: Ticket[] }
+
+export type StaffDisplaySnapshotResponse = {
+    department: {
+        id: string
+        name: string
+        handledDepartmentIds: string[]
+    }
+    window: {
+        id: string
+        name: string
+        number: number
+    } | null
+    nowServing: {
+        id: string
+        queueNumber: number
+        windowNumber: number | null
+        calledAt: string | null
+    } | null
+    upNext: Array<{
+        id: string
+        queueNumber: number
+    }>
+    meta: {
+        generatedAt: string
+        refreshMs: number
+        upNextCount: number
+    }
+}
 
 function toQuery(params?: Record<string, string | number | boolean | undefined | null>) {
     const qs = new URLSearchParams()
@@ -114,6 +143,9 @@ export type ReportsTimeseriesResponse = {
 
 export const staffApi = {
     myAssignment: () => api.get<MyAssignmentResponse>("/staff/me/assignment"),
+
+    // ✅ Dedicated backend snapshot for staff presentation/monitor pages
+    getDisplaySnapshot: () => api.get<StaffDisplaySnapshotResponse>("/staff/display/snapshot"),
 
     listWaiting: (opts?: { limit?: number }) =>
         api.get<ListTicketsResponse>(`/staff/queue/waiting${toQuery(opts as any)}`),

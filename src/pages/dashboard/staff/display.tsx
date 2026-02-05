@@ -19,8 +19,7 @@ import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { useSession } from "@/hooks/use-session"
-import { staffApi } from "@/api/staff"
-import { api } from "@/lib/http"
+import { staffApi, type StaffDisplaySnapshotResponse } from "@/api/staff"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -30,23 +29,8 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 
-type DisplayNowServing = {
-    id: string
-    queueNumber: number
-    windowNumber: number | null
-    calledAt: string | null
-} | null
-
-type DisplayUpNextRow = {
-    id: string
-    queueNumber: number
-}
-
-type DepartmentDisplayResponse = {
-    department: { id: string; name: string }
-    nowServing: DisplayNowServing
-    upNext: DisplayUpNextRow[]
-}
+type DisplayNowServing = StaffDisplaySnapshotResponse["nowServing"]
+type DisplayUpNextRow = StaffDisplaySnapshotResponse["upNext"][number]
 
 function parseBool(v: unknown): boolean {
     if (typeof v === "boolean") return v
@@ -201,9 +185,15 @@ export default function StaffDisplayPage() {
     const [upNext, setUpNext] = React.useState<DisplayUpNextRow[]>([])
 
     const [autoRefresh, setAutoRefresh] = React.useState(true)
+    const [refreshEveryMs, setRefreshEveryMs] = React.useState(5000)
 
-    // ✅ Presentation mode (overlay + optional browser fullscreen)
+    // ✅ Presentation mode
     const [presentation, setPresentation] = React.useState(false)
+    const [kioskMode, setKioskMode] = React.useState(false)
+    const [slideMode, setSlideMode] = React.useState<"split" | "deck">("split")
+    const [slideSeconds, setSlideSeconds] = React.useState(10)
+    const [slideIndex, setSlideIndex] = React.useState(0)
+
     const presentationRequestedRef = React.useRef(false)
     const autoPresentDoneRef = React.useRef(false)
 
@@ -231,24 +221,26 @@ export default function StaffDisplayPage() {
 
     const refresh = React.useCallback(async () => {
         try {
-            const a = await staffApi.myAssignment()
-            const deptId = a.departmentId ?? null
-            setDepartmentId(deptId)
+            const snap = await staffApi.getDisplaySnapshot()
 
-            if (!deptId) {
+            setDepartmentId(snap.department?.id ?? null)
+            setDepartmentName(snap.department?.name ?? "—")
+            setNowServing(snap.nowServing ?? null)
+            setUpNext(Array.isArray(snap.upNext) ? snap.upNext : [])
+
+            const refreshMs = clamp(Number(snap.meta?.refreshMs ?? 5000), 2000, 60000)
+            setRefreshEveryMs(refreshMs)
+        } catch (e: any) {
+            const status = Number(e?.status || 0)
+            if (status === 400) {
+                // staff not assigned -> render empty/assigned message without toast spam
+                setDepartmentId(null)
                 setDepartmentName("—")
                 setNowServing(null)
                 setUpNext([])
                 return
             }
-
-            // Public display API endpoint (no auth required)
-            const res = await api.get<DepartmentDisplayResponse>(`/display/${deptId}`, { auth: false })
-            setDepartmentName(res.department?.name ?? "—")
-            setNowServing(res.nowServing ?? null)
-            setUpNext(res.upNext ?? [])
-        } catch (e: any) {
-            toast.error(e?.message ?? "Failed to load public display data.")
+            toast.error(e?.message ?? "Failed to load display snapshot.")
         }
     }, [])
 
@@ -284,6 +276,18 @@ export default function StaffDisplayPage() {
         })()
     }, [refresh])
 
+    // query-mode parser (kiosk/deck/slideSec)
+    React.useEffect(() => {
+        const qs = new URLSearchParams(location.search || "")
+        setKioskMode(parseBool(qs.get("kiosk")))
+        setSlideMode(parseBool(qs.get("deck")) ? "deck" : "split")
+
+        const sec = Number(qs.get("slideSec"))
+        if (Number.isFinite(sec) && sec > 0) {
+            setSlideSeconds(clamp(Math.floor(sec), 5, 30))
+        }
+    }, [location.search])
+
     // ✅ Auto-enter Presentation Mode when opening /staff/display?present=1
     React.useEffect(() => {
         if (autoPresentDoneRef.current) return
@@ -297,9 +301,21 @@ export default function StaffDisplayPage() {
 
     React.useEffect(() => {
         if (!autoRefresh) return
-        const t = window.setInterval(() => void refresh(), 5000)
+        const intervalMs = clamp(refreshEveryMs, 2000, 60000)
+        const t = window.setInterval(() => void refresh(), intervalMs)
         return () => window.clearInterval(t)
-    }, [autoRefresh, refresh])
+    }, [autoRefresh, refresh, refreshEveryMs])
+
+    React.useEffect(() => {
+        setSlideIndex(0)
+    }, [slideMode])
+
+    React.useEffect(() => {
+        if (!(presentation && slideMode === "deck")) return
+        const ms = clamp(slideSeconds, 5, 30) * 1000
+        const t = window.setInterval(() => setSlideIndex((v) => v + 1), ms)
+        return () => window.clearInterval(t)
+    }, [presentation, slideMode, slideSeconds])
 
     // Keep presentation state in sync if user presses ESC to exit fullscreen
     React.useEffect(() => {
@@ -335,6 +351,53 @@ export default function StaffDisplayPage() {
         window.open(url, "_blank", "noopener,noreferrer")
     }
 
+    async function onOpenProjectorWindow() {
+        if (typeof window === "undefined") return
+
+        const qs = new URLSearchParams()
+        qs.set("present", "1")
+        qs.set("deck", "1")
+        qs.set("kiosk", "1")
+        qs.set("slideSec", String(clamp(slideSeconds, 5, 30)))
+
+        const url = `${window.location.origin}${location.pathname}?${qs.toString()}`
+        const popup = window.open(
+            url,
+            "staff-display-projector",
+            "popup=yes,width=1920,height=1080,noopener,noreferrer"
+        )
+
+        if (!popup) {
+            toast.error("Popup blocked. Please allow popups, then try again.")
+            return
+        }
+
+        popup.focus()
+        toast.success("Projector window opened. Move it to your extended display if needed.")
+
+        // Optional: place popup on a secondary screen when browser supports Screen Details API
+        try {
+            const winAny = window as any
+            if (typeof winAny.getScreenDetails === "function") {
+                const details = await winAny.getScreenDetails()
+                const screens = Array.isArray(details?.screens) ? details.screens : []
+                const current = details?.currentScreen
+                const secondary = screens.find((s: any) => s !== current) || null
+
+                if (secondary && typeof popup.moveTo === "function" && typeof popup.resizeTo === "function") {
+                    const left = Number(secondary.availLeft ?? secondary.left ?? 0)
+                    const top = Number(secondary.availTop ?? secondary.top ?? 0)
+                    const width = Number(secondary.availWidth ?? secondary.width ?? 1920)
+                    const height = Number(secondary.availHeight ?? secondary.height ?? 1080)
+                    popup.moveTo(left, top)
+                    popup.resizeTo(width, height)
+                }
+            }
+        } catch {
+            // ignore (feature not available / permission denied)
+        }
+    }
+
     async function onDownloadQrPng() {
         if (!qrValue) {
             toast.error("No QR link available.")
@@ -367,92 +430,214 @@ export default function StaffDisplayPage() {
     // ✅ Presentation overlay
     if (presentation) {
         const bigNumberClass = "text-7xl sm:text-8xl md:text-9xl font-semibold tracking-tight leading-none"
+        const deckViews: Array<"now" | "upnext" | "summary"> = ["now", "upnext", "summary"]
+        const deckView = deckViews[slideIndex % deckViews.length]
 
-        return (
-            <div className="fixed inset-0 z-50 bg-background">
-                <div className="flex h-full w-full flex-col">
-                    {/* Top bar */}
-                    <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="secondary">Department: {departmentName}</Badge>
-                                <Badge variant="secondary">Dept ID: {departmentId ?? "—"}</Badge>
-                                {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
-                            </div>
-                            <div className="mt-2 text-sm text-muted-foreground">
-                                Auto refresh: {autoRefresh ? "On" : "Off"} • Updates every 5s
-                            </div>
-                        </div>
-
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                            <div className="flex items-center gap-2">
-                                <Switch
-                                    id="autoRefreshPm"
-                                    checked={autoRefresh}
-                                    onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
-                                    disabled={busy}
-                                />
-                                <Label htmlFor="autoRefreshPm" className="text-sm">
-                                    Auto refresh
-                                </Label>
-                            </div>
-
-                            <Button variant="outline" onClick={() => void onManualRefresh()} disabled={busy} className="gap-2">
-                                <RefreshCw className="h-4 w-4" />
-                                Refresh
-                            </Button>
-
-                            <Button variant="secondary" onClick={() => void exitPresentation()} className="gap-2">
-                                <Minimize2 className="h-4 w-4" />
-                                Exit
-                            </Button>
-                        </div>
+        const renderSplitView = () => (
+            <div className="flex min-h-0 flex-1 flex-col gap-6 lg:flex-row">
+                {/* Now serving */}
+                <div className="flex min-h-0 flex-1 flex-col rounded-2xl border bg-muted p-6">
+                    <div className="flex items-center justify-between">
+                        <div className="text-sm text-muted-foreground">NOW SERVING</div>
+                        {nowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
                     </div>
 
-                    {/* Main content */}
-                    <div className="flex min-h-0 flex-1 flex-col gap-6 p-4 lg:flex-row lg:p-8">
-                        {/* Now serving */}
-                        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border bg-muted p-6">
-                            <div className="flex items-center justify-between">
-                                <div className="text-sm text-muted-foreground">NOW SERVING</div>
-                                {nowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
-                            </div>
+                    <div className="mt-4 flex flex-1 flex-col justify-center">
+                        {nowServing ? (
+                            <>
+                                <div className={bigNumberClass}>#{nowServing.queueNumber}</div>
+                                <div className="mt-4 text-lg text-muted-foreground">
+                                    Window: {nowServing.windowNumber ? `#${nowServing.windowNumber}` : "—"}
+                                </div>
+                                <div className="mt-1 text-sm text-muted-foreground">Called at: {fmtTime(nowServing.calledAt)}</div>
+                            </>
+                        ) : (
+                            <div className="text-center text-lg text-muted-foreground">No ticket is currently being called.</div>
+                        )}
+                    </div>
+                </div>
 
-                            <div className="mt-4 flex flex-1 flex-col justify-center">
-                                {nowServing ? (
-                                    <>
-                                        <div className={bigNumberClass}>#{nowServing.queueNumber}</div>
-                                        <div className="mt-4 text-lg text-muted-foreground">
-                                            Window: {nowServing.windowNumber ? `#${nowServing.windowNumber}` : "—"}
-                                        </div>
-                                        <div className="mt-1 text-sm text-muted-foreground">Called at: {fmtTime(nowServing.calledAt)}</div>
-                                    </>
-                                ) : (
-                                    <div className="text-center text-lg text-muted-foreground">No ticket is currently being called.</div>
-                                )}
+                {/* Up next */}
+                <div className="w-full max-w-none rounded-2xl border p-6 lg:w-105">
+                    <div className="flex items-center justify-between">
+                        <div className="text-sm font-medium">UP NEXT</div>
+                        <Badge variant="secondary">{upNext.length}</Badge>
+                    </div>
+
+                    <div className="mt-4 grid gap-3">
+                        {upNext.length === 0 ? (
+                            <div className="rounded-lg border p-4 text-sm text-muted-foreground">No waiting tickets.</div>
+                        ) : (
+                            upNext.map((t) => (
+                                <div key={t.id} className="flex items-center justify-between rounded-xl border p-4">
+                                    <div className="text-3xl font-semibold">#{t.queueNumber}</div>
+                                    <div className="text-right text-xs text-muted-foreground">Up next</div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            </div>
+        )
+
+        const renderDeckView = () => {
+            if (deckView === "now") {
+                return (
+                    <div className="flex min-h-0 flex-1 flex-col rounded-3xl border bg-muted p-8 lg:p-12">
+                        <div className="text-center text-sm tracking-[0.25em] text-muted-foreground">NOW SERVING</div>
+                        <div className="mt-8 flex flex-1 flex-col items-center justify-center text-center">
+                            {nowServing ? (
+                                <>
+                                    <div className="text-[clamp(5rem,16vw,14rem)] font-semibold leading-none">#{nowServing.queueNumber}</div>
+                                    <div className="mt-6 text-2xl text-muted-foreground">
+                                        Window {nowServing.windowNumber ? `#${nowServing.windowNumber}` : "—"}
+                                    </div>
+                                    <div className="mt-2 text-base text-muted-foreground">Called at: {fmtTime(nowServing.calledAt)}</div>
+                                </>
+                            ) : (
+                                <div className="text-3xl text-muted-foreground">No ticket is currently being called.</div>
+                            )}
+                        </div>
+                    </div>
+                )
+            }
+
+            if (deckView === "upnext") {
+                return (
+                    <div className="flex min-h-0 flex-1 flex-col rounded-3xl border p-8 lg:p-12">
+                        <div className="text-center text-sm tracking-[0.25em] text-muted-foreground">UP NEXT</div>
+                        <div className="mt-8 grid flex-1 content-start gap-4">
+                            {upNext.length === 0 ? (
+                                <div className="rounded-xl border p-8 text-center text-2xl text-muted-foreground">No waiting tickets.</div>
+                            ) : (
+                                upNext.slice(0, 6).map((t, idx) => (
+                                    <div key={t.id} className="flex items-center justify-between rounded-2xl border p-6">
+                                        <div className="text-5xl font-semibold">#{t.queueNumber}</div>
+                                        <Badge variant={idx === 0 ? "default" : "secondary"}>
+                                            {idx === 0 ? "Next to call" : "Waiting"}
+                                        </Badge>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                )
+            }
+
+            return (
+                <div className="flex min-h-0 flex-1 flex-col rounded-3xl border p-8 lg:p-12">
+                    <div className="text-center text-sm tracking-[0.25em] text-muted-foreground">QUEUE SUMMARY</div>
+                    <div className="mt-8 grid flex-1 gap-6 lg:grid-cols-2">
+                        <div className="rounded-2xl border bg-muted p-8">
+                            <div className="text-sm text-muted-foreground">Now Serving</div>
+                            <div className="mt-3 text-7xl font-semibold">
+                                {nowServing ? `#${nowServing.queueNumber}` : "—"}
+                            </div>
+                            <div className="mt-4 text-lg text-muted-foreground">
+                                Window: {nowServing?.windowNumber ? `#${nowServing.windowNumber}` : "—"}
                             </div>
                         </div>
-
-                        {/* Up next */}
-                        <div className="w-full max-w-none rounded-2xl border p-6 lg:w-105">
+                        <div className="rounded-2xl border p-8">
                             <div className="flex items-center justify-between">
-                                <div className="text-sm font-medium">UP NEXT</div>
+                                <div className="text-sm text-muted-foreground">Up Next</div>
                                 <Badge variant="secondary">{upNext.length}</Badge>
                             </div>
-
                             <div className="mt-4 grid gap-3">
                                 {upNext.length === 0 ? (
-                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">No waiting tickets.</div>
+                                    <div className="text-lg text-muted-foreground">No waiting tickets.</div>
                                 ) : (
-                                    upNext.map((t) => (
-                                        <div key={t.id} className="flex items-center justify-between rounded-xl border p-4">
-                                            <div className="text-3xl font-semibold">#{t.queueNumber}</div>
-                                            <div className="text-right text-xs text-muted-foreground">Up next</div>
+                                    upNext.slice(0, 5).map((t) => (
+                                        <div key={t.id} className="text-3xl font-semibold">
+                                            #{t.queueNumber}
                                         </div>
                                     ))
                                 )}
                             </div>
                         </div>
+                    </div>
+                </div>
+            )
+        }
+
+        return (
+            <div className="fixed inset-0 z-50 bg-background">
+                <div className="flex h-full w-full flex-col">
+                    {!kioskMode ? (
+                        <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Badge variant="secondary">Department: {departmentName}</Badge>
+                                    <Badge variant="secondary">Dept ID: {departmentId ?? "—"}</Badge>
+                                    {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                                </div>
+                                <div className="mt-2 text-sm text-muted-foreground">
+                                    Auto refresh: {autoRefresh ? "On" : "Off"} • Updates every {Math.round(refreshEveryMs / 1000)}s
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                <Button
+                                    variant={slideMode === "split" ? "default" : "outline"}
+                                    onClick={() => setSlideMode("split")}
+                                    className="gap-2"
+                                >
+                                    Split View
+                                </Button>
+
+                                <Button
+                                    variant={slideMode === "deck" ? "default" : "outline"}
+                                    onClick={() => setSlideMode("deck")}
+                                    className="gap-2"
+                                >
+                                    Slide Deck
+                                </Button>
+
+                                <div className="flex items-center gap-2">
+                                    <Switch
+                                        id="autoRefreshPm"
+                                        checked={autoRefresh}
+                                        onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                        disabled={busy}
+                                    />
+                                    <Label htmlFor="autoRefreshPm" className="text-sm">
+                                        Auto refresh
+                                    </Label>
+                                </div>
+
+                                <Button variant="outline" onClick={() => void onManualRefresh()} disabled={busy} className="gap-2">
+                                    <RefreshCw className="h-4 w-4" />
+                                    Refresh
+                                </Button>
+
+                                <Button variant="secondary" onClick={() => void exitPresentation()} className="gap-2">
+                                    <Minimize2 className="h-4 w-4" />
+                                    Exit
+                                </Button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="pointer-events-none absolute right-4 top-4 z-10">
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                className="pointer-events-auto gap-2"
+                                onClick={() => void exitPresentation()}
+                            >
+                                <Minimize2 className="h-4 w-4" />
+                                Exit
+                            </Button>
+                        </div>
+                    )}
+
+                    <div className={`flex min-h-0 flex-1 flex-col gap-6 p-4 lg:p-8 ${slideMode === "deck" ? "transition-all duration-500" : ""}`}>
+                        {slideMode === "deck" ? renderDeckView() : renderSplitView()}
+
+                        {slideMode === "deck" ? (
+                            <div className="text-center text-sm text-muted-foreground">
+                                Slide {((slideIndex % 3) + 1)} / 3 • changes every {slideSeconds}s
+                            </div>
+                        ) : null}
                     </div>
                 </div>
             </div>
@@ -471,7 +656,9 @@ export default function StaffDisplayPage() {
                                     <Monitor className="h-5 w-5" />
                                     Staff Display
                                 </CardTitle>
-                                <CardDescription>Department public display data (based on your assignment).</CardDescription>
+                                <CardDescription>
+                                    PPT-style presentation mode for projector/TV plus backend-integrated live snapshot.
+                                </CardDescription>
                             </div>
 
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -483,6 +670,16 @@ export default function StaffDisplayPage() {
                                 >
                                     <RefreshCw className="h-4 w-4" />
                                     Refresh
+                                </Button>
+
+                                <Button
+                                    variant="outline"
+                                    onClick={() => void onOpenProjectorWindow()}
+                                    disabled={busy}
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <ExternalLink className="h-4 w-4" />
+                                    Open on 2nd Screen
                                 </Button>
 
                                 <Button
@@ -504,6 +701,7 @@ export default function StaffDisplayPage() {
                                 <Badge variant="secondary">Department: {departmentName}</Badge>
                                 <Badge variant="secondary">Dept ID: {departmentId ?? "—"}</Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                                <Badge variant="outline">Refresh: {Math.round(refreshEveryMs / 1000)}s</Badge>
                             </div>
 
                             <div className="flex items-center gap-2">
@@ -517,6 +715,11 @@ export default function StaffDisplayPage() {
                                     Auto refresh
                                 </Label>
                             </div>
+                        </div>
+
+                        <div className="text-xs text-muted-foreground">
+                            Tip: Connect your secondary monitor (HDMI/USB/VGA) in <strong>Extend</strong> mode, then click{" "}
+                            <strong>Open on 2nd Screen</strong>. If browser permissions allow, it will try to place the window on the other monitor.
                         </div>
                     </CardHeader>
 
