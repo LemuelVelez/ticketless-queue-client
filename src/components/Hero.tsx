@@ -370,11 +370,6 @@ export default function Hero() {
                                                                     ? `Updated ${formatAgo(Date.now() - snap.fetchedAt)}`
                                                                     : "Not loaded yet"}
                                                             </span>
-                                                            <Button asChild size="sm" variant="outline">
-                                                                <Link to={`/display?departmentId=${encodeURIComponent(d._id)}`}>
-                                                                    Open Display
-                                                                </Link>
-                                                            </Button>
                                                         </div>
                                                     </div>
                                                 </CarouselItem>

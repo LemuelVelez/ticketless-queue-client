@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Outlet, Navigate } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { BrowserRouter, Routes, Route, Outlet, Navigate, useLocation } from "react-router-dom"
 
 import { Toaster } from "@/components/ui/sonner"
 import LandingPage from "@/pages/landing"
@@ -35,10 +36,38 @@ import AlumniJoinPage from "@/pages/alumni/join"
 import AlumniMyTicketsPage from "@/pages/alumni/my-tickets"
 import AlumniProfilePage from "@/pages/alumni/profile"
 
+import { guestApi, participantAuthStorage } from "@/api/guest"
 import { SessionProvider, useSession } from "@/hooks/use-session"
 import { RoleGuard } from "@/lib/roleguard"
 
 type ShortcutTarget = "home" | "join" | "my-tickets" | "profile"
+type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
+
+function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
+  const value = String(raw ?? "").trim().toUpperCase()
+  if (value === "STUDENT") return "STUDENT"
+  if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+  if (value === "GUEST" || value === "VISITOR") return "GUEST"
+  return null
+}
+
+async function resolveParticipantRole(): Promise<ParticipantRole | null> {
+  const token = participantAuthStorage.getToken()
+  if (!token) return null
+
+  try {
+    const session = await guestApi.getSession()
+    const role = normalizeParticipantRole(session?.participant?.type)
+    if (!role) {
+      participantAuthStorage.clearToken()
+      return null
+    }
+    return role
+  } catch {
+    participantAuthStorage.clearToken()
+    return null
+  }
+}
 
 function getShortcutPath(role: string | undefined, target: ShortcutTarget) {
   switch (role) {
@@ -56,6 +85,14 @@ function getShortcutPath(role: string | undefined, target: ShortcutTarget) {
   }
 }
 
+function getParticipantShortcutPath(role: ParticipantRole, target: ShortcutTarget) {
+  return role === "STUDENT" ? `/student/${target}` : `/alumni/${target}`
+}
+
+function getParticipantHomePath(role: ParticipantRole) {
+  return role === "STUDENT" ? "/student/home" : "/alumni/home"
+}
+
 function LoadingRedirect() {
   const { user, loading } = useSession()
 
@@ -65,12 +102,81 @@ function LoadingRedirect() {
   return <Navigate to={getShortcutPath(user.role, "home")} replace />
 }
 
+function ParticipantAreaGuard({ allow }: { allow: "student" | "alumni" }) {
+  const location = useLocation()
+  const [checking, setChecking] = useState(true)
+  const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
+
+  useEffect(() => {
+    let alive = true
+
+      ; (async () => {
+        const role = await resolveParticipantRole()
+        if (!alive) return
+        setParticipantRole(role)
+        setChecking(false)
+      })()
+
+    return () => {
+      alive = false
+    }
+  }, [location.pathname])
+
+  if (checking) return <LoadingPage />
+
+  if (!participantRole) {
+    return <Navigate to="/login" replace state={{ from: { pathname: location.pathname } }} />
+  }
+
+  if (allow === "student" && participantRole !== "STUDENT") {
+    return <Navigate to={getParticipantHomePath(participantRole)} replace />
+  }
+
+  if (allow === "alumni" && participantRole === "STUDENT") {
+    return <Navigate to="/student/home" replace />
+  }
+
+  return <Outlet />
+}
+
+function ParticipantShortcutGuestRedirect({ target }: { target: ShortcutTarget }) {
+  const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
+  const [checkingParticipant, setCheckingParticipant] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+
+      ; (async () => {
+        const role = await resolveParticipantRole()
+        if (!alive) return
+        setParticipantRole(role)
+        setCheckingParticipant(false)
+      })()
+
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (checkingParticipant) return <LoadingPage />
+
+  if (!participantRole) {
+    return <Navigate to="/login" replace />
+  }
+
+  return <Navigate to={getParticipantShortcutPath(participantRole, target)} replace />
+}
+
 function ParticipantShortcutRedirect({ target }: { target: ShortcutTarget }) {
   const { user, loading } = useSession()
 
   if (loading) return <LoadingPage />
 
-  return <Navigate to={getShortcutPath(user?.role, target)} replace />
+  if (user) {
+    return <Navigate to={getShortcutPath(user.role, target)} replace />
+  }
+
+  return <ParticipantShortcutGuestRedirect target={target} />
 }
 
 export default function App() {
@@ -90,19 +196,23 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
 
-          {/* ✅ Student routes */}
-          <Route path="/student" element={<Navigate to="/student/home" replace />} />
-          <Route path="/student/home" element={<StudentHomePage />} />
-          <Route path="/student/join" element={<StudentJoinPage />} />
-          <Route path="/student/my-tickets" element={<StudentMyTicketsPage />} />
-          <Route path="/student/profile" element={<StudentProfilePage />} />
+          {/* ✅ Student routes (participant-auth required) */}
+          <Route element={<ParticipantAreaGuard allow="student" />}>
+            <Route path="/student" element={<Navigate to="/student/home" replace />} />
+            <Route path="/student/home" element={<StudentHomePage />} />
+            <Route path="/student/join" element={<StudentJoinPage />} />
+            <Route path="/student/my-tickets" element={<StudentMyTicketsPage />} />
+            <Route path="/student/profile" element={<StudentProfilePage />} />
+          </Route>
 
-          {/* ✅ Guest/Alumni routes */}
-          <Route path="/alumni" element={<Navigate to="/alumni/home" replace />} />
-          <Route path="/alumni/home" element={<AlumniHomePage />} />
-          <Route path="/alumni/join" element={<AlumniJoinPage />} />
-          <Route path="/alumni/my-tickets" element={<AlumniMyTicketsPage />} />
-          <Route path="/alumni/profile" element={<AlumniProfilePage />} />
+          {/* ✅ Guest/Alumni routes (participant-auth required) */}
+          <Route element={<ParticipantAreaGuard allow="alumni" />}>
+            <Route path="/alumni" element={<Navigate to="/alumni/home" replace />} />
+            <Route path="/alumni/home" element={<AlumniHomePage />} />
+            <Route path="/alumni/join" element={<AlumniJoinPage />} />
+            <Route path="/alumni/my-tickets" element={<AlumniMyTicketsPage />} />
+            <Route path="/alumni/profile" element={<AlumniProfilePage />} />
+          </Route>
 
           {/* ✅ Friendly shared shortcuts */}
           <Route path="/home" element={<ParticipantShortcutRedirect target="home" />} />

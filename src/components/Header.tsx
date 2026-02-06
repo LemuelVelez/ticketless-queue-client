@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
+import { guestApi, participantAuthStorage } from "@/api/guest"
 import { useSession } from "@/hooks/use-session"
 
 import { Button } from "@/components/ui/button"
@@ -21,10 +22,12 @@ import logo from "@/assets/images/logo.svg"
 type HeaderProps = {
     /**
      * "landing" = section anchors + scroll spy (default)
-     * "student" = simple header for student/guest participant pages
+     * "student" = authenticated participant header for student/guest pages
      */
     variant?: "landing" | "student"
 }
+
+type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 
 const navItems: Array<{ label: string; href: string }> = [
     { label: "Why", href: "#why" },
@@ -38,6 +41,14 @@ const sectionIds = navItems
     .map((item) => item.href)
     .filter((href) => href.startsWith("#"))
     .map((href) => href.slice(1))
+
+function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
+    const value = String(raw ?? "").trim().toUpperCase()
+    if (value === "STUDENT") return "STUDENT"
+    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+    if (value === "GUEST" || value === "VISITOR") return "GUEST"
+    return null
+}
 
 function getHomePath(role: string | undefined) {
     switch (role) {
@@ -68,31 +79,108 @@ function getJoinPath(role: string | undefined) {
     }
 }
 
-function getParticipantBase(role: string | undefined) {
+function getParticipantBase(role: ParticipantRole | null | undefined) {
     return role === "STUDENT" ? "/student" : "/alumni"
 }
 
-function getParticipantLabel(role: string | undefined) {
+function getParticipantLabel(role: ParticipantRole | null | undefined) {
     return role === "STUDENT" ? "Student" : "Guest"
+}
+
+function getParticipantHomePath(role: ParticipantRole | null | undefined) {
+    return role === "STUDENT" ? "/student/home" : "/alumni/home"
+}
+
+function getParticipantJoinPath(role: ParticipantRole | null | undefined) {
+    return role === "STUDENT" ? "/student/join" : "/alumni/join"
 }
 
 export default function Header({ variant = "landing" }: HeaderProps) {
     const { user, loading } = useSession()
 
-    const role = user?.role
-    const showDashboard = !loading && !!user
-    const authTo = showDashboard ? getHomePath(role) : "/login"
-    const authLabel = showDashboard ? (role === "ADMIN" || role === "STAFF" ? "Dashboard" : "My Home") : "Login"
-
-    const landingJoinTo = useMemo(() => getJoinPath(role), [role])
-
-    const participantBase = useMemo(() => getParticipantBase(role), [role])
-    const participantLabel = useMemo(() => getParticipantLabel(role), [role])
+    const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
+    const [participantLoading, setParticipantLoading] = useState(true)
 
     // ✅ Hooks must not be conditional
     const [activeHref, setActiveHref] = useState<string>("")
     const [sheetOpen, setSheetOpen] = useState(false)
     const headerRef = useRef<HTMLElement | null>(null)
+
+    useEffect(() => {
+        let alive = true
+
+        const resolveParticipant = async () => {
+            const token = participantAuthStorage.getToken()
+            if (!token) {
+                if (!alive) return
+                setParticipantRole(null)
+                setParticipantLoading(false)
+                return
+            }
+
+            try {
+                const res = await guestApi.getSession()
+                if (!alive) return
+
+                const role = normalizeParticipantRole(res?.participant?.type)
+                if (!role) {
+                    participantAuthStorage.clearToken()
+                    setParticipantRole(null)
+                } else {
+                    setParticipantRole(role)
+                }
+            } catch {
+                if (!alive) return
+                participantAuthStorage.clearToken()
+                setParticipantRole(null)
+            } finally {
+                if (alive) setParticipantLoading(false)
+            }
+        }
+
+        void resolveParticipant()
+
+        const onStorage = (e: StorageEvent) => {
+            if (e.key === "qp_participant_token") {
+                setParticipantLoading(true)
+                void resolveParticipant()
+            }
+        }
+
+        window.addEventListener("storage", onStorage)
+        return () => {
+            alive = false
+            window.removeEventListener("storage", onStorage)
+        }
+    }, [])
+
+    const staffRole = user?.role
+    const isStaffAuthenticated = !loading && !!user
+    const isParticipantAuthenticated = !participantLoading && !!participantRole
+
+    const authTo = useMemo(() => {
+        if (isStaffAuthenticated) return getHomePath(staffRole)
+        if (isParticipantAuthenticated) return getParticipantHomePath(participantRole)
+        return "/login"
+    }, [isStaffAuthenticated, staffRole, isParticipantAuthenticated, participantRole])
+
+    const authLabel = isStaffAuthenticated
+        ? staffRole === "ADMIN" || staffRole === "STAFF"
+            ? "Dashboard"
+            : "My Home"
+        : isParticipantAuthenticated
+            ? "My Home"
+            : "Login"
+
+    const landingJoinTo = useMemo(() => {
+        if (isStaffAuthenticated) return getJoinPath(staffRole)
+        if (isParticipantAuthenticated) return getParticipantJoinPath(participantRole)
+        return "/login"
+    }, [isStaffAuthenticated, staffRole, isParticipantAuthenticated, participantRole])
+
+    const participantBase = useMemo(() => getParticipantBase(participantRole), [participantRole])
+    const participantLabel = useMemo(() => getParticipantLabel(participantRole), [participantRole])
+    const participantBrandTo = isParticipantAuthenticated ? `${participantBase}/home` : "/login"
 
     // ✅ Landing-only: keep active state in sync with URL hash
     useEffect(() => {
@@ -160,12 +248,12 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         setSheetOpen(false)
     }
 
-    // ✅ Student/Guest simple header
+    // ✅ Student/Guest authenticated header
     if (variant === "student") {
         return (
             <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
                 <div className="mx-4 flex items-center justify-between px-4 py-3">
-                    <Link to={`${participantBase}/home`} className="flex items-center gap-3">
+                    <Link to={participantBrandTo} className="flex items-center gap-3">
                         <div className="flex h-12 w-12 items-center justify-center rounded-lg border">
                             <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
                         </div>
@@ -176,7 +264,9 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                     {participantLabel}
                                 </Badge>
                             </div>
-                            <p className="hidden text-xs text-muted-foreground sm:block">Join queue and track your tickets</p>
+                            <p className="hidden text-xs text-muted-foreground sm:block">
+                                Authenticated participant access only
+                            </p>
                         </div>
                     </Link>
 
@@ -186,21 +276,33 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                             <Link to="/">Landing Page</Link>
                         </Button>
 
-                        <Button variant="outline" asChild>
-                            <Link to={`${participantBase}/home`}>Home</Link>
-                        </Button>
+                        {isParticipantAuthenticated ? (
+                            <>
+                                <Button variant="outline" asChild>
+                                    <Link to={`${participantBase}/home`}>Home</Link>
+                                </Button>
 
-                        <Button asChild>
-                            <Link to={`${participantBase}/join`}>Join Queue</Link>
-                        </Button>
+                                <Button asChild>
+                                    <Link to={`${participantBase}/join`}>Join Queue</Link>
+                                </Button>
 
-                        <Button variant="outline" asChild>
-                            <Link to={`${participantBase}/my-tickets`}>My Tickets</Link>
-                        </Button>
+                                <Button variant="outline" asChild>
+                                    <Link to={`${participantBase}/my-tickets`}>My Tickets</Link>
+                                </Button>
 
-                        <Button variant="outline" asChild>
-                            <Link to={`${participantBase}/profile`}>Profile</Link>
-                        </Button>
+                                <Button variant="outline" asChild>
+                                    <Link to={`${participantBase}/profile`}>Profile</Link>
+                                </Button>
+                            </>
+                        ) : participantLoading ? (
+                            <Button variant="outline" disabled>
+                                Checking session...
+                            </Button>
+                        ) : (
+                            <Button asChild>
+                                <Link to="/login">Login to continue</Link>
+                            </Button>
+                        )}
                     </div>
 
                     {/* Mobile actions */}
@@ -225,7 +327,9 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                                     <span className="font-semibold">QueuePass</span>
                                                     <Badge variant="secondary">{participantLabel}</Badge>
                                                 </div>
-                                                <p className="mt-1 text-xs text-muted-foreground">Student & guest pages</p>
+                                                <p className="mt-1 text-xs text-muted-foreground">
+                                                    Student & guest pages (authenticated)
+                                                </p>
                                             </div>
                                         </div>
                                     </SheetTitle>
@@ -238,29 +342,43 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                         </Link>
                                     </Button>
 
-                                    <Button variant="ghost" className="w-full justify-start" asChild>
-                                        <Link to={`${participantBase}/home`} onClick={() => setSheetOpen(false)}>
-                                            Home
-                                        </Link>
-                                    </Button>
+                                    {isParticipantAuthenticated ? (
+                                        <>
+                                            <Button variant="ghost" className="w-full justify-start" asChild>
+                                                <Link to={`${participantBase}/home`} onClick={() => setSheetOpen(false)}>
+                                                    Home
+                                                </Link>
+                                            </Button>
 
-                                    <Button className="w-full" asChild>
-                                        <Link to={`${participantBase}/join`} onClick={() => setSheetOpen(false)}>
-                                            Join Queue
-                                        </Link>
-                                    </Button>
+                                            <Button className="w-full" asChild>
+                                                <Link to={`${participantBase}/join`} onClick={() => setSheetOpen(false)}>
+                                                    Join Queue
+                                                </Link>
+                                            </Button>
 
-                                    <Button variant="outline" className="w-full" asChild>
-                                        <Link to={`${participantBase}/my-tickets`} onClick={() => setSheetOpen(false)}>
-                                            My Tickets
-                                        </Link>
-                                    </Button>
+                                            <Button variant="outline" className="w-full" asChild>
+                                                <Link to={`${participantBase}/my-tickets`} onClick={() => setSheetOpen(false)}>
+                                                    My Tickets
+                                                </Link>
+                                            </Button>
 
-                                    <Button variant="outline" className="w-full" asChild>
-                                        <Link to={`${participantBase}/profile`} onClick={() => setSheetOpen(false)}>
-                                            Profile
-                                        </Link>
-                                    </Button>
+                                            <Button variant="outline" className="w-full" asChild>
+                                                <Link to={`${participantBase}/profile`} onClick={() => setSheetOpen(false)}>
+                                                    Profile
+                                                </Link>
+                                            </Button>
+                                        </>
+                                    ) : participantLoading ? (
+                                        <Button variant="outline" className="w-full" disabled>
+                                            Checking session...
+                                        </Button>
+                                    ) : (
+                                        <Button className="w-full" asChild>
+                                            <Link to="/login" onClick={() => setSheetOpen(false)}>
+                                                Login to continue
+                                            </Link>
+                                        </Button>
+                                    )}
                                 </div>
                             </SheetContent>
                         </Sheet>
@@ -397,7 +515,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                         className="w-full"
                                         asChild
                                         onClick={() => setSheetOpen(false)}
-                                        disabled={loading}
+                                        disabled={loading || participantLoading}
                                     >
                                         <Link to={authTo}>{authLabel}</Link>
                                     </Button>

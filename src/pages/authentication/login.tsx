@@ -6,7 +6,7 @@ import { toast } from "sonner"
 
 import LoadingPage from "@/pages/loading"
 
-import { guestApi } from "@/api/guest"
+import { guestApi, participantAuthStorage } from "@/api/guest"
 import { useSession } from "@/hooks/use-session"
 import { ApiError } from "@/lib/http"
 
@@ -34,9 +34,22 @@ type LocationState = {
 
 type AuthTab = "staff" | "participant"
 type ParticipantTab = "student" | "alumniVisitor"
+type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 
 function defaultDashboardPath(role: "ADMIN" | "STAFF") {
     return role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
+}
+
+function defaultParticipantPath(role: ParticipantRole) {
+    return role === "STUDENT" ? "/student/home" : "/alumni/home"
+}
+
+function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
+    const value = String(raw ?? "").trim().toUpperCase()
+    if (value === "STUDENT") return "STUDENT"
+    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+    if (value === "GUEST" || value === "VISITOR") return "GUEST"
+    return null
 }
 
 /**
@@ -64,12 +77,44 @@ function canRedirectTo(pathname: string | undefined, role: "ADMIN" | "STAFF") {
     return true
 }
 
+function canRedirectParticipantTo(pathname: string | undefined, role: ParticipantRole) {
+    if (!pathname || typeof pathname !== "string") return false
+
+    // Never redirect back to auth/loading routes
+    if (
+        pathname === "/login" ||
+        pathname === "/loading" ||
+        pathname === "/forgot-password" ||
+        pathname.startsWith("/reset-password")
+    ) {
+        return false
+    }
+
+    // Participant cannot go to staff/admin routes
+    if (pathname.startsWith("/admin") || pathname.startsWith("/staff")) return false
+
+    // Participant route restrictions
+    if (pathname.startsWith("/student")) return role === "STUDENT"
+    if (pathname.startsWith("/alumni")) return role !== "STUDENT"
+
+    return true
+}
+
 function normalizePin(value: string) {
     return value.replace(/\D+/g, "").slice(0, 4)
 }
 
 function isFourDigitPin(pin: string) {
     return /^\d{4}$/.test(pin)
+}
+
+async function resolveParticipantRole(fallback: ParticipantRole): Promise<ParticipantRole> {
+    try {
+        const session = await guestApi.getSession()
+        return normalizeParticipantRole(session?.participant?.type) ?? fallback
+    } catch {
+        return fallback
+    }
 }
 
 export default function LoginPage() {
@@ -93,22 +138,59 @@ export default function LoginPage() {
     const [isSubmitting, setIsSubmitting] = React.useState(false)
     const [showPassword, setShowPassword] = React.useState(false)
 
-    // ✅ If there's an active staff/admin session, redirect away from /login automatically.
+    // ✅ If there's an active session, redirect away from /login automatically.
     React.useEffect(() => {
         if (loading) return
-        if (!user) return
 
-        const role = user.role
-        const home = defaultDashboardPath(role)
-        const state = location.state as LocationState | null
-        const fromPath = state?.from?.pathname
+        if (user) {
+            const role = user.role
+            const home = defaultDashboardPath(role)
+            const state = location.state as LocationState | null
+            const fromPath = state?.from?.pathname
 
-        if (canRedirectTo(fromPath, role)) {
-            navigate(fromPath!, { replace: true })
+            if (canRedirectTo(fromPath, role)) {
+                navigate(fromPath!, { replace: true })
+                return
+            }
+
+            navigate(home, { replace: true })
             return
         }
 
-        navigate(home, { replace: true })
+        const participantToken = participantAuthStorage.getToken()
+        if (!participantToken) return
+
+        let alive = true
+
+            ; (async () => {
+                try {
+                    const session = await guestApi.getSession()
+                    if (!alive) return
+
+                    const role = normalizeParticipantRole(session?.participant?.type)
+                    if (!role) {
+                        participantAuthStorage.clearToken()
+                        return
+                    }
+
+                    const state = location.state as LocationState | null
+                    const fromPath = state?.from?.pathname
+
+                    if (canRedirectParticipantTo(fromPath, role)) {
+                        navigate(fromPath!, { replace: true })
+                        return
+                    }
+
+                    navigate(defaultParticipantPath(role), { replace: true })
+                } catch {
+                    if (!alive) return
+                    participantAuthStorage.clearToken()
+                }
+            })()
+
+        return () => {
+            alive = false
+        }
     }, [loading, user, location.state, navigate])
 
     async function onSubmitStaff(e: React.FormEvent<HTMLFormElement>) {
@@ -200,8 +282,22 @@ export default function LoginPage() {
                 })
             }
 
+            const fallbackRole: ParticipantRole =
+                participantTab === "student" ? "STUDENT" : "ALUMNI_VISITOR"
+
+            const participantRole = await resolveParticipantRole(fallbackRole)
+
             toast.success("Signed in successfully")
-            navigate("/", { replace: true })
+
+            const state = location.state as LocationState | null
+            const fromPath = state?.from?.pathname
+
+            if (canRedirectParticipantTo(fromPath, participantRole)) {
+                navigate(fromPath!, { replace: true })
+                return
+            }
+
+            navigate(defaultParticipantPath(participantRole), { replace: true })
         } catch (err) {
             const message =
                 err instanceof ApiError
