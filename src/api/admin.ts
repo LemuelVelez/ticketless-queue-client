@@ -12,6 +12,13 @@ export type Department = {
     _id: string
     name: string
     code?: string
+
+    /**
+     * Top-level manager / office that owns the transaction catalog
+     * for this department (e.g., REGISTRAR, LIBRARY, ADMIN_BUILDING).
+     */
+    transactionManager?: string
+
     enabled?: boolean
 }
 
@@ -21,6 +28,22 @@ export type ServiceWindow = {
     name: string
     number: number
     enabled?: boolean
+}
+
+export type TransactionScope = "INTERNAL" | "EXTERNAL"
+
+export type TransactionPurpose = {
+    id: string
+    category: string
+    key: string
+    label: string
+    scopes: TransactionScope[]
+    departmentIds: string[]
+    enabled: boolean
+    sortOrder: number
+    meta?: Record<string, unknown>
+    createdAt: string
+    updatedAt: string
 }
 
 /**
@@ -156,10 +179,54 @@ export const adminApi = {
 
     // DEPARTMENTS
     listDepartments: () => api.get<{ departments: Department[] }>("/admin/departments"),
-    createDepartment: (payload: { name: string; code?: string }) =>
+    createDepartment: (payload: { name: string; code?: string; transactionManager?: string }) =>
         api.post<{ department: Department }>("/admin/departments", payload),
-    updateDepartment: (id: string, payload: { name?: string; code?: string; enabled?: boolean }) =>
-        api.put<{ department: Department }>(`/admin/departments/${id}`, payload),
+    updateDepartment: (
+        id: string,
+        payload: { name?: string; code?: string; transactionManager?: string; enabled?: boolean }
+    ) => api.put<{ department: Department }>(`/admin/departments/${id}`, payload),
+
+    // TRANSACTION PURPOSES
+    listTransactionPurposes: (opts?: {
+        category?: string
+        key?: string
+        scope?: TransactionScope
+        departmentId?: string
+        enabledOnly?: boolean
+        includeDisabled?: boolean
+        matchDepartmentOrGlobal?: boolean
+    }) => api.get<{ transactions: TransactionPurpose[] }>(`/admin/transaction-purposes${toQuery(opts as any)}`),
+
+    createTransactionPurpose: (payload: {
+        category: string
+        key: string
+        label: string
+        scopes?: TransactionScope[]
+        departmentId?: string
+        departmentIds?: string[]
+        applyToAllDepartments?: boolean
+        enabled?: boolean
+        sortOrder?: number
+        meta?: Record<string, unknown>
+    }) => api.post<{ transaction: TransactionPurpose }>("/admin/transaction-purposes", payload),
+
+    updateTransactionPurpose: (
+        id: string,
+        payload: Partial<{
+            category: string
+            key: string
+            label: string
+            scopes: TransactionScope[]
+            departmentId: string
+            departmentIds: string[]
+            applyToAllDepartments: boolean
+            enabled: boolean
+            sortOrder: number
+            meta: Record<string, unknown>
+        }>
+    ) => api.put<{ transaction: TransactionPurpose }>(`/admin/transaction-purposes/${id}`, payload),
+
+    deleteTransactionPurpose: (id: string) => api.delete<{ ok: true }>(`/admin/transaction-purposes/${id}`),
 
     // WINDOWS
     listWindows: (opts?: { departmentId?: string }) => {

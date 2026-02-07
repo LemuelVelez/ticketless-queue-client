@@ -2,7 +2,7 @@
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { MoreHorizontal, Plus, RefreshCw, LayoutGrid, Building2 } from "lucide-react"
+import { MoreHorizontal, Plus, RefreshCw, LayoutGrid, Building2, UserPlus2, UserMinus } from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
@@ -51,6 +51,10 @@ function safeInt(v: string) {
     return Number.isFinite(n) ? n : 0
 }
 
+function getStaffId(s: StaffUser) {
+    return s._id || s.id || ""
+}
+
 export default function AdminWindowsPage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -78,9 +82,11 @@ export default function AdminWindowsPage() {
     // dialogs
     const [createWinOpen, setCreateWinOpen] = React.useState(false)
     const [editWinOpen, setEditWinOpen] = React.useState(false)
+    const [assignStaffOpen, setAssignStaffOpen] = React.useState(false)
 
     // selected
     const [selectedWin, setSelectedWin] = React.useState<ServiceWindow | null>(null)
+    const [assignTargetWin, setAssignTargetWin] = React.useState<ServiceWindow | null>(null)
 
     // create window form
     const [cWinDeptId, setCWinDeptId] = React.useState<string>("")
@@ -92,32 +98,45 @@ export default function AdminWindowsPage() {
     const [eWinNumber, setEWinNumber] = React.useState<number>(1)
     const [eWinEnabled, setEWinEnabled] = React.useState(true)
 
+    // assign staff form
+    const [aStaffId, setAStaffId] = React.useState<string>("none")
+
     const deptById = React.useMemo(() => {
         const m = new Map<string, Department>()
         for (const d of departments) m.set(d._id, d)
         return m
     }, [departments])
 
+    const windowById = React.useMemo(() => {
+        const m = new Map<string, ServiceWindow>()
+        for (const w of windows) m.set(w._id, w)
+        return m
+    }, [windows])
+
     const staffAssignedByWindow = React.useMemo(() => {
-        const m = new Map<string, { count: number; names: string[] }>()
+        const m = new Map<string, StaffUser[]>()
         for (const s of staffUsers ?? []) {
             if (s.role !== "STAFF") continue
             if (!s.active) continue
             if (!s.assignedWindow) continue
 
-            const key = s.assignedWindow
-            const current = m.get(key) ?? { count: 0, names: [] }
-            current.count += 1
-            if (s.name?.trim()) current.names.push(s.name.trim())
-            m.set(key, current)
+            const arr = m.get(s.assignedWindow) ?? []
+            arr.push(s)
+            m.set(s.assignedWindow, arr)
         }
 
-        for (const [k, v] of m.entries()) {
-            v.names.sort((a, b) => a.localeCompare(b))
-            m.set(k, v)
+        for (const [k, arr] of m.entries()) {
+            arr.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+            m.set(k, arr)
         }
 
         return m
+    }, [staffUsers])
+
+    const assignableStaff = React.useMemo(() => {
+        return (staffUsers ?? [])
+            .filter((s) => s.role === "STAFF" && s.active && getStaffId(s))
+            .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
     }, [staffUsers])
 
     const enabledDepartments = React.useMemo(() => departments.filter((d) => isEnabledFlag(d.enabled)), [departments])
@@ -186,6 +205,12 @@ export default function AdminWindowsPage() {
         setEditWinOpen(true)
     }
 
+    function openAssignStaff(w: ServiceWindow) {
+        setAssignTargetWin(w)
+        setAStaffId("none")
+        setAssignStaffOpen(true)
+    }
+
     async function handleCreateWin() {
         const departmentId = cWinDeptId
         const name = cWinName.trim()
@@ -236,15 +261,76 @@ export default function AdminWindowsPage() {
         }
     }
 
+    async function handleAssignStaffToWindow() {
+        if (!assignTargetWin) return toast.error("Please select a window.")
+        if (!assignTargetWin._id) return toast.error("Invalid window id.")
+        if (!assignTargetWin.department) return toast.error("Invalid window department.")
+        if (!aStaffId || aStaffId === "none") return toast.error("Please select a staff account.")
+
+        const picked = assignableStaff.find((s) => getStaffId(s) === aStaffId)
+        if (!picked) return toast.error("Selected staff was not found.")
+
+        setSaving(true)
+        try {
+            const movedFromWindowId = picked.assignedWindow || null
+
+            await adminApi.updateStaff(aStaffId, {
+                departmentId: assignTargetWin.department,
+                windowId: assignTargetWin._id,
+            })
+
+            const movedText =
+                movedFromWindowId && movedFromWindowId !== assignTargetWin._id
+                    ? ` Moved from ${windowById.get(movedFromWindowId)?.name ?? "another window"}.`
+                    : ""
+
+            toast.success(`Staff assigned to ${assignTargetWin.name} (#${assignTargetWin.number}).${movedText}`)
+
+            setAStaffId("none")
+            await fetchAll()
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to assign staff."
+            toast.error(msg)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    async function handleUnassignStaffFromWindow(staff: StaffUser) {
+        if (!assignTargetWin) return toast.error("Please select a window.")
+        const staffId = getStaffId(staff)
+        if (!staffId) return toast.error("Invalid staff id.")
+
+        setSaving(true)
+        try {
+            await adminApi.updateStaff(staffId, {
+                // keep/update department to the window's department; remove window assignment
+                departmentId: assignTargetWin.department,
+                windowId: null,
+            })
+            toast.success(`Removed ${staff.name} from ${assignTargetWin.name} (#${assignTargetWin.number}).`)
+            await fetchAll()
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to unassign staff."
+            toast.error(msg)
+        } finally {
+            setSaving(false)
+        }
+    }
+
     const stats = React.useMemo(() => {
         const total = windows.length
         const enabled = windows.filter((w) => isEnabledFlag(w.enabled)).length
         return { total, enabled, disabled: total - enabled }
     }, [windows])
 
+    const assignedStaffForTargetWin = React.useMemo(() => {
+        if (!assignTargetWin?._id) return []
+        return staffAssignedByWindow.get(assignTargetWin._id) ?? []
+    }, [assignTargetWin, staffAssignedByWindow])
+
     return (
         <DashboardLayout title="Windows" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
-            {/* ✅ Responsiveness fix: define columns + allow shrink */}
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 <Card className="min-w-0">
                     <CardHeader className="gap-2">
@@ -252,11 +338,10 @@ export default function AdminWindowsPage() {
                             <div className="min-w-0">
                                 <CardTitle>Window Management</CardTitle>
                                 <CardDescription>
-                                    Create and manage service windows. Disable windows to hide them from staff assignment.
+                                    Create and manage service windows. Assign staff directly from this page.
                                 </CardDescription>
                             </div>
 
-                            {/* ✅ XS stack; desktop unchanged */}
                             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                 <Button
                                     variant="outline"
@@ -349,7 +434,6 @@ export default function AdminWindowsPage() {
                                     <Skeleton className="h-10 w-full" />
                                 </div>
                             ) : (
-                                // ✅ Prevent page overflow from table
                                 <div className="rounded-lg border overflow-x-auto">
                                     <Table>
                                         <TableHeader>
@@ -365,9 +449,11 @@ export default function AdminWindowsPage() {
                                         <TableBody>
                                             {winRows.map((w) => {
                                                 const deptName = deptById.get(w.department)?.name ?? "—"
-                                                const assigned = staffAssignedByWindow.get(w._id)
-                                                const assignedCount = assigned?.count ?? 0
-                                                const assignedNames = assigned?.names ?? []
+                                                const assignedStaff = staffAssignedByWindow.get(w._id) ?? []
+                                                const assignedCount = assignedStaff.length
+                                                const assignedNames = assignedStaff
+                                                    .map((s) => (s.name?.trim() ? s.name.trim() : s.email))
+                                                    .filter(Boolean)
 
                                                 return (
                                                     <TableRow key={w._id}>
@@ -397,9 +483,29 @@ export default function AdminWindowsPage() {
                                                                     <p className="mt-1 truncate text-xs text-muted-foreground" title={assignedNames.join(", ")}>
                                                                         {assignedNames.join(", ")}
                                                                     </p>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="link"
+                                                                        size="sm"
+                                                                        className="h-auto p-0 text-xs"
+                                                                        onClick={() => openAssignStaff(w)}
+                                                                    >
+                                                                        Manage assignment
+                                                                    </Button>
                                                                 </div>
                                                             ) : (
-                                                                <span className="text-muted-foreground">—</span>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="text-muted-foreground">—</span>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="link"
+                                                                        size="sm"
+                                                                        className="h-auto p-0 text-xs"
+                                                                        onClick={() => openAssignStaff(w)}
+                                                                    >
+                                                                        Assign staff
+                                                                    </Button>
+                                                                </div>
                                                             )}
                                                         </TableCell>
 
@@ -413,9 +519,16 @@ export default function AdminWindowsPage() {
                                                                     </Button>
                                                                 </DropdownMenuTrigger>
 
-                                                                <DropdownMenuContent align="end" className="w-44">
+                                                                <DropdownMenuContent align="end" className="w-52">
                                                                     <DropdownMenuLabel>Actions</DropdownMenuLabel>
                                                                     <DropdownMenuSeparator />
+                                                                    <DropdownMenuItem
+                                                                        onClick={() => openAssignStaff(w)}
+                                                                        className="cursor-pointer"
+                                                                    >
+                                                                        <UserPlus2 className="mr-2 h-4 w-4" />
+                                                                        Assign staff
+                                                                    </DropdownMenuItem>
                                                                     <DropdownMenuItem
                                                                         onClick={() => openEditWin(w)}
                                                                         className="cursor-pointer"
@@ -493,7 +606,6 @@ export default function AdminWindowsPage() {
                         </div>
                     </div>
 
-                    {/* ✅ Mobile footer fix */}
                     <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
@@ -558,7 +670,6 @@ export default function AdminWindowsPage() {
                         </div>
                     </div>
 
-                    {/* ✅ Mobile footer fix */}
                     <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
@@ -575,6 +686,129 @@ export default function AdminWindowsPage() {
 
                         <Button type="button" onClick={() => void handleSaveWin()} disabled={saving} className="w-full sm:w-auto">
                             {saving ? "Saving…" : "Save"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Assign Staff */}
+            <Dialog
+                open={assignStaffOpen}
+                onOpenChange={(open) => {
+                    setAssignStaffOpen(open)
+                    if (!open) {
+                        setAssignTargetWin(null)
+                        setAStaffId("none")
+                    }
+                }}
+            >
+                <DialogContent className="sm:max-w-xl">
+                    <DialogHeader>
+                        <DialogTitle>Assign staff to window</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="grid gap-4">
+                        <div className="rounded-lg border p-3">
+                            <div className="text-sm font-medium">
+                                {assignTargetWin?.name || "—"}{" "}
+                                {assignTargetWin ? (
+                                    <span className="text-muted-foreground">(# {assignTargetWin.number})</span>
+                                ) : null}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                                Department:{" "}
+                                {assignTargetWin ? (deptById.get(assignTargetWin.department)?.name ?? "—") : "—"}
+                            </div>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Select staff</Label>
+                            <Select value={aStaffId} onValueChange={setAStaffId}>
+                                <SelectTrigger className="w-full min-w-0">
+                                    <SelectValue placeholder="Choose staff account" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="none">Select…</SelectItem>
+                                    {assignableStaff.map((s) => {
+                                        const staffId = getStaffId(s)
+                                        const currentWindow = s.assignedWindow ? windowById.get(s.assignedWindow) : null
+                                        const tag = currentWindow
+                                            ? ` • currently at ${currentWindow.name} (#${currentWindow.number})`
+                                            : ""
+                                        return (
+                                            <SelectItem key={staffId} value={staffId}>
+                                                {s.name} ({s.email}){tag}
+                                            </SelectItem>
+                                        )
+                                    })}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Assigning here will set staff department to this window’s department and update window assignment.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Currently assigned in this window</Label>
+                            <div className="max-h-48 overflow-y-auto rounded-lg border p-2">
+                                {assignedStaffForTargetWin.length === 0 ? (
+                                    <p className="px-1 py-2 text-sm text-muted-foreground">No staff assigned yet.</p>
+                                ) : (
+                                    <div className="grid gap-2">
+                                        {assignedStaffForTargetWin.map((s) => {
+                                            const sid = getStaffId(s)
+                                            return (
+                                                <div
+                                                    key={sid}
+                                                    className="flex items-center justify-between rounded-md border px-3 py-2"
+                                                >
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-medium">{s.name}</p>
+                                                        <p className="truncate text-xs text-muted-foreground">{s.email}</p>
+                                                    </div>
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => void handleUnassignStaffFromWindow(s)}
+                                                        disabled={saving}
+                                                        className="gap-1"
+                                                    >
+                                                        <UserMinus className="h-4 w-4" />
+                                                        Unassign
+                                                    </Button>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                                setAssignStaffOpen(false)
+                                setAssignTargetWin(null)
+                                setAStaffId("none")
+                            }}
+                            disabled={saving}
+                            className="w-full sm:w-auto sm:mr-2"
+                        >
+                            Close
+                        </Button>
+
+                        <Button
+                            type="button"
+                            onClick={() => void handleAssignStaffToWindow()}
+                            disabled={saving}
+                            className="w-full gap-2 sm:w-auto"
+                        >
+                            <UserPlus2 className="h-4 w-4" />
+                            {saving ? "Assigning…" : "Assign staff"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
