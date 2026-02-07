@@ -6,7 +6,7 @@ import { toast } from "sonner"
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { studentApi, type Department, type Ticket } from "@/api/student"
+import { studentApi, type Department, type ParticipantTransaction, type Ticket } from "@/api/student"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -19,6 +19,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
+}
+
+function normalizeMobile(value: string) {
+    return value.replace(/[^\d+]/g, "").trim()
 }
 
 function deptNameFromTicketDepartment(dept: any, fallback?: string) {
@@ -44,6 +48,11 @@ function statusBadgeVariant(status?: string) {
     }
 }
 
+function toggleKey(keys: string[], key: string) {
+    if (keys.includes(key)) return keys.filter((k) => k !== key)
+    return [...keys, key]
+}
+
 export default function StudentJoinPage() {
     const location = useLocation()
 
@@ -53,11 +62,17 @@ export default function StudentJoinPage() {
     const ticketId = React.useMemo(() => pickNonEmptyString(qs.get("ticketId") || qs.get("id")), [qs])
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
+    const [loadingSession, setLoadingSession] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
 
+    const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
     const [departmentId, setDepartmentId] = React.useState<string>("")
     const [studentId, setStudentId] = React.useState<string>(preStudentId)
     const [phone, setPhone] = React.useState<string>("")
+
+    const [participant, setParticipant] = React.useState<any | null>(null)
+    const [availableTransactions, setAvailableTransactions] = React.useState<ParticipantTransaction[]>([])
+    const [selectedTransactions, setSelectedTransactions] = React.useState<string[]>([])
 
     const [busy, setBusy] = React.useState(false)
     const [ticket, setTicket] = React.useState<Ticket | null>(null)
@@ -84,12 +99,7 @@ export default function StudentJoinPage() {
         setLoadingDepts(true)
         try {
             const res = await studentApi.listDepartments()
-            const list = res.departments ?? []
-            setDepartments(list)
-
-            const canUsePre = preDeptId && list.some((d) => d._id === preDeptId)
-            const next = canUsePre ? preDeptId : list[0]?._id ?? ""
-            setDepartmentId((prev) => prev || next)
+            setDepartments(res.departments ?? [])
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load departments.")
             setDepartments([])
@@ -97,7 +107,35 @@ export default function StudentJoinPage() {
         } finally {
             setLoadingDepts(false)
         }
-    }, [preDeptId])
+    }, [])
+
+    const loadSession = React.useCallback(async () => {
+        setLoadingSession(true)
+        try {
+            const res = await studentApi.getSession()
+            const p = (res.participant ?? null) as any
+            const tx = (res.availableTransactions ?? []).filter((x) => pickNonEmptyString(x?.key))
+
+            setParticipant(p)
+            setAvailableTransactions(tx)
+
+            const sid = pickNonEmptyString(p?.tcNumber) || pickNonEmptyString(p?.studentId)
+            const mobile = pickNonEmptyString(p?.mobileNumber) || pickNonEmptyString(p?.phone)
+            const dept = pickNonEmptyString(p?.departmentId)
+
+            if (sid) setStudentId((prev) => prev || sid)
+            if (mobile) setPhone((prev) => prev || mobile)
+            if (dept) {
+                setSessionDepartmentId(dept)
+                setDepartmentId((prev) => prev || dept)
+            }
+        } catch {
+            setParticipant(null)
+            setAvailableTransactions([])
+        } finally {
+            setLoadingSession(false)
+        }
+    }, [])
 
     const loadTicketById = React.useCallback(async () => {
         if (!ticketId) return
@@ -112,6 +150,13 @@ export default function StudentJoinPage() {
 
             if (deptIdFromTicket) setDepartmentId(deptIdFromTicket)
             if ((res.ticket as any)?.studentId) setStudentId(String((res.ticket as any).studentId))
+            if ((res.ticket as any)?.phone) setPhone(String((res.ticket as any).phone))
+
+            const txKeys = Array.isArray(res.transactions?.transactionKeys)
+                ? res.transactions?.transactionKeys.filter((k) => pickNonEmptyString(k))
+                : []
+
+            if (txKeys.length) setSelectedTransactions(txKeys)
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load ticket.")
         } finally {
@@ -121,7 +166,22 @@ export default function StudentJoinPage() {
 
     React.useEffect(() => {
         void loadDepartments()
-    }, [loadDepartments])
+        void loadSession()
+    }, [loadDepartments, loadSession])
+
+    React.useEffect(() => {
+        if (!departments.length) return
+
+        setDepartmentId((prev) => {
+            const has = (id: string) => !!id && departments.some((d) => d._id === id)
+
+            if (has(prev)) return prev
+            if (has(preDeptId)) return preDeptId
+            if (has(sessionDepartmentId)) return sessionDepartmentId
+
+            return departments[0]?._id ?? ""
+        })
+    }, [departments, preDeptId, sessionDepartmentId])
 
     React.useEffect(() => {
         void loadTicketById()
@@ -151,18 +211,37 @@ export default function StudentJoinPage() {
 
     async function onJoin() {
         const sid = studentId.trim()
-        const ph = phone.trim()
+        const ph = normalizeMobile(phone)
 
         if (!departmentId) return toast.error("Please select a department.")
         if (!sid) return toast.error("Student ID is required.")
+        if (!ph) return toast.error("Phone number is required.")
+
+        const isSessionFlow = !!participant
+        if (isSessionFlow && !availableTransactions.length) {
+            return toast.error("No queue purpose is available for this account.")
+        }
+        if (isSessionFlow && !selectedTransactions.length) {
+            return toast.error("Please select at least one queue purpose.")
+        }
 
         setBusy(true)
         try {
-            const res = await studentApi.joinQueue({
-                departmentId,
-                studentId: sid,
-                phone: ph || undefined,
-            })
+            const res = await studentApi.joinQueue(
+                isSessionFlow
+                    ? {
+                        departmentId,
+                        studentId: sid,
+                        phone: ph,
+                        transactionKeys: selectedTransactions,
+                    }
+                    : {
+                        departmentId,
+                        studentId: sid,
+                        phone: ph,
+                    }
+            )
+
             setTicket(res.ticket)
             toast.success("You are now in the queue.")
         } catch (e: any) {
@@ -188,11 +267,11 @@ export default function StudentJoinPage() {
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
 
-            <main className="mx-auto w-full max-w-3xl px-4 py-10">
+            <main className="mx-auto w-full px-4 py-10">
                 <div className="mb-6">
                     <h1 className="text-2xl font-semibold tracking-tight">Join Queue</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Select your department and enter Student ID to get your queue number.
+                        Department defaults to your registered profile. You can change it here if needed.
                     </p>
                 </div>
 
@@ -201,8 +280,17 @@ export default function StudentJoinPage() {
                         <CardHeader>
                             <CardTitle>Queue Entry</CardTitle>
                             <CardDescription>
-                                If you already joined today, use <b>Find my ticket</b>.
+                                Student ID and phone are prefilled from your account when available. You may edit before joining.
                             </CardDescription>
+                            <div className="pt-1">
+                                {loadingSession ? (
+                                    <Skeleton className="h-5 w-40" />
+                                ) : participant ? (
+                                    <Badge variant="secondary">Profile synced</Badge>
+                                ) : (
+                                    <Badge variant="outline">Guest mode</Badge>
+                                )}
+                            </div>
                         </CardHeader>
 
                         <CardContent className="space-y-5">
@@ -214,7 +302,7 @@ export default function StudentJoinPage() {
                                 </div>
                             ) : (
                                 <>
-                                    <div className="grid gap-4 sm:grid-cols-2">
+                                    <div className="grid gap-4 sm:grid-cols-3">
                                         <div className="space-y-2 min-w-0">
                                             <Label>Department</Label>
                                             <Select value={departmentId} onValueChange={setDepartmentId} disabled={busy || !departments.length}>
@@ -247,26 +335,85 @@ export default function StudentJoinPage() {
                                                 disabled={busy}
                                             />
                                         </div>
+
+                                        <div className="space-y-2 min-w-0">
+                                            <Label htmlFor="phone">Phone Number</Label>
+                                            <Input
+                                                id="phone"
+                                                value={phone}
+                                                onChange={(e) => setPhone(e.target.value)}
+                                                placeholder="e.g. 09xxxxxxxxx or +639xxxxxxxxx"
+                                                autoComplete="tel"
+                                                inputMode="tel"
+                                                disabled={busy}
+                                            />
+                                        </div>
                                     </div>
 
                                     <div className="space-y-2">
-                                        <Label htmlFor="phone">Phone (optional)</Label>
-                                        <Input
-                                            id="phone"
-                                            value={phone}
-                                            onChange={(e) => setPhone(e.target.value)}
-                                            placeholder="e.g. 09xxxxxxxxx"
-                                            autoComplete="tel"
-                                            inputMode="tel"
-                                            disabled={busy}
-                                        />
+                                        <div className="flex items-center justify-between gap-2">
+                                            <Label>Purpose of Queue (Transaction)</Label>
+                                            {selectedTransactions.length ? (
+                                                <Badge variant="secondary">{selectedTransactions.length} selected</Badge>
+                                            ) : null}
+                                        </div>
+
+                                        {loadingSession ? (
+                                            <div className="space-y-2">
+                                                <Skeleton className="h-9 w-full" />
+                                                <Skeleton className="h-9 w-full" />
+                                            </div>
+                                        ) : participant ? (
+                                            availableTransactions.length ? (
+                                                <div className="grid gap-2 sm:grid-cols-2">
+                                                    {availableTransactions.map((tx) => {
+                                                        const txKey = pickNonEmptyString(tx?.key)
+                                                        const active = selectedTransactions.includes(txKey)
+
+                                                        return (
+                                                            <Button
+                                                                key={txKey}
+                                                                type="button"
+                                                                variant={active ? "default" : "outline"}
+                                                                className="h-auto justify-start whitespace-normal text-left"
+                                                                onClick={() =>
+                                                                    setSelectedTransactions((prev) => toggleKey(prev, txKey))
+                                                                }
+                                                                disabled={busy || !txKey}
+                                                            >
+                                                                {tx.label}
+                                                            </Button>
+                                                        )
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="text-sm text-muted-foreground">
+                                                    No transaction options are available for your account.
+                                                </div>
+                                            )
+                                        ) : (
+                                            <div className="text-sm text-muted-foreground">
+                                                Login first to select queue purpose. Guest mode supports legacy joining only.
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                                         <Button type="button" variant="outline" onClick={() => void onFindActive()} disabled={busy}>
                                             Find my ticket
                                         </Button>
-                                        <Button type="button" onClick={() => void onJoin()} disabled={busy || !departmentId || !studentId.trim()}>
+                                        <Button
+                                            type="button"
+                                            onClick={() => void onJoin()}
+                                            disabled={
+                                                busy ||
+                                                !departmentId ||
+                                                !studentId.trim() ||
+                                                !normalizeMobile(phone) ||
+                                                (!!participant &&
+                                                    (!availableTransactions.length || !selectedTransactions.length))
+                                            }
+                                        >
                                             {busy ? "Please wait…" : "Join Queue"}
                                         </Button>
                                     </div>

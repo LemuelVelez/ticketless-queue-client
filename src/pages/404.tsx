@@ -19,7 +19,7 @@ export default function NotFoundPage() {
 
     return (
         <div className="min-h-screen bg-background text-foreground">
-            <main className="mx-auto flex max-w-3xl items-center justify-center px-4 py-16">
+            <main className="mx-auto flex  items-center justify-center px-4 py-16">
                 <Card className="w-full">
                     <CardHeader>
                         <CardTitle className="flex flex-wrap items-center justify-between gap-2">

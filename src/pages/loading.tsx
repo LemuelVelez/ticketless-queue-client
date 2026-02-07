@@ -67,7 +67,7 @@ export default function LoadingPage() {
             </main>
 
             {/* ✅ Desktop UI (sm+) — unchanged */}
-            <main className="mx-auto hidden max-w-3xl items-center justify-center px-4 py-16 sm:flex">
+            <main className="mx-auto hidden  items-center justify-center px-4 py-16 sm:flex">
                 <Card className="w-full">
                     <CardHeader>
                         <CardTitle className="flex flex-wrap items-center justify-between gap-2">

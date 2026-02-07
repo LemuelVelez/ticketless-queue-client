@@ -188,6 +188,55 @@ export type PresentToDisplayResponse = {
     [key: string]: any
 }
 
+/** =========================
+ * HOME OVERVIEW TYPES
+ * ========================= */
+
+export type HomeOverviewStatusRow = {
+    status: TicketStatus
+    count: number
+}
+
+export type HomeOverviewDepartmentRow = {
+    departmentId: string
+    name: string
+    code?: string
+    total: number
+    waiting: number
+    called: number
+    hold: number
+    served: number
+    out: number
+}
+
+export type HomeOverviewTrendPoint = {
+    dateKey: string
+    total: number
+    served: number
+    waiting: number
+    called: number
+}
+
+export type HomeOverviewResponse = {
+    dateKey: string
+    generatedAt: string
+    participantType?: ParticipantType | null
+    scope?: {
+        departmentId?: string | null
+        departmentName?: string | null
+    }
+    highlights: {
+        totalToday: number
+        activeTickets: number
+        servedToday: number
+        enabledDepartments: number
+    }
+    statusDistribution: HomeOverviewStatusRow[]
+    departmentLoad: HomeOverviewDepartmentRow[]
+    trend: HomeOverviewTrendPoint[]
+    [key: string]: any
+}
+
 const PARTICIPANT_TOKEN_KEY = "qp_participant_token"
 
 export const participantAuthStorage = {
@@ -219,6 +268,17 @@ function persistToken<T extends ParticipantAuthResponse>(res: T): T {
     const token = res?.token || res?.sessionToken
     if (token) participantAuthStorage.setToken(token)
     return res
+}
+
+function toQuery(params?: Record<string, string | number | boolean | undefined | null>) {
+    const qs = new URLSearchParams()
+    if (!params) return ""
+    for (const [k, v] of Object.entries(params)) {
+        if (v === undefined || v === null || v === "") continue
+        qs.set(k, String(v))
+    }
+    const s = qs.toString()
+    return s ? `?${s}` : ""
 }
 
 export const studentApi = {
@@ -282,6 +342,17 @@ export const studentApi = {
             participantAuthStorage.clearToken()
         }
     },
+
+    // Home overview charts (student/alumni dashboards)
+    getHomeOverview: (opts?: {
+        participantType?: ParticipantType
+        departmentId?: string
+        days?: number
+    }) =>
+        api.get<HomeOverviewResponse>(`/public/home/overview${toQuery(opts as any)}`, {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
 
     // Queue endpoints (supports both legacy and participant-session payloads)
     joinQueue: (payload: JoinQueuePayload) =>

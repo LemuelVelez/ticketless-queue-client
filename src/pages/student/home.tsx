@@ -1,24 +1,56 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as React from "react"
-import { Link, useLocation } from "react-router-dom"
+import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { Home, QrCode, Monitor, Maximize2, Ticket, User } from "lucide-react"
+import { Activity, Home, PieChart as PieChartIcon, TrendingUp } from "lucide-react"
+import {
+    Area,
+    AreaChart,
+    Bar,
+    BarChart,
+    CartesianGrid,
+    Cell,
+    Legend,
+    Pie,
+    PieChart,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
+} from "recharts"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { studentApi, type Department } from "@/api/student"
+import { studentApi, type HomeOverviewResponse } from "@/api/student"
 
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+
+const STATUS_COLORS: Record<string, string> = {
+    WAITING: "var(--chart-1)",
+    CALLED: "var(--chart-2)",
+    HOLD: "var(--chart-3)",
+    SERVED: "var(--chart-4)",
+    OUT: "var(--chart-5)",
+}
+
+const PIE_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"]
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
+}
+
+function formatDateTime(input?: string) {
+    if (!input) return "—"
+    const d = new Date(input)
+    if (Number.isNaN(d.getTime())) return "—"
+    return d.toLocaleString()
+}
+
+function formatNumber(v: number | undefined) {
+    return new Intl.NumberFormat().format(Number(v || 0))
 }
 
 export default function StudentHomePage() {
@@ -27,164 +59,208 @@ export default function StudentHomePage() {
     const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
     const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
 
-    const [loadingDepts, setLoadingDepts] = React.useState(true)
-    const [departments, setDepartments] = React.useState<Department[]>([])
-    const [departmentId, setDepartmentId] = React.useState<string>("")
+    const [loading, setLoading] = React.useState(true)
+    const [overview, setOverview] = React.useState<HomeOverviewResponse | null>(null)
 
-    const selectedDept = React.useMemo(
-        () => departments.find((d) => d._id === departmentId) || null,
-        [departments, departmentId],
-    )
-
-    const loadDepartments = React.useCallback(async () => {
-        setLoadingDepts(true)
+    const loadOverview = React.useCallback(async () => {
+        setLoading(true)
         try {
-            const res = await studentApi.listDepartments()
-            const list = res.departments ?? []
-            setDepartments(list)
-
-            const canUsePre = preDeptId && list.some((d) => d._id === preDeptId)
-            const next = canUsePre ? preDeptId : list[0]?._id ?? ""
-            setDepartmentId((prev) => prev || next)
+            const res = await studentApi.getHomeOverview({
+                participantType: "STUDENT",
+                departmentId: preDeptId || undefined,
+                days: 7,
+            })
+            setOverview(res)
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to load departments.")
-            setDepartments([])
-            setDepartmentId("")
+            toast.error(e?.message ?? "Failed to load overview charts.")
+            setOverview(null)
         } finally {
-            setLoadingDepts(false)
+            setLoading(false)
         }
     }, [preDeptId])
 
     React.useEffect(() => {
-        void loadDepartments()
-    }, [loadDepartments])
+        void loadOverview()
+    }, [loadOverview])
 
-    const joinUrl = React.useMemo(() => {
-        if (!departmentId) return "/queue/join"
-        return `/queue/join?departmentId=${encodeURIComponent(departmentId)}`
-    }, [departmentId])
-
-    const myTicketsUrl = React.useMemo(() => {
-        if (!departmentId) return "/queue/my-tickets"
-        return `/queue/my-tickets?departmentId=${encodeURIComponent(departmentId)}`
-    }, [departmentId])
-
-    const displayUrl = React.useMemo(() => {
-        if (!departmentId) return "/display"
-        return `/display?departmentId=${encodeURIComponent(departmentId)}`
-    }, [departmentId])
-
-    const presentUrl = React.useMemo(() => {
-        if (!departmentId) return "/display?present=1"
-        return `/display?departmentId=${encodeURIComponent(departmentId)}&present=1`
-    }, [departmentId])
+    const topDepartments = React.useMemo(() => {
+        return (overview?.departmentLoad ?? []).slice(0, 6)
+    }, [overview])
 
     return (
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
 
-            <main className="mx-auto w-full  px-4 py-10">
-                <div className="mb-6">
+            <main className="mx-auto w-full px-4 py-10 space-y-6">
+                <div className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary" className="gap-2">
                             <Home className="h-3.5 w-3.5" />
                             Student
                         </Badge>
-                        {selectedDept?.name ? <Badge variant="outline">{selectedDept.name}</Badge> : null}
+                        {overview?.scope?.departmentName ? <Badge variant="outline">{overview.scope.departmentName}</Badge> : null}
+                        <Badge variant="outline">Updated: {formatDateTime(overview?.generatedAt)}</Badge>
                     </div>
 
-                    <h1 className="mt-3 text-2xl font-semibold tracking-tight">Student Portal</h1>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                        Select your department, then open the page you need.
+                    <h1 className="text-2xl font-semibold tracking-tight">Student Home Overview</h1>
+                    <p className="text-sm text-muted-foreground">
+                        Live queue analytics and service performance for today.
                     </p>
                 </div>
 
-                <Card className="min-w-0">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <QrCode className="h-5 w-5" />
-                            Quick Start
-                        </CardTitle>
-                        <CardDescription>
-                            Uses shadcn/ui controls built on Radix UI primitives (accessible select/buttons/switches).
-                        </CardDescription>
-                    </CardHeader>
+                {loading ? (
+                    <div className="space-y-4">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <Skeleton className="h-28 w-full" />
+                            <Skeleton className="h-28 w-full" />
+                            <Skeleton className="h-28 w-full" />
+                            <Skeleton className="h-28 w-full" />
+                        </div>
+                        <Skeleton className="h-85 w-full" />
+                        <Skeleton className="h-85 w-full" />
+                    </div>
+                ) : !overview ? (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Overview unavailable</CardTitle>
+                            <CardDescription>Could not load chart data right now. Please try refreshing the page.</CardDescription>
+                        </CardHeader>
+                    </Card>
+                ) : (
+                    <>
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardDescription>Active Tickets</CardDescription>
+                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.activeTickets)}</CardTitle>
+                                </CardHeader>
+                            </Card>
 
-                    <CardContent className="space-y-5">
-                        {loadingDepts ? (
-                            <div className="space-y-3">
-                                <Skeleton className="h-10 w-full" />
-                                <Skeleton className="h-24 w-full" />
-                            </div>
-                        ) : (
-                            <>
-                                <div className="space-y-2 min-w-0">
-                                    <Label>Department</Label>
-                                    <Select value={departmentId} onValueChange={setDepartmentId} disabled={!departments.length}>
-                                        <SelectTrigger className="w-full min-w-0">
-                                            <SelectValue placeholder="Select department" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {departments.map((d) => (
-                                                <SelectItem key={d._id} value={d._id}>
-                                                    {d.name}
-                                                    {d.code ? ` (${d.code})` : ""}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardDescription>Total Today</CardDescription>
+                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.totalToday)}</CardTitle>
+                                </CardHeader>
+                            </Card>
 
-                                    {!departments.length ? (
-                                        <div className="text-xs text-muted-foreground">No departments available.</div>
-                                    ) : null}
-                                </div>
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardDescription>Served Today</CardDescription>
+                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.servedToday)}</CardTitle>
+                                </CardHeader>
+                            </Card>
 
-                                <Separator />
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardDescription>Enabled Departments</CardDescription>
+                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.enabledDepartments)}</CardTitle>
+                                </CardHeader>
+                            </Card>
+                        </div>
 
-                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                    <Button asChild className="gap-2" disabled={!departments.length}>
-                                        <Link to={joinUrl}>
-                                            <QrCode className="h-4 w-4" />
-                                            Join Queue
-                                        </Link>
-                                    </Button>
+                        <div className="grid gap-4 lg:grid-cols-2">
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <Activity className="h-4 w-4" />
+                                        Status Distribution
+                                    </CardTitle>
+                                    <CardDescription>Current ticket statuses for {overview.dateKey}</CardDescription>
+                                </CardHeader>
+                                <CardContent className="h-80">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={overview.statusDistribution}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis dataKey="status" />
+                                            <YAxis allowDecimals={false} />
+                                            <Tooltip />
+                                            <Bar dataKey="count" radius={[8, 8, 0, 0]}>
+                                                {overview.statusDistribution.map((row) => (
+                                                    <Cell
+                                                        key={row.status}
+                                                        fill={STATUS_COLORS[row.status] ?? "var(--chart-1)"}
+                                                    />
+                                                ))}
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </CardContent>
+                            </Card>
 
-                                    <Button asChild variant="outline" className="gap-2" disabled={!departments.length}>
-                                        <Link to={myTicketsUrl}>
-                                            <Ticket className="h-4 w-4" />
-                                            My Tickets
-                                        </Link>
-                                    </Button>
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <PieChartIcon className="h-4 w-4" />
+                                        Department Load
+                                    </CardTitle>
+                                    <CardDescription>Top departments by total queue volume today</CardDescription>
+                                </CardHeader>
+                                <CardContent className="h-80">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <PieChart>
+                                            <Pie
+                                                data={topDepartments}
+                                                dataKey="total"
+                                                nameKey="name"
+                                                cx="50%"
+                                                cy="50%"
+                                                innerRadius={60}
+                                                outerRadius={95}
+                                                paddingAngle={2}
+                                            >
+                                                {topDepartments.map((row, idx) => (
+                                                    <Cell
+                                                        key={`${row.departmentId}-${idx}`}
+                                                        fill={PIE_COLORS[idx % PIE_COLORS.length]}
+                                                    />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip />
+                                            <Legend />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                </CardContent>
+                            </Card>
+                        </div>
 
-                                    <Button asChild variant="secondary" className="gap-2">
-                                        <Link to="/profile">
-                                            <User className="h-4 w-4" />
-                                            Profile
-                                        </Link>
-                                    </Button>
-
-                                    <Button asChild variant="outline" className="gap-2" disabled={!departments.length}>
-                                        <Link to={displayUrl}>
-                                            <Monitor className="h-4 w-4" />
-                                            Public Display
-                                        </Link>
-                                    </Button>
-
-                                    <Button asChild variant="secondary" className="gap-2" disabled={!departments.length}>
-                                        <Link to={presentUrl}>
-                                            <Maximize2 className="h-4 w-4" />
-                                            Presentation
-                                        </Link>
-                                    </Button>
-                                </div>
-
-                                <div className="rounded-lg border p-4 text-xs text-muted-foreground">
-                                    Tip: For TV/monitor viewing, open <b>Presentation</b> for fullscreen mode.
-                                </div>
-                            </>
-                        )}
-                    </CardContent>
-                </Card>
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    <TrendingUp className="h-4 w-4" />
+                                    7-Day Queue Trend
+                                </CardTitle>
+                                <CardDescription>Total vs served tickets for the last 7 days</CardDescription>
+                            </CardHeader>
+                            <CardContent className="h-85">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={overview.trend}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                        <XAxis dataKey="dateKey" tickFormatter={(v) => String(v).slice(5)} />
+                                        <YAxis allowDecimals={false} />
+                                        <Tooltip />
+                                        <Legend />
+                                        <Area
+                                            type="monotone"
+                                            dataKey="total"
+                                            stroke="var(--chart-1)"
+                                            fill="var(--chart-1)"
+                                            fillOpacity={0.15}
+                                            strokeWidth={2}
+                                        />
+                                        <Area
+                                            type="monotone"
+                                            dataKey="served"
+                                            stroke="var(--chart-2)"
+                                            fill="var(--chart-2)"
+                                            fillOpacity={0.12}
+                                            strokeWidth={2}
+                                        />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            </CardContent>
+                        </Card>
+                    </>
+                )}
             </main>
 
             <Footer variant="student" />

@@ -6,7 +6,7 @@ import { toast } from "sonner"
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { studentApi, type Department, type Ticket } from "@/api/student"
+import { studentApi, type Department, type ParticipantTransaction, type Ticket } from "@/api/student"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -48,6 +48,11 @@ function statusBadgeVariant(status?: string) {
     }
 }
 
+function toggleKey(keys: string[], key: string) {
+    if (keys.includes(key)) return keys.filter((k) => k !== key)
+    return [...keys, key]
+}
+
 export default function AlumniJoinPage() {
     const location = useLocation()
 
@@ -57,10 +62,17 @@ export default function AlumniJoinPage() {
     const ticketId = React.useMemo(() => pickNonEmptyString(qs.get("ticketId") || qs.get("id")), [qs])
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
+    const [loadingSession, setLoadingSession] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
 
+    const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
     const [departmentId, setDepartmentId] = React.useState<string>("")
+    const [studentId, setStudentId] = React.useState<string>("")
     const [mobileNumber, setMobileNumber] = React.useState<string>(preMobile)
+
+    const [participant, setParticipant] = React.useState<any | null>(null)
+    const [availableTransactions, setAvailableTransactions] = React.useState<ParticipantTransaction[]>([])
+    const [selectedTransactions, setSelectedTransactions] = React.useState<string[]>([])
 
     const [busy, setBusy] = React.useState(false)
     const [ticket, setTicket] = React.useState<Ticket | null>(null)
@@ -77,22 +89,20 @@ export default function AlumniJoinPage() {
 
     const myTicketsUrl = React.useMemo(() => {
         const q = new URLSearchParams()
+        const identifier = studentId.trim() || normalizeMobile(mobileNumber)
+
         if (departmentId) q.set("departmentId", departmentId)
-        if (mobileNumber.trim()) q.set("mobileNumber", mobileNumber.trim())
+        if (identifier) q.set("studentId", identifier)
+
         const qsStr = q.toString()
         return `/queue/my-tickets${qsStr ? `?${qsStr}` : ""}`
-    }, [departmentId, mobileNumber])
+    }, [departmentId, studentId, mobileNumber])
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
         try {
             const res = await studentApi.listDepartments()
-            const list = res.departments ?? []
-            setDepartments(list)
-
-            const canUsePre = preDeptId && list.some((d) => d._id === preDeptId)
-            const next = canUsePre ? preDeptId : list[0]?._id ?? ""
-            setDepartmentId((prev) => prev || next)
+            setDepartments(res.departments ?? [])
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load departments.")
             setDepartments([])
@@ -100,7 +110,35 @@ export default function AlumniJoinPage() {
         } finally {
             setLoadingDepts(false)
         }
-    }, [preDeptId])
+    }, [])
+
+    const loadSession = React.useCallback(async () => {
+        setLoadingSession(true)
+        try {
+            const res = await studentApi.getSession()
+            const p = (res.participant ?? null) as any
+            const tx = (res.availableTransactions ?? []).filter((x) => pickNonEmptyString(x?.key))
+
+            setParticipant(p)
+            setAvailableTransactions(tx)
+
+            const sid = pickNonEmptyString(p?.tcNumber) || pickNonEmptyString(p?.studentId)
+            const mobile = pickNonEmptyString(p?.mobileNumber) || pickNonEmptyString(p?.phone)
+            const dept = pickNonEmptyString(p?.departmentId)
+
+            if (sid) setStudentId((prev) => prev || sid)
+            if (mobile) setMobileNumber((prev) => prev || mobile)
+            if (dept) {
+                setSessionDepartmentId(dept)
+                setDepartmentId((prev) => prev || dept)
+            }
+        } catch {
+            setParticipant(null)
+            setAvailableTransactions([])
+        } finally {
+            setLoadingSession(false)
+        }
+    }, [])
 
     const loadTicketById = React.useCallback(async () => {
         if (!ticketId) return
@@ -116,7 +154,16 @@ export default function AlumniJoinPage() {
             if (deptIdFromTicket) setDepartmentId(deptIdFromTicket)
 
             const sid = pickNonEmptyString((res.ticket as any)?.studentId)
-            if (sid) setMobileNumber(sid)
+            if (sid) setStudentId(sid)
+
+            const ph = pickNonEmptyString((res.ticket as any)?.phone)
+            if (ph) setMobileNumber(ph)
+
+            const txKeys = Array.isArray(res.transactions?.transactionKeys)
+                ? res.transactions?.transactionKeys.filter((k) => pickNonEmptyString(k))
+                : []
+
+            if (txKeys.length) setSelectedTransactions(txKeys)
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load ticket.")
         } finally {
@@ -126,7 +173,22 @@ export default function AlumniJoinPage() {
 
     React.useEffect(() => {
         void loadDepartments()
-    }, [loadDepartments])
+        void loadSession()
+    }, [loadDepartments, loadSession])
+
+    React.useEffect(() => {
+        if (!departments.length) return
+
+        setDepartmentId((prev) => {
+            const has = (id: string) => !!id && departments.some((d) => d._id === id)
+
+            if (has(prev)) return prev
+            if (has(preDeptId)) return preDeptId
+            if (has(sessionDepartmentId)) return sessionDepartmentId
+
+            return departments[0]?._id ?? ""
+        })
+    }, [departments, preDeptId, sessionDepartmentId])
 
     React.useEffect(() => {
         void loadTicketById()
@@ -134,14 +196,17 @@ export default function AlumniJoinPage() {
 
     async function onFindActive() {
         const mobile = normalizeMobile(mobileNumber)
+        const sid = studentId.trim()
+        const identifier = sid || mobile
+
         if (!departmentId) return toast.error("Please select a department.")
-        if (!mobile) return toast.error("Please enter your mobile number.")
+        if (!identifier) return toast.error("Please enter Student ID or Phone Number.")
 
         setBusy(true)
         try {
             const res = await studentApi.findActiveByStudent({
                 departmentId,
-                studentId: mobile,
+                studentId: identifier,
             })
 
             if (res.ticket) {
@@ -160,17 +225,37 @@ export default function AlumniJoinPage() {
 
     async function onJoin() {
         const mobile = normalizeMobile(mobileNumber)
+        const sid = studentId.trim()
+        const identifier = sid || mobile
 
         if (!departmentId) return toast.error("Please select a department.")
-        if (!mobile) return toast.error("Mobile number is required.")
+        if (!mobile) return toast.error("Phone number is required.")
+        if (!identifier) return toast.error("Student ID or Phone identifier is required.")
+
+        const isSessionFlow = !!participant
+        if (isSessionFlow && !availableTransactions.length) {
+            return toast.error("No queue purpose is available for this account.")
+        }
+        if (isSessionFlow && !selectedTransactions.length) {
+            return toast.error("Please select at least one queue purpose.")
+        }
 
         setBusy(true)
         try {
-            const res = await studentApi.joinQueue({
-                departmentId,
-                studentId: mobile, // legacy compatible identifier field
-                phone: mobile,
-            })
+            const res = await studentApi.joinQueue(
+                isSessionFlow
+                    ? {
+                        departmentId,
+                        studentId: identifier,
+                        phone: mobile,
+                        transactionKeys: selectedTransactions,
+                    }
+                    : {
+                        departmentId,
+                        studentId: identifier,
+                        phone: mobile,
+                    }
+            )
             setTicket(res.ticket)
             toast.success("You are now in the queue.")
         } catch (e: any) {
@@ -196,21 +281,30 @@ export default function AlumniJoinPage() {
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
 
-            <main className="mx-auto w-full max-w-3xl px-4 py-10">
+            <main className="mx-auto w-full px-4 py-10">
                 <div className="mb-6">
                     <h1 className="text-2xl font-semibold tracking-tight">Join Queue</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Select department and enter your mobile number to receive your queue number.
+                        Department defaults to your registered profile. You can change it here if needed.
                     </p>
                 </div>
 
                 <div className="grid gap-6">
                     <Card className="min-w-0">
                         <CardHeader>
-                            <CardTitle>Alumni Queue Entry</CardTitle>
+                            <CardTitle>Alumni / Visitor Queue Entry</CardTitle>
                             <CardDescription>
-                                If you already joined today, use <b>Find my ticket</b> instead.
+                                Student ID and phone can be prefilled from your account. You may modify before joining.
                             </CardDescription>
+                            <div className="pt-1">
+                                {loadingSession ? (
+                                    <Skeleton className="h-5 w-40" />
+                                ) : participant ? (
+                                    <Badge variant="secondary">Profile synced</Badge>
+                                ) : (
+                                    <Badge variant="outline">Guest mode</Badge>
+                                )}
+                            </div>
                         </CardHeader>
 
                         <CardContent className="space-y-5">
@@ -222,7 +316,7 @@ export default function AlumniJoinPage() {
                                 </div>
                             ) : (
                                 <>
-                                    <div className="grid gap-4 sm:grid-cols-2">
+                                    <div className="grid gap-4 sm:grid-cols-3">
                                         <div className="space-y-2 min-w-0">
                                             <Label>Department</Label>
                                             <Select value={departmentId} onValueChange={setDepartmentId} disabled={busy || !departments.length}>
@@ -244,7 +338,20 @@ export default function AlumniJoinPage() {
                                         </div>
 
                                         <div className="space-y-2 min-w-0">
-                                            <Label htmlFor="mobile">Mobile Number</Label>
+                                            <Label htmlFor="studentId">Student ID / Reference ID</Label>
+                                            <Input
+                                                id="studentId"
+                                                value={studentId}
+                                                onChange={(e) => setStudentId(e.target.value)}
+                                                placeholder="Optional (if available)"
+                                                autoComplete="off"
+                                                inputMode="text"
+                                                disabled={busy}
+                                            />
+                                        </div>
+
+                                        <div className="space-y-2 min-w-0">
+                                            <Label htmlFor="mobile">Phone Number</Label>
                                             <Input
                                                 id="mobile"
                                                 value={mobileNumber}
@@ -257,11 +364,69 @@ export default function AlumniJoinPage() {
                                         </div>
                                     </div>
 
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <Label>Purpose of Queue (Transaction)</Label>
+                                            {selectedTransactions.length ? (
+                                                <Badge variant="secondary">{selectedTransactions.length} selected</Badge>
+                                            ) : null}
+                                        </div>
+
+                                        {loadingSession ? (
+                                            <div className="space-y-2">
+                                                <Skeleton className="h-9 w-full" />
+                                                <Skeleton className="h-9 w-full" />
+                                            </div>
+                                        ) : participant ? (
+                                            availableTransactions.length ? (
+                                                <div className="grid gap-2 sm:grid-cols-2">
+                                                    {availableTransactions.map((tx) => {
+                                                        const txKey = pickNonEmptyString(tx?.key)
+                                                        const active = selectedTransactions.includes(txKey)
+
+                                                        return (
+                                                            <Button
+                                                                key={txKey}
+                                                                type="button"
+                                                                variant={active ? "default" : "outline"}
+                                                                className="h-auto justify-start whitespace-normal text-left"
+                                                                onClick={() =>
+                                                                    setSelectedTransactions((prev) => toggleKey(prev, txKey))
+                                                                }
+                                                                disabled={busy || !txKey}
+                                                            >
+                                                                {tx.label}
+                                                            </Button>
+                                                        )
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="text-sm text-muted-foreground">
+                                                    No transaction options are available for your account.
+                                                </div>
+                                            )
+                                        ) : (
+                                            <div className="text-sm text-muted-foreground">
+                                                Login first to select queue purpose. Guest mode supports legacy joining only.
+                                            </div>
+                                        )}
+                                    </div>
+
                                     <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                                         <Button type="button" variant="outline" onClick={() => void onFindActive()} disabled={busy}>
                                             Find my ticket
                                         </Button>
-                                        <Button type="button" onClick={() => void onJoin()} disabled={busy || !departmentId || !normalizeMobile(mobileNumber)}>
+                                        <Button
+                                            type="button"
+                                            onClick={() => void onJoin()}
+                                            disabled={
+                                                busy ||
+                                                !departmentId ||
+                                                !normalizeMobile(mobileNumber) ||
+                                                (!!participant &&
+                                                    (!availableTransactions.length || !selectedTransactions.length))
+                                            }
+                                        >
                                             {busy ? "Please wait…" : "Join Queue"}
                                         </Button>
                                     </div>

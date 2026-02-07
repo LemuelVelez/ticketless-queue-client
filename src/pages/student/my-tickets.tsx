@@ -177,7 +177,7 @@ export default function StudentMyTicketsPage() {
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
 
-            <main className="mx-auto w-full max-w-3xl px-4 py-10">
+            <main className="mx-auto w-full  px-4 py-10">
                 <div className="mb-6">
                     <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
                         <Ticket className="h-6 w-6" />
