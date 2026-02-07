@@ -18,6 +18,17 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 
 const DRAFT_KEY = "qp_student_profile_draft_v1"
 
@@ -353,9 +364,28 @@ export default function StudentProfilePage() {
                                 <Button type="button" variant="outline" onClick={() => void onRefreshSession()}>
                                     Refresh Session
                                 </Button>
-                                <Button type="button" variant="secondary" onClick={() => void onLogout()} disabled={busyLogout}>
-                                    {busyLogout ? "Please wait…" : "Logout"}
-                                </Button>
+
+                                <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                        <Button type="button" variant="secondary" disabled={busyLogout}>
+                                            {busyLogout ? "Please wait…" : "Logout"}
+                                        </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                        <AlertDialogHeader>
+                                            <AlertDialogTitle>Logout from this session?</AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                                You will be signed out from your current participant session on this device.
+                                            </AlertDialogDescription>
+                                        </AlertDialogHeader>
+                                        <AlertDialogFooter>
+                                            <AlertDialogCancel disabled={busyLogout}>Cancel</AlertDialogCancel>
+                                            <AlertDialogAction onClick={() => void onLogout()} disabled={busyLogout}>
+                                                {busyLogout ? "Logging out…" : "Confirm Logout"}
+                                            </AlertDialogAction>
+                                        </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                </AlertDialog>
                             </div>
                         </CardContent>
                     </Card>
