@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
 import { guestApi, participantAuthStorage } from "@/api/guest"
@@ -95,8 +95,13 @@ function getParticipantJoinPath(role: ParticipantRole | null | undefined) {
     return role === "STUDENT" ? "/student/join" : "/alumni/join"
 }
 
+function isRouteActive(pathname: string, to: string) {
+    return pathname === to
+}
+
 export default function Header({ variant = "landing" }: HeaderProps) {
     const { user, loading } = useSession()
+    const location = useLocation()
 
     const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
     const [participantLoading, setParticipantLoading] = useState(true)
@@ -181,6 +186,16 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     const participantBase = useMemo(() => getParticipantBase(participantRole), [participantRole])
     const participantLabel = useMemo(() => getParticipantLabel(participantRole), [participantRole])
     const participantBrandTo = isParticipantAuthenticated ? `${participantBase}/home` : "/login"
+
+    const participantMenuItems = useMemo(
+        () => [
+            { label: "Home", to: `${participantBase}/home` },
+            { label: "Join Queue", to: `${participantBase}/join` },
+            { label: "My Tickets", to: `${participantBase}/my-tickets` },
+            { label: "Profile", to: `${participantBase}/profile` },
+        ],
+        [participantBase],
+    )
 
     // ✅ Landing-only: keep active state in sync with URL hash
     useEffect(() => {
@@ -271,29 +286,37 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                     </Link>
 
                     {/* Desktop actions */}
-                    <div className="hidden items-center gap-2 md:flex">
+                    <div className="hidden items-center gap-3 md:flex">
                         <Button variant="outline" asChild>
                             <Link to="/">Landing Page</Link>
                         </Button>
 
                         {isParticipantAuthenticated ? (
-                            <>
-                                <Button variant="outline" asChild>
-                                    <Link to={`${participantBase}/home`}>Home</Link>
-                                </Button>
+                            <NavigationMenu>
+                                <NavigationMenuList>
+                                    {participantMenuItems.map((item) => {
+                                        const active = isRouteActive(location.pathname, item.to)
 
-                                <Button asChild>
-                                    <Link to={`${participantBase}/join`}>Join Queue</Link>
-                                </Button>
-
-                                <Button variant="outline" asChild>
-                                    <Link to={`${participantBase}/my-tickets`}>My Tickets</Link>
-                                </Button>
-
-                                <Button variant="outline" asChild>
-                                    <Link to={`${participantBase}/profile`}>Profile</Link>
-                                </Button>
-                            </>
+                                        return (
+                                            <NavigationMenuItem key={item.to}>
+                                                <NavigationMenuLink
+                                                    asChild
+                                                    className={cn(
+                                                        navigationMenuTriggerStyle(),
+                                                        "relative",
+                                                        active &&
+                                                        "bg-accent text-accent-foreground after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
+                                                    )}
+                                                >
+                                                    <Link to={item.to} aria-current={active ? "page" : undefined}>
+                                                        {item.label}
+                                                    </Link>
+                                                </NavigationMenuLink>
+                                            </NavigationMenuItem>
+                                        )
+                                    })}
+                                </NavigationMenuList>
+                            </NavigationMenu>
                         ) : participantLoading ? (
                             <Button variant="outline" disabled>
                                 Checking session...
@@ -344,29 +367,30 @@ export default function Header({ variant = "landing" }: HeaderProps) {
 
                                     {isParticipantAuthenticated ? (
                                         <>
-                                            <Button variant="ghost" className="w-full justify-start" asChild>
-                                                <Link to={`${participantBase}/home`} onClick={() => setSheetOpen(false)}>
-                                                    Home
-                                                </Link>
-                                            </Button>
+                                            {participantMenuItems.map((item) => {
+                                                const active = isRouteActive(location.pathname, item.to)
 
-                                            <Button className="w-full" asChild>
-                                                <Link to={`${participantBase}/join`} onClick={() => setSheetOpen(false)}>
-                                                    Join Queue
-                                                </Link>
-                                            </Button>
-
-                                            <Button variant="outline" className="w-full" asChild>
-                                                <Link to={`${participantBase}/my-tickets`} onClick={() => setSheetOpen(false)}>
-                                                    My Tickets
-                                                </Link>
-                                            </Button>
-
-                                            <Button variant="outline" className="w-full" asChild>
-                                                <Link to={`${participantBase}/profile`} onClick={() => setSheetOpen(false)}>
-                                                    Profile
-                                                </Link>
-                                            </Button>
+                                                return (
+                                                    <Button
+                                                        key={item.to}
+                                                        variant="ghost"
+                                                        className={cn(
+                                                            "relative w-full justify-start",
+                                                            active &&
+                                                            "bg-accent text-accent-foreground before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
+                                                        )}
+                                                        asChild
+                                                    >
+                                                        <Link
+                                                            to={item.to}
+                                                            aria-current={active ? "page" : undefined}
+                                                            onClick={() => setSheetOpen(false)}
+                                                        >
+                                                            {item.label}
+                                                        </Link>
+                                                    </Button>
+                                                )
+                                            })}
                                         </>
                                     ) : participantLoading ? (
                                         <Button variant="outline" className="w-full" disabled>

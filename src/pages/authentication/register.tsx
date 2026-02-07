@@ -22,11 +22,19 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 
 import logo from "@/assets/images/logo.svg"
 import heroImage from "@/assets/images/heroImage.svg"
 
 type RegisterTab = "student" | "alumniVisitor"
+type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 
 type StudentFormState = {
     firstName: string
@@ -51,6 +59,27 @@ type AlumniVisitorFormState = {
 
 function defaultDashboardPath(role: "ADMIN" | "STAFF") {
     return role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
+}
+
+function defaultParticipantPath(role: ParticipantRole) {
+    return role === "STUDENT" ? "/student/home" : "/alumni/home"
+}
+
+function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
+    const value = String(raw ?? "").trim().toUpperCase()
+    if (value === "STUDENT") return "STUDENT"
+    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+    if (value === "GUEST" || value === "VISITOR") return "GUEST"
+    return null
+}
+
+async function resolveParticipantRoleFromSession(): Promise<ParticipantRole | null> {
+    try {
+        const session = await guestApi.getSession()
+        return normalizeParticipantRole(session?.participant?.type)
+    } catch {
+        return null
+    }
 }
 
 function normalizeOptional(value: string) {
@@ -84,7 +113,6 @@ function PasswordInput({
     onChange,
     inputMode,
     maxLength,
-    pattern,
 }: {
     id: string
     value: string
@@ -96,7 +124,6 @@ function PasswordInput({
     onChange: (value: string) => void
     inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]
     maxLength?: number
-    pattern?: string
 }) {
     return (
         <div className="relative">
@@ -112,7 +139,6 @@ function PasswordInput({
                 onChange={(e) => onChange(e.target.value)}
                 inputMode={inputMode}
                 maxLength={maxLength}
-                pattern={pattern}
             />
             <Button
                 type="button"
@@ -173,43 +199,60 @@ export default function RegisterPage() {
             return
         }
 
-        if (participantAuthStorage.getToken()) {
-            navigate("/", { replace: true })
+        const participantToken = participantAuthStorage.getToken()
+        if (!participantToken) return
+
+        let alive = true
+
+        ; (async () => {
+            const role = await resolveParticipantRoleFromSession()
+            if (!alive) return
+
+            if (!role) {
+                participantAuthStorage.clearToken()
+                return
+            }
+
+            navigate(defaultParticipantPath(role), { replace: true })
+        })()
+
+        return () => {
+            alive = false
         }
     }, [loading, user, navigate])
 
     React.useEffect(() => {
         let mounted = true
 
-            ; (async () => {
-                try {
-                    const res = await guestApi.listDepartments()
-                    if (!mounted) return
+        ; (async () => {
+            try {
+                const res = await guestApi.listDepartments()
+                if (!mounted) return
 
-                    const list = Array.isArray(res.departments) ? res.departments : []
-                    setDepartments(list)
+                const list = Array.isArray(res.departments) ? res.departments : []
+                setDepartments(list)
 
-                    const firstId = list[0]?._id ?? ""
-                    setStudent((prev) => ({
-                        ...prev,
-                        departmentId: prev.departmentId || firstId,
-                    }))
-                    setVisitor((prev) => ({
-                        ...prev,
-                        departmentId: prev.departmentId || firstId,
-                    }))
-                } catch (err) {
-                    const message =
-                        err instanceof ApiError
+                const firstId = list[0]?._id ?? ""
+                setStudent((prev) => ({
+                    ...prev,
+                    departmentId: prev.departmentId || firstId,
+                }))
+                setVisitor((prev) => ({
+                    ...prev,
+                    departmentId: prev.departmentId || firstId,
+                }))
+            } catch (err) {
+                const message =
+                    err instanceof ApiError
+                        ? err.message
+                        : err instanceof Error
                             ? err.message
-                            : err instanceof Error
-                                ? err.message
-                                : "Failed to load departments"
-                    toast.error(message)
-                } finally {
-                    if (mounted) setLoadingDepartments(false)
-                }
-            })()
+                            : "Failed to load departments"
+                toast.error(message)
+            } finally {
+                if (mounted) setLoadingDepartments(false)
+            }
+        })()
 
         return () => {
             mounted = false
@@ -259,6 +302,11 @@ export default function RegisterPage() {
             return
         }
 
+        if (!isFourDigitPin(confirmPin)) {
+            toast.error("Confirm PIN must be exactly 4 digits.")
+            return
+        }
+
         if (pin !== confirmPin) {
             toast.error("PIN does not match.")
             return
@@ -282,8 +330,10 @@ export default function RegisterPage() {
                 password: pin,
             })
 
+            const role = (await resolveParticipantRoleFromSession()) ?? "STUDENT"
+
             toast.success("Student account created. You are now signed in.")
-            navigate("/", { replace: true })
+            navigate(defaultParticipantPath(role), { replace: true })
         } catch (err) {
             const message =
                 err instanceof ApiError
@@ -334,6 +384,11 @@ export default function RegisterPage() {
             return
         }
 
+        if (!isFourDigitPin(confirmPin)) {
+            toast.error("Confirm PIN must be exactly 4 digits.")
+            return
+        }
+
         if (pin !== confirmPin) {
             toast.error("PIN does not match.")
             return
@@ -355,8 +410,10 @@ export default function RegisterPage() {
                 password: pin,
             })
 
+            const role = (await resolveParticipantRoleFromSession()) ?? "ALUMNI_VISITOR"
+
             toast.success("Alumni/Visitor account created. You are now signed in.")
-            navigate("/", { replace: true })
+            navigate(defaultParticipantPath(role), { replace: true })
         } catch (err) {
             const message =
                 err instanceof ApiError
@@ -371,9 +428,6 @@ export default function RegisterPage() {
     }
 
     if (loading) return <LoadingPage />
-
-    const selectClassName =
-        "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
 
     return (
         <div className="grid min-h-svh lg:grid-cols-2">
@@ -431,7 +485,7 @@ export default function RegisterPage() {
                                     </Tabs.List>
 
                                     <Tabs.Content value="student" className="mt-4 outline-none">
-                                        <form onSubmit={submitStudent} className="space-y-4">
+                                        <form noValidate onSubmit={submitStudent} className="space-y-4">
                                             <div className="grid gap-2">
                                                 <Label htmlFor="studentFirstName">First name</Label>
                                                 <Input
@@ -505,31 +559,43 @@ export default function RegisterPage() {
 
                                             <div className="grid gap-2">
                                                 <Label htmlFor="studentDepartment">Department</Label>
-                                                <select
-                                                    id="studentDepartment"
-                                                    className={selectClassName}
-                                                    required
-                                                    disabled={isSubmitting || loadingDepartments || departments.length === 0}
+                                                <Select
                                                     value={student.departmentId}
-                                                    onChange={(e) =>
+                                                    onValueChange={(value) =>
                                                         setStudent((prev) => ({
                                                             ...prev,
-                                                            departmentId: e.target.value,
+                                                            departmentId: value,
                                                         }))
                                                     }
+                                                    disabled={isSubmitting || loadingDepartments || departments.length === 0}
                                                 >
-                                                    {departments.length === 0 ? (
-                                                        <option value="">
-                                                            {loadingDepartments ? "Loading departments..." : "No departments available"}
-                                                        </option>
-                                                    ) : (
-                                                        departments.map((d) => (
-                                                            <option key={d._id} value={d._id}>
-                                                                {d.code ? `${d.code} - ${d.name}` : d.name}
-                                                            </option>
-                                                        ))
-                                                    )}
-                                                </select>
+                                                    <SelectTrigger id="studentDepartment">
+                                                        <SelectValue
+                                                            placeholder={
+                                                                loadingDepartments
+                                                                    ? "Loading departments..."
+                                                                    : "Select department"
+                                                            }
+                                                        />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {loadingDepartments ? (
+                                                            <SelectItem value="__loading_departments" disabled>
+                                                                Loading departments...
+                                                            </SelectItem>
+                                                        ) : departments.length === 0 ? (
+                                                            <SelectItem value="__no_departments" disabled>
+                                                                No departments available
+                                                            </SelectItem>
+                                                        ) : (
+                                                            departments.map((d) => (
+                                                                <SelectItem key={d._id} value={d._id}>
+                                                                    {d.code ? `${d.code} - ${d.name}` : d.name}
+                                                                </SelectItem>
+                                                            ))
+                                                        )}
+                                                    </SelectContent>
+                                                </Select>
                                             </div>
 
                                             <div className="grid gap-2">
@@ -563,7 +629,6 @@ export default function RegisterPage() {
                                                     onToggleShow={() => setShowStudentPin((s) => !s)}
                                                     inputMode="numeric"
                                                     maxLength={4}
-                                                    pattern="\\d{4}"
                                                     onChange={(value) =>
                                                         setStudent((prev) => ({
                                                             ...prev,
@@ -585,7 +650,6 @@ export default function RegisterPage() {
                                                     onToggleShow={() => setShowStudentConfirmPin((s) => !s)}
                                                     inputMode="numeric"
                                                     maxLength={4}
-                                                    pattern="\\d{4}"
                                                     onChange={(value) =>
                                                         setStudent((prev) => ({
                                                             ...prev,
@@ -602,7 +666,7 @@ export default function RegisterPage() {
                                     </Tabs.Content>
 
                                     <Tabs.Content value="alumniVisitor" className="mt-4 outline-none">
-                                        <form onSubmit={submitVisitor} className="space-y-4">
+                                        <form noValidate onSubmit={submitVisitor} className="space-y-4">
                                             <div className="grid gap-2">
                                                 <Label htmlFor="visitorFirstName">First name</Label>
                                                 <Input
@@ -658,31 +722,43 @@ export default function RegisterPage() {
 
                                             <div className="grid gap-2">
                                                 <Label htmlFor="visitorDepartment">Department</Label>
-                                                <select
-                                                    id="visitorDepartment"
-                                                    className={selectClassName}
-                                                    required
-                                                    disabled={isSubmitting || loadingDepartments || departments.length === 0}
+                                                <Select
                                                     value={visitor.departmentId}
-                                                    onChange={(e) =>
+                                                    onValueChange={(value) =>
                                                         setVisitor((prev) => ({
                                                             ...prev,
-                                                            departmentId: e.target.value,
+                                                            departmentId: value,
                                                         }))
                                                     }
+                                                    disabled={isSubmitting || loadingDepartments || departments.length === 0}
                                                 >
-                                                    {departments.length === 0 ? (
-                                                        <option value="">
-                                                            {loadingDepartments ? "Loading departments..." : "No departments available"}
-                                                        </option>
-                                                    ) : (
-                                                        departments.map((d) => (
-                                                            <option key={d._id} value={d._id}>
-                                                                {d.code ? `${d.code} - ${d.name}` : d.name}
-                                                            </option>
-                                                        ))
-                                                    )}
-                                                </select>
+                                                    <SelectTrigger id="visitorDepartment">
+                                                        <SelectValue
+                                                            placeholder={
+                                                                loadingDepartments
+                                                                    ? "Loading departments..."
+                                                                    : "Select department"
+                                                            }
+                                                        />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {loadingDepartments ? (
+                                                            <SelectItem value="__loading_departments" disabled>
+                                                                Loading departments...
+                                                            </SelectItem>
+                                                        ) : departments.length === 0 ? (
+                                                            <SelectItem value="__no_departments" disabled>
+                                                                No departments available
+                                                            </SelectItem>
+                                                        ) : (
+                                                            departments.map((d) => (
+                                                                <SelectItem key={d._id} value={d._id}>
+                                                                    {d.code ? `${d.code} - ${d.name}` : d.name}
+                                                                </SelectItem>
+                                                            ))
+                                                        )}
+                                                    </SelectContent>
+                                                </Select>
                                             </div>
 
                                             <div className="grid gap-2">
@@ -716,7 +792,6 @@ export default function RegisterPage() {
                                                     onToggleShow={() => setShowVisitorPin((s) => !s)}
                                                     inputMode="numeric"
                                                     maxLength={4}
-                                                    pattern="\\d{4}"
                                                     onChange={(value) =>
                                                         setVisitor((prev) => ({
                                                             ...prev,
@@ -738,7 +813,6 @@ export default function RegisterPage() {
                                                     onToggleShow={() => setShowVisitorConfirmPin((s) => !s)}
                                                     inputMode="numeric"
                                                     maxLength={4}
-                                                    pattern="\\d{4}"
                                                     onChange={(value) =>
                                                         setVisitor((prev) => ({
                                                             ...prev,

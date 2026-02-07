@@ -83,7 +83,7 @@ export default function StudentHomePage() {
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
 
-            <main className="mx-auto w-full max-w-4xl px-4 py-10">
+            <main className="mx-auto w-full  px-4 py-10">
                 <div className="mb-6">
                     <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary" className="gap-2">

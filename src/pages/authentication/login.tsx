@@ -540,7 +540,7 @@ export default function LoginPage() {
                                 <p className="text-muted-foreground text-center text-sm">
                                     Don&apos;t have an account?{" "}
                                     <Link
-                                        to="/signup"
+                                        to="/authentication/register"
                                         className="text-foreground underline-offset-4 hover:underline"
                                     >
                                         Create one

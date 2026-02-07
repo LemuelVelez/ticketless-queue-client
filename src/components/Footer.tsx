@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
 import { guestApi, participantAuthStorage } from "@/api/guest"
@@ -70,10 +70,6 @@ function getJoinPath(role: string | undefined) {
     }
 }
 
-function getParticipantBase(role: ParticipantRole | null | undefined) {
-    return role === "STUDENT" ? "/student" : "/alumni"
-}
-
 function getParticipantLabel(role: ParticipantRole | null | undefined) {
     return role === "STUDENT" ? "Student" : "Guest"
 }
@@ -86,8 +82,16 @@ function getParticipantJoinPath(role: ParticipantRole | null | undefined) {
     return role === "STUDENT" ? "/student/join" : "/alumni/join"
 }
 
+function getParticipantPageLabel(pathname: string) {
+    if (pathname.endsWith("/join")) return "Join Queue"
+    if (pathname.endsWith("/my-tickets")) return "My Tickets"
+    if (pathname.endsWith("/profile")) return "Profile"
+    return "Home"
+}
+
 export default function Footer({ variant = "landing" }: FooterProps) {
     const { user, loading } = useSession()
+    const location = useLocation()
 
     const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
     const [participantLoading, setParticipantLoading] = useState(true)
@@ -156,7 +160,6 @@ export default function Footer({ variant = "landing" }: FooterProps) {
         return "/login"
     }, [isStaffAuthenticated, staffRole, isParticipantAuthenticated, participantRole])
 
-    const participantBase = useMemo(() => getParticipantBase(participantRole), [participantRole])
     const participantLabel = useMemo(() => getParticipantLabel(participantRole), [participantRole])
 
     const authLabel = isStaffAuthenticated
@@ -168,6 +171,8 @@ export default function Footer({ variant = "landing" }: FooterProps) {
             : "Login"
 
     const authTo = dashboardPath
+
+    const currentParticipantPage = useMemo(() => getParticipantPageLabel(location.pathname), [location.pathname])
 
     // ✅ Hooks must not be conditional
     const [activeHref, setActiveHref] = useState<string>("")
@@ -210,12 +215,12 @@ export default function Footer({ variant = "landing" }: FooterProps) {
         return () => observer.disconnect()
     }, [variant])
 
-    // ✅ Student/Guest authenticated footer
+    // ✅ Student/Guest authenticated footer (no navigation buttons)
     if (variant === "student") {
         return (
             <footer className="mt-14 border-t bg-background">
                 <div className="mx-4 px-4 py-10">
-                    <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+                    <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div className="flex items-center gap-3">
                             <div className="flex h-9 w-9 items-center justify-center rounded-lg border">
                                 <QrCode className="h-5 w-5" />
@@ -224,46 +229,21 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                                 <div className="flex items-center gap-2">
                                     <span className="text-sm font-semibold">QueuePass</span>
                                     <Badge variant="secondary">{participantLabel}</Badge>
+                                    <Badge variant="outline">{currentParticipantPage}</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    Participant pages require an authenticated student/guest session.
+                                    Navigation is available in the header menu.
                                 </p>
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
-                            <Button variant="outline" asChild>
-                                <Link to="/">Landing Page</Link>
-                            </Button>
-
-                            {isParticipantAuthenticated ? (
-                                <>
-                                    <Button variant="outline" asChild>
-                                        <Link to={`${participantBase}/home`}>Home</Link>
-                                    </Button>
-
-                                    <Button asChild>
-                                        <Link to={`${participantBase}/join`}>Join Queue</Link>
-                                    </Button>
-
-                                    <Button variant="outline" asChild>
-                                        <Link to={`${participantBase}/my-tickets`}>My Tickets</Link>
-                                    </Button>
-
-                                    <Button variant="outline" asChild>
-                                        <Link to={`${participantBase}/profile`}>Profile</Link>
-                                    </Button>
-                                </>
-                            ) : participantLoading ? (
-                                <Button variant="outline" disabled>
-                                    Checking session...
-                                </Button>
-                            ) : (
-                                <Button asChild>
-                                    <Link to="/login">Login to continue</Link>
-                                </Button>
-                            )}
-                        </div>
+                        <Badge variant={isParticipantAuthenticated ? "default" : "outline"}>
+                            {participantLoading
+                                ? "Checking session…"
+                                : isParticipantAuthenticated
+                                    ? "Session active"
+                                    : "Not signed in"}
+                        </Badge>
                     </div>
 
                     <Separator className="my-8" />
