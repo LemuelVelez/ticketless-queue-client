@@ -63,7 +63,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-const DEFAULT_MANAGERS = ["REGISTRAR", "LIBRARY", "ADMIN_BUILDING"] as const
+const DEFAULT_MANAGER = "REGISTRAR"
 
 function isEnabledFlag(value: boolean | undefined) {
     return value !== false
@@ -74,7 +74,7 @@ function statusBadge(enabled: boolean | undefined) {
     return <Badge variant={on ? "default" : "secondary"}>{on ? "Enabled" : "Disabled"}</Badge>
 }
 
-function normalizeManagerKey(value: string, fallback = "REGISTRAR") {
+function normalizeManagerKey(value: unknown, fallback = DEFAULT_MANAGER) {
     const v = String(value || "")
         .trim()
         .toUpperCase()
@@ -84,7 +84,7 @@ function normalizeManagerKey(value: string, fallback = "REGISTRAR") {
 
 function prettyManager(value?: string) {
     const v = String(value || "").trim()
-    if (!v) return "REGISTRAR"
+    if (!v) return DEFAULT_MANAGER
     return v
         .toLowerCase()
         .split("_")
@@ -162,16 +162,16 @@ export default function AdminDepartmentsPage() {
     // create dept form
     const [cDeptName, setCDeptName] = React.useState("")
     const [cDeptCode, setCDeptCode] = React.useState("")
-    const [cDeptManager, setCDeptManager] = React.useState("REGISTRAR")
+    const [cDeptManager, setCDeptManager] = React.useState(DEFAULT_MANAGER)
 
     // edit dept form
     const [eDeptName, setEDeptName] = React.useState("")
     const [eDeptCode, setEDeptCode] = React.useState("")
-    const [eDeptManager, setEDeptManager] = React.useState("REGISTRAR")
+    const [eDeptManager, setEDeptManager] = React.useState(DEFAULT_MANAGER)
     const [eDeptEnabled, setEDeptEnabled] = React.useState(true)
 
     // create purpose form
-    const [cPurposeCategory, setCPurposeCategory] = React.useState("REGISTRAR")
+    const [cPurposeCategory, setCPurposeCategory] = React.useState(DEFAULT_MANAGER)
     const [cPurposeKey, setCPurposeKey] = React.useState("")
     const [cPurposeLabel, setCPurposeLabel] = React.useState("")
     const [cPurposeScopes, setCPurposeScopes] = React.useState<TransactionScope[]>(["INTERNAL", "EXTERNAL"])
@@ -181,7 +181,7 @@ export default function AdminDepartmentsPage() {
     const [cPurposeSortOrder, setCPurposeSortOrder] = React.useState<number>(1000)
 
     // edit purpose form
-    const [ePurposeCategory, setEPurposeCategory] = React.useState("REGISTRAR")
+    const [ePurposeCategory, setEPurposeCategory] = React.useState(DEFAULT_MANAGER)
     const [ePurposeKey, setEPurposeKey] = React.useState("")
     const [ePurposeLabel, setEPurposeLabel] = React.useState("")
     const [ePurposeScopes, setEPurposeScopes] = React.useState<TransactionScope[]>(["INTERNAL", "EXTERNAL"])
@@ -208,11 +208,46 @@ export default function AdminDepartmentsPage() {
 
     const managerOptions = React.useMemo(() => {
         const values = new Set<string>()
-        for (const m of DEFAULT_MANAGERS) values.add(m)
-        for (const d of departments) values.add(normalizeManagerKey(d.transactionManager || "REGISTRAR"))
-        for (const p of purposes) values.add(normalizeManagerKey(p.category || "REGISTRAR"))
+
+        for (const d of departments) {
+            const m = normalizeManagerKey(d.transactionManager || DEFAULT_MANAGER, "")
+            if (m) values.add(m)
+        }
+
+        for (const p of purposes) {
+            const m = normalizeManagerKey(p.category || DEFAULT_MANAGER, "")
+            if (m) values.add(m)
+        }
+
+        const liveInputs = [cDeptManager, eDeptManager, cPurposeCategory, ePurposeCategory]
+        for (const raw of liveInputs) {
+            const m = normalizeManagerKey(raw, "")
+            if (m) values.add(m)
+        }
+
+        if (deptManagerFilter !== "all") {
+            const m = normalizeManagerKey(deptManagerFilter, "")
+            if (m) values.add(m)
+        }
+
+        if (purposeManagerFilter !== "all") {
+            const m = normalizeManagerKey(purposeManagerFilter, "")
+            if (m) values.add(m)
+        }
+
+        if (values.size === 0) values.add(DEFAULT_MANAGER)
+
         return Array.from(values).sort((a, b) => a.localeCompare(b))
-    }, [departments, purposes])
+    }, [
+        departments,
+        purposes,
+        cDeptManager,
+        eDeptManager,
+        cPurposeCategory,
+        ePurposeCategory,
+        deptManagerFilter,
+        purposeManagerFilter,
+    ])
 
     const enabledDepartments = React.useMemo(
         () => departments.filter((d) => isEnabledFlag(d.enabled)).sort((a, b) => a.name.localeCompare(b.name)),
@@ -246,11 +281,11 @@ export default function AdminDepartmentsPage() {
     function resetCreateDeptForm() {
         setCDeptName("")
         setCDeptCode("")
-        setCDeptManager("REGISTRAR")
+        setCDeptManager(DEFAULT_MANAGER)
     }
 
     function resetCreatePurposeForm() {
-        setCPurposeCategory("REGISTRAR")
+        setCPurposeCategory(DEFAULT_MANAGER)
         setCPurposeKey("")
         setCPurposeLabel("")
         setCPurposeScopes(["INTERNAL", "EXTERNAL"])
@@ -269,7 +304,7 @@ export default function AdminDepartmentsPage() {
                 if (deptStatusTab === "enabled" && !enabled) return false
                 if (deptStatusTab === "disabled" && enabled) return false
 
-                const manager = normalizeManagerKey(d.transactionManager || "REGISTRAR")
+                const manager = normalizeManagerKey(d.transactionManager || DEFAULT_MANAGER)
                 if (deptManagerFilter !== "all" && manager !== deptManagerFilter) return false
 
                 if (!q) return true
@@ -281,8 +316,8 @@ export default function AdminDepartmentsPage() {
                 const be = isEnabledFlag(b.enabled)
                 if (ae !== be) return ae ? -1 : 1
 
-                const am = normalizeManagerKey(a.transactionManager || "REGISTRAR")
-                const bm = normalizeManagerKey(b.transactionManager || "REGISTRAR")
+                const am = normalizeManagerKey(a.transactionManager || DEFAULT_MANAGER)
+                const bm = normalizeManagerKey(b.transactionManager || DEFAULT_MANAGER)
                 if (am !== bm) return am.localeCompare(bm)
 
                 return (a.name ?? "").localeCompare(b.name ?? "")
@@ -298,7 +333,7 @@ export default function AdminDepartmentsPage() {
                 if (purposeStatusTab === "enabled" && !enabled) return false
                 if (purposeStatusTab === "disabled" && enabled) return false
 
-                const category = normalizeManagerKey(p.category || "REGISTRAR")
+                const category = normalizeManagerKey(p.category || DEFAULT_MANAGER)
                 if (purposeManagerFilter !== "all" && category !== purposeManagerFilter) return false
 
                 if (purposeScopeFilter !== "all" && !(p.scopes || []).includes(purposeScopeFilter as TransactionScope)) {
@@ -327,8 +362,8 @@ export default function AdminDepartmentsPage() {
                 const be = isEnabledFlag(b.enabled)
                 if (ae !== be) return ae ? -1 : 1
 
-                const am = normalizeManagerKey(a.category || "REGISTRAR")
-                const bm = normalizeManagerKey(b.category || "REGISTRAR")
+                const am = normalizeManagerKey(a.category || DEFAULT_MANAGER)
+                const bm = normalizeManagerKey(b.category || DEFAULT_MANAGER)
                 if (am !== bm) return am.localeCompare(bm)
 
                 const so = (a.sortOrder ?? 1000) - (b.sortOrder ?? 1000)
@@ -342,7 +377,7 @@ export default function AdminDepartmentsPage() {
         setSelectedDept(d)
         setEDeptName(d.name ?? "")
         setEDeptCode(d.code ?? "")
-        setEDeptManager(normalizeManagerKey(d.transactionManager || "REGISTRAR"))
+        setEDeptManager(normalizeManagerKey(d.transactionManager || DEFAULT_MANAGER))
         setEDeptEnabled(isEnabledFlag(d.enabled))
         setEditDeptOpen(true)
     }
@@ -350,7 +385,7 @@ export default function AdminDepartmentsPage() {
     function openEditPurpose(p: TransactionPurpose) {
         setSelectedPurpose(p)
 
-        setEPurposeCategory(normalizeManagerKey(p.category || "REGISTRAR"))
+        setEPurposeCategory(normalizeManagerKey(p.category || DEFAULT_MANAGER))
         setEPurposeKey(p.key ?? "")
         setEPurposeLabel(p.label ?? "")
         setEPurposeScopes(uniqueScopes(p.scopes || []))
@@ -427,7 +462,7 @@ export default function AdminDepartmentsPage() {
     async function handleCreateDept() {
         const name = cDeptName.trim()
         const code = cDeptCode.trim()
-        const transactionManager = normalizeManagerKey(cDeptManager, "REGISTRAR")
+        const transactionManager = normalizeManagerKey(cDeptManager, DEFAULT_MANAGER)
 
         if (!name) return toast.error("Department name is required.")
 
@@ -457,7 +492,7 @@ export default function AdminDepartmentsPage() {
 
         const name = eDeptName.trim()
         const code = eDeptCode.trim()
-        const transactionManager = normalizeManagerKey(eDeptManager, "REGISTRAR")
+        const transactionManager = normalizeManagerKey(eDeptManager, DEFAULT_MANAGER)
         if (!name) return toast.error("Department name is required.")
 
         setSaving(true)
@@ -481,7 +516,7 @@ export default function AdminDepartmentsPage() {
     }
 
     async function handleCreatePurpose() {
-        const category = normalizeManagerKey(cPurposeCategory, "REGISTRAR")
+        const category = normalizeManagerKey(cPurposeCategory, DEFAULT_MANAGER)
         const key = cPurposeKey.trim()
         const label = cPurposeLabel.trim()
         const scopes = uniqueScopes(cPurposeScopes)
@@ -522,7 +557,7 @@ export default function AdminDepartmentsPage() {
     async function handleSavePurpose() {
         if (!selectedPurpose?.id) return toast.error("Invalid transaction purpose.")
 
-        const category = normalizeManagerKey(ePurposeCategory, "REGISTRAR")
+        const category = normalizeManagerKey(ePurposeCategory, DEFAULT_MANAGER)
         const key = ePurposeKey.trim()
         const label = ePurposeLabel.trim()
         const scopes = uniqueScopes(ePurposeScopes)
@@ -624,8 +659,9 @@ export default function AdminDepartmentsPage() {
                                     <div className="min-w-0">
                                         <CardTitle>Department Management</CardTitle>
                                         <CardDescription>
-                                            Create departments and assign a top-level transaction manager
-                                            (Registrar, Library, Admin Building, or any custom manager).
+                                            Create departments and assign a top-level transaction manager key.
+                                            Managers are dynamic (not fixed) and can be added/updated through department
+                                            and purpose CRUD.
                                         </CardDescription>
                                     </div>
 
@@ -742,7 +778,7 @@ export default function AdminDepartmentsPage() {
                                                 <TableBody>
                                                     {deptRows.map((d) => {
                                                         const winCount = (windowsByDept.get(d._id) ?? []).length
-                                                        const manager = normalizeManagerKey(d.transactionManager || "REGISTRAR")
+                                                        const manager = normalizeManagerKey(d.transactionManager || DEFAULT_MANAGER)
 
                                                         return (
                                                             <TableRow key={d._id}>
@@ -817,7 +853,7 @@ export default function AdminDepartmentsPage() {
                                         <CardTitle>Transaction Purpose Management</CardTitle>
                                         <CardDescription>
                                             CRUD for queue transaction purposes per manager category and per department.
-                                            Use this for Registrar, Library, Admin Building, and custom offices.
+                                            Use this for any office/manager category, including custom ones.
                                         </CardDescription>
                                     </div>
 
@@ -958,7 +994,7 @@ export default function AdminDepartmentsPage() {
 
                                                 <TableBody>
                                                     {purposeRows.map((p) => {
-                                                        const category = normalizeManagerKey(p.category || "REGISTRAR")
+                                                        const category = normalizeManagerKey(p.category || DEFAULT_MANAGER)
                                                         return (
                                                             <TableRow key={p.id}>
                                                                 <TableCell className="font-medium">
@@ -1089,7 +1125,7 @@ export default function AdminDepartmentsPage() {
                                 ))}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                This is the office above departments that manages their transaction catalog.
+                                Managers are dynamic. Type a new key to create a new transaction manager group.
                             </p>
                         </div>
                     </div>
