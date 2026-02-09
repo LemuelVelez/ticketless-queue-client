@@ -67,27 +67,70 @@ export type TicketResponse = { ticket: Ticket }
 export type CurrentCalledResponse = { ticket: Ticket | null }
 export type ListTicketsResponse = { tickets: Ticket[] }
 
-export type StaffDisplaySnapshotResponse = {
-    department: {
+export type StaffDisplayNowServing = {
+    id: string
+    queueNumber: number
+    departmentId: string | null
+    departmentName: string | null
+    departmentCode: string | null
+    windowId: string | null
+    windowName: string | null
+    windowNumber: number | null
+    calledAt: string | null
+}
+
+export type StaffDisplayUpNextItem = {
+    id: string
+    queueNumber: number
+    departmentId: string | null
+    departmentName: string | null
+    departmentCode: string | null
+}
+
+export type StaffDisplayBoardWindow = {
+    id: string
+    name: string
+    number: number
+    departmentIds: string[]
+    departments: Array<{
         id: string
         name: string
+        code: string | null
+    }>
+    nowServing: {
+        id: string
+        queueNumber: number
+        departmentId: string | null
+        departmentName: string | null
+        departmentCode: string | null
+        calledAt: string | null
+    } | null
+}
+
+export type StaffDisplaySnapshotResponse = {
+    department: {
+        id: string | null
+        name: string
+        code?: string | null
         handledDepartmentIds: string[]
+        handledDepartments?: DepartmentAssignment[]
     }
     window: {
         id: string
         name: string
         number: number
+        department?: string | null
+        departmentIds?: string[]
+        enabled?: boolean
     } | null
-    nowServing: {
-        id: string
-        queueNumber: number
-        windowNumber: number | null
-        calledAt: string | null
-    } | null
-    upNext: Array<{
-        id: string
-        queueNumber: number
-    }>
+    nowServing: StaffDisplayNowServing | null
+    upNext: StaffDisplayUpNextItem[]
+    board: {
+        transactionManager: string | null
+        minimumPanels: number
+        recommendedPanels: number
+        windows: StaffDisplayBoardWindow[]
+    }
     meta: {
         generatedAt: string
         refreshMs: number
@@ -278,7 +321,10 @@ export const staffApi = {
             .then((res) => normalizeMyAssignmentPayload(unwrapApiData(res))),
 
     // ✅ Dedicated backend snapshot for staff presentation/monitor pages
-    getDisplaySnapshot: () => api.get<StaffDisplaySnapshotResponse>("/staff/display/snapshot"),
+    getDisplaySnapshot: () =>
+        api
+            .get<StaffDisplaySnapshotResponse | { data: StaffDisplaySnapshotResponse }>("/staff/display/snapshot")
+            .then((res) => unwrapApiData(res)),
 
     listWaiting: (opts?: { limit?: number }) =>
         api.get<ListTicketsResponse>(`/staff/queue/waiting${toQuery(opts as any)}`),

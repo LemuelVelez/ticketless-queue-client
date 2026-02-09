@@ -4,21 +4,29 @@ import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
 import {
     CheckCircle2,
+    ExternalLink,
+    LayoutGrid,
     Megaphone,
+    Monitor,
     PauseCircle,
     RefreshCw,
     Ticket as TicketIcon,
-    Maximize2,
-    Minimize2,
     Volume2,
 } from "lucide-react"
+import { useSpeak, useVoices } from "react-text-to-speech"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { useSession } from "@/hooks/use-session"
-import { staffApi, type Ticket as TicketType } from "@/api/staff"
+import {
+    staffApi,
+    type DepartmentAssignment,
+    type StaffDisplayBoardWindow,
+    type StaffDisplaySnapshotResponse,
+    type Ticket as TicketType,
+} from "@/api/staff"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -27,6 +35,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 function fmtTime(v?: string | null) {
     if (!v) return "—"
@@ -42,12 +51,234 @@ function parseBool(v: unknown): boolean {
     return s === "1" || s === "true" || s === "yes" || s === "y" || s === "on"
 }
 
+function parsePanelCount(search: string, fallback = 3) {
+    const qs = new URLSearchParams(search || "")
+    const raw = Number(qs.get("panels") || fallback)
+    if (!Number.isFinite(raw)) return fallback
+    return Math.max(3, Math.min(8, Math.floor(raw)))
+}
+
 function isSpeechSupported() {
     return (
         typeof window !== "undefined" &&
         "speechSynthesis" in window &&
         "SpeechSynthesisUtterance" in window
     )
+}
+
+type MonitorOption = {
+    id: string
+    label: string
+    left: number
+    top: number
+    width: number
+    height: number
+    isPrimary: boolean
+}
+
+type WindowWithScreenDetails = Window & {
+    getScreenDetails?: () => Promise<{
+        screens: Array<{
+            id?: string
+            label?: string
+            isPrimary?: boolean
+            left?: number
+            top?: number
+            availLeft?: number
+            availTop?: number
+            width?: number
+            height?: number
+            availWidth?: number
+            availHeight?: number
+        }>
+    }>
+}
+
+type AnnouncementVoiceOption = "woman" | "man"
+
+const WOMAN_VOICE_HINTS = [
+    "female",
+    "woman",
+    "girl",
+    "samantha",
+    "victoria",
+    "karen",
+    "hazel",
+    "aria",
+    "ava",
+    "emma",
+    "amy",
+    "jenny",
+    "allison",
+    "kendra",
+    "kimberly",
+    "salli",
+    "joanna",
+    "ivy",
+    "linda",
+    "serena",
+    "natasha",
+    "susan",
+    "lucy",
+    "sofia",
+    "catherine",
+    "olivia",
+    "zira",
+]
+
+const MAN_VOICE_HINTS = [
+    "male",
+    "man",
+    "boy",
+    "david",
+    "daniel",
+    "george",
+    "james",
+    "john",
+    "mark",
+    "matthew",
+    "oliver",
+    "ryan",
+    "brian",
+    "arthur",
+    "fred",
+    "michael",
+    "tom",
+    "paul",
+    "kevin",
+    "sean",
+    "alex",
+    "rishi",
+    "liam",
+    "william",
+]
+
+function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
+    return {
+        _id: row.id,
+        department: "",
+        dateKey: "",
+        queueNumber: row.queueNumber,
+        studentId: "",
+        status: "WAITING",
+        holdAttempts: 0,
+    } as TicketType
+}
+
+function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
+    const map = new Map<string, SpeechSynthesisVoice>()
+
+    for (const v of list) {
+        const key = String(v.voiceURI || "").trim() || `${v.name}-${v.lang}`
+        if (!key) continue
+
+        const lang = String(v.lang || "").trim().toLowerCase()
+        if (!lang.startsWith("en")) continue
+
+        if (!map.has(key)) map.set(key, v)
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+        const aDefault = a.default ? 0 : 1
+        const bDefault = b.default ? 0 : 1
+        if (aDefault !== bDefault) return aDefault - bDefault
+
+        const langCmp = String(a.lang || "").localeCompare(String(b.lang || ""))
+        if (langCmp !== 0) return langCmp
+        return String(a.name || "").localeCompare(String(b.name || ""))
+    })
+}
+
+function containsAnyHint(text: string, hints: string[]) {
+    const low = text.toLowerCase()
+    return hints.some((h) => low.includes(h))
+}
+
+function isLikelyWomanVoice(v: SpeechSynthesisVoice) {
+    const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
+    return (
+        containsAnyHint(blob, WOMAN_VOICE_HINTS) ||
+        /(?:^|[-_ ])f(?:$|[-_ 0-9])/i.test(blob)
+    )
+}
+
+function isLikelyManVoice(v: SpeechSynthesisVoice) {
+    const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
+    return (
+        containsAnyHint(blob, MAN_VOICE_HINTS) ||
+        /(?:^|[-_ ])m(?:$|[-_ 0-9])/i.test(blob)
+    )
+}
+
+function resolveGenderedEnglishVoices(list: SpeechSynthesisVoice[]): {
+    english: SpeechSynthesisVoice[]
+    woman?: SpeechSynthesisVoice
+    man?: SpeechSynthesisVoice
+} {
+    const english = normalizeEnglishVoices(list)
+    if (!english.length) return { english: [] }
+
+    const woman = english.find((v) => isLikelyWomanVoice(v))
+    const man = english.find((v) => isLikelyManVoice(v) && v.voiceURI !== woman?.voiceURI)
+
+    const fallbackForWoman = english.find((v) => v.voiceURI !== man?.voiceURI)
+    const fallbackForMan = english.find((v) => v.voiceURI !== woman?.voiceURI)
+
+    return {
+        english,
+        woman: woman ?? fallbackForWoman ?? english[0],
+        man: man ?? fallbackForMan ?? english[0],
+    }
+}
+
+function queueNumberLabel(v?: number | null) {
+    if (!Number.isFinite(Number(v))) return "—"
+    return `#${Number(v)}`
+}
+
+function getTwoNumberSlice(allNumbers: number[], panelIndex: number) {
+    if (!allNumbers.length) return []
+    const start = panelIndex * 2
+    const sliced = allNumbers.slice(start, start + 2)
+    if (sliced.length) return sliced
+    return allNumbers.slice(0, 2)
+}
+
+function formatVoiceLabel(v?: SpeechSynthesisVoice) {
+    if (!v) return "Auto"
+    return `${v.name} (${v.lang})`
+}
+
+function uniqueDepartmentAssignments(list?: DepartmentAssignment[] | null): DepartmentAssignment[] {
+    if (!Array.isArray(list)) return []
+
+    const seen = new Set<string>()
+    const out: DepartmentAssignment[] = []
+
+    for (const item of list) {
+        const id = String(item?.id || "").trim()
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+
+        out.push({
+            id,
+            name: typeof item?.name === "string" ? item.name : undefined,
+            code: typeof item?.code === "string" ? item.code : null,
+            transactionManager:
+                typeof item?.transactionManager === "string" ? item.transactionManager : null,
+            enabled: item?.enabled !== false,
+        })
+    }
+
+    return out
+}
+
+function departmentLabel(dep?: Partial<DepartmentAssignment> | null) {
+    if (!dep) return "—"
+    const name = String(dep.name ?? "").trim()
+    const code = String(dep.code ?? "").trim()
+    if (name && code) return `${name} (${code})`
+    return name || code || "—"
 }
 
 export default function StaffServingPage() {
@@ -63,96 +294,129 @@ export default function StaffServingPage() {
         }
     }, [sessionUser])
 
+    const boardMode = React.useMemo(() => {
+        const qs = new URLSearchParams(location.search || "")
+        // keep backward compatibility with old ?present=1 links
+        return parseBool(qs.get("board")) || parseBool(qs.get("present"))
+    }, [location.search])
+
     const [loading, setLoading] = React.useState(true)
     const [busy, setBusy] = React.useState(false)
 
     const [departmentId, setDepartmentId] = React.useState<string | null>(null)
     const [windowInfo, setWindowInfo] = React.useState<{ id: string; name: string; number: number } | null>(null)
+    const [assignedDepartments, setAssignedDepartments] = React.useState<DepartmentAssignment[]>([])
+    const [handledDepartments, setHandledDepartments] = React.useState<DepartmentAssignment[]>([])
 
     const [current, setCurrent] = React.useState<TicketType | null>(null)
     const [upNext, setUpNext] = React.useState<TicketType[]>([])
+    const [holdTickets, setHoldTickets] = React.useState<TicketType[]>([])
+    const [snapshot, setSnapshot] = React.useState<StaffDisplaySnapshotResponse | null>(null)
 
     const [autoRefresh, setAutoRefresh] = React.useState(true)
 
-    // Presentation mode
-    const [presentation, setPresentation] = React.useState(false)
-    const presentationRequestedRef = React.useRef(false)
-    const autoPresentDoneRef = React.useRef(false)
+    const [panelCount, setPanelCount] = React.useState<number>(() => parsePanelCount(location.search, 3))
+
+    // -------- Monitor selection (multi-display) --------
+    const [monitorOptions, setMonitorOptions] = React.useState<MonitorOption[]>([])
+    const [selectedMonitorId, setSelectedMonitorId] = React.useState<string>("")
+    const [monitorApiSupported, setMonitorApiSupported] = React.useState(false)
+    const [loadingMonitors, setLoadingMonitors] = React.useState(false)
+    const monitorWarnedRef = React.useRef(false)
+
+    const assignedDepartmentItems = React.useMemo(
+        () => uniqueDepartmentAssignments(assignedDepartments),
+        [assignedDepartments],
+    )
+    const handledDepartmentItems = React.useMemo(
+        () => uniqueDepartmentAssignments(handledDepartments),
+        [handledDepartments],
+    )
 
     const assignedOk = Boolean(departmentId && windowInfo?.id)
 
-    // -------- Voice announcement (Web Speech API) --------
+    // -------- Voice announcement (react-text-to-speech) --------
     const [voiceEnabled, setVoiceEnabled] = React.useState(true)
     const [voiceSupported, setVoiceSupported] = React.useState(true)
-    const voicesRef = React.useRef<SpeechSynthesisVoice[]>([])
-    const voiceWarnedRef = React.useRef(false)
+    const [selectedVoiceType, setSelectedVoiceType] = React.useState<AnnouncementVoiceOption>("woman")
+    const voiceUnsupportedWarnedRef = React.useRef(false)
+    const englishVoiceWarnedRef = React.useRef(false)
     const lastAnnouncedRef = React.useRef<number | null>(null)
+
+    const { voices } = useVoices()
+    const { speak: speakWithPackage, stop: stopSpeech } = useSpeak({
+        onError: (error: Error) => {
+            if (voiceUnsupportedWarnedRef.current) return
+            voiceUnsupportedWarnedRef.current = true
+            toast.message(error?.message || "Voice announcement failed in this browser.")
+        },
+    })
+
+    const resolvedEnglishVoices = React.useMemo(
+        () => resolveGenderedEnglishVoices(Array.isArray(voices) ? voices : []),
+        [voices],
+    )
 
     React.useEffect(() => {
         const supported = isSpeechSupported()
         setVoiceSupported(supported)
         if (!supported) {
             setVoiceEnabled(false)
-            return
-        }
-
-        const synth = window.speechSynthesis
-        const loadVoices = () => {
-            try {
-                const v = synth.getVoices?.() ?? []
-                if (v.length) voicesRef.current = v
-            } catch {
-                // ignore
-            }
-        }
-
-        loadVoices()
-        try {
-            synth.addEventListener("voiceschanged", loadVoices)
-        } catch {
-            // ignore
-        }
-
-        return () => {
-            try {
-                synth.removeEventListener("voiceschanged", loadVoices)
-            } catch {
-                // ignore
-            }
         }
     }, [])
+
+    React.useEffect(() => {
+        // Keep panel count synced when opening board links with ?panels=
+        if (!boardMode) return
+        setPanelCount(parsePanelCount(location.search, 3))
+    }, [boardMode, location.search])
+
+    React.useEffect(() => {
+        if (!voiceSupported) return
+        if (!Array.isArray(voices) || voices.length === 0) return
+        if (resolvedEnglishVoices.english.length > 0) return
+        if (englishVoiceWarnedRef.current) return
+
+        englishVoiceWarnedRef.current = true
+        toast.message("No English TTS voice was found. Browser default voice will be used.")
+    }, [resolvedEnglishVoices.english.length, voiceSupported, voices])
 
     const speak = React.useCallback((text: string) => {
-        if (typeof window === "undefined") return
-        if (!isSpeechSupported()) return
+        if (!voiceSupported) return
+
+        const preferred =
+            selectedVoiceType === "woman"
+                ? resolvedEnglishVoices.woman
+                : resolvedEnglishVoices.man
+
+        const fallback =
+            selectedVoiceType === "woman"
+                ? resolvedEnglishVoices.man
+                : resolvedEnglishVoices.woman
+
+        const voiceURI =
+            preferred?.voiceURI ||
+            fallback?.voiceURI ||
+            resolvedEnglishVoices.english[0]?.voiceURI
 
         try {
-            const synth = window.speechSynthesis
-            try {
-                synth.resume()
-            } catch {
-                // ignore
-            }
-
-            const u = new SpeechSynthesisUtterance(text)
-            u.lang = "en-US"
-            u.rate = 1
-            u.pitch = 1
-            u.volume = 1
-
-            const voices = voicesRef.current?.length ? voicesRef.current : (synth.getVoices?.() ?? [])
-            const preferred =
-                voices.find((v) => v.lang?.toLowerCase().startsWith("en-ph")) ||
-                voices.find((v) => v.lang?.toLowerCase().startsWith("en")) ||
-                voices[0]
-
-            if (preferred) u.voice = preferred
-
-            synth.speak(u)
+            stopSpeech()
         } catch {
             // ignore
         }
-    }, [])
+
+        try {
+            speakWithPackage(text, {
+                lang: "en-US",
+                rate: 1,
+                pitch: 1,
+                volume: 1,
+                ...(voiceURI ? { voiceURI } : {}),
+            })
+        } catch {
+            // ignore
+        }
+    }, [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported])
 
     const announceCall = React.useCallback(
         (queueNumber: number) => {
@@ -160,8 +424,8 @@ export default function StaffServingPage() {
 
             if (!voiceEnabled) return
             if (!voiceSupported) {
-                if (!voiceWarnedRef.current) {
-                    voiceWarnedRef.current = true
+                if (!voiceUnsupportedWarnedRef.current) {
+                    voiceUnsupportedWarnedRef.current = true
                     toast.message("Voice announcement is not supported in this browser.")
                 }
                 return
@@ -169,8 +433,8 @@ export default function StaffServingPage() {
 
             const win = windowInfo?.number
             const text = win
-                ? `Queue number ${queueNumber}. Please proceed to window ${win}.`
-                : `Queue number ${queueNumber}.`
+                ? `Number ${queueNumber}, please proceed to window ${win}.`
+                : `Number ${queueNumber}.`
 
             speak(text)
         },
@@ -183,52 +447,176 @@ export default function StaffServingPage() {
         announceCall(n)
     }, [announceCall, current?.queueNumber])
 
+    const loadMonitorOptions = React.useCallback(async (silent = false) => {
+        if (typeof window === "undefined") return
+
+        setLoadingMonitors(true)
+        try {
+            const w = window as WindowWithScreenDetails
+            const nextOptions: MonitorOption[] = []
+
+            if (typeof w.getScreenDetails === "function") {
+                try {
+                    const details = await w.getScreenDetails()
+                    const screens = Array.isArray(details?.screens) ? details.screens : []
+                    for (let i = 0; i < screens.length; i += 1) {
+                        const s = screens[i]
+                        const width = Number(s?.availWidth ?? s?.width ?? 0)
+                        const height = Number(s?.availHeight ?? s?.height ?? 0)
+                        const left = Number(s?.left ?? s?.availLeft ?? 0)
+                        const top = Number(s?.top ?? s?.availTop ?? 0)
+                        const isPrimary = s?.isPrimary === true
+                        const id = String(s?.id || `screen-${i}`)
+
+                        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+                            continue
+                        }
+
+                        const labelBase = s?.label?.trim() ? s.label.trim() : `Monitor ${i + 1}`
+                        const label = `${labelBase}${isPrimary ? " (Primary)" : ""} • ${Math.floor(width)}×${Math.floor(height)}`
+                        nextOptions.push({
+                            id,
+                            label,
+                            left,
+                            top,
+                            width: Math.floor(width),
+                            height: Math.floor(height),
+                            isPrimary,
+                        })
+                    }
+
+                    if (nextOptions.length) {
+                        setMonitorApiSupported(true)
+                    }
+                } catch {
+                    // permission denied / unsupported by browser policy
+                    setMonitorApiSupported(false)
+                }
+            }
+
+            if (!nextOptions.length) {
+                const s = window.screen
+                const width = Number(s?.availWidth || s?.width || 1280)
+                const height = Number(s?.availHeight || s?.height || 720)
+
+                nextOptions.push({
+                    id: "primary-fallback",
+                    label: `Current monitor (fallback) • ${Math.floor(width)}×${Math.floor(height)}`,
+                    left: 0,
+                    top: 0,
+                    width: Math.floor(width),
+                    height: Math.floor(height),
+                    isPrimary: true,
+                })
+
+                if (!silent && !monitorWarnedRef.current) {
+                    monitorWarnedRef.current = true
+                    toast.message("Hardware monitor API is unavailable. Using current monitor fallback.")
+                }
+            }
+
+            setMonitorOptions(nextOptions)
+            setSelectedMonitorId((prev) => {
+                if (prev && nextOptions.some((o) => o.id === prev)) return prev
+                const primary = nextOptions.find((o) => o.isPrimary)
+                return primary?.id || nextOptions[0]?.id || ""
+            })
+        } finally {
+            setLoadingMonitors(false)
+        }
+    }, [])
+
     const refresh = React.useCallback(async () => {
         try {
             const a = await staffApi.myAssignment()
             setDepartmentId(a.departmentId ?? null)
             setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
 
-            if (!a.departmentId || !a.window?._id) {
-                setCurrent(null)
-                setUpNext([])
-                return
-            }
+            const normalizedAssigned = uniqueDepartmentAssignments(a.assignedDepartments)
+            const normalizedHandled = uniqueDepartmentAssignments(a.handledDepartments)
 
-            const [c, w] = await Promise.all([
-                staffApi.currentCalledForWindow().catch(() => ({ ticket: null })),
-                staffApi.listWaiting({ limit: 8 }).catch(() => ({ tickets: [] })),
+            setAssignedDepartments(normalizedAssigned)
+            setHandledDepartments(normalizedHandled.length ? normalizedHandled : normalizedAssigned)
+
+            const [snapshotResult, currentResult, waitingResult, holdResult] = await Promise.all([
+                staffApi.getDisplaySnapshot().catch(() => null),
+                a.departmentId && a.window?._id
+                    ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null }))
+                    : Promise.resolve({ ticket: null }),
+                a.departmentId && a.window?._id
+                    ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] }))
+                    : Promise.resolve({ tickets: [] }),
+                a.departmentId && a.window?._id
+                    ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] }))
+                    : Promise.resolve({ tickets: [] }),
             ])
 
-            setCurrent(c.ticket ?? null)
-            setUpNext(w.tickets ?? [])
+            const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
+            if (!normalizedHandled.length && snapshotHandled.length) {
+                setHandledDepartments(snapshotHandled)
+            }
+            if (!normalizedAssigned.length && snapshotHandled.length) {
+                setAssignedDepartments(snapshotHandled)
+            }
+
+            setSnapshot(snapshotResult ?? null)
+            setCurrent(currentResult.ticket ?? null)
+
+            // Prefer explicit queue list for operator mode, but fallback to snapshot upNext if needed.
+            const explicit = waitingResult.tickets ?? []
+            if (explicit.length) {
+                setUpNext(explicit)
+            } else if (snapshotResult?.upNext?.length) {
+                setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
+            } else {
+                setUpNext([])
+            }
+
+            setHoldTickets(holdResult.tickets ?? [])
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load now serving.")
         }
     }, [])
 
-    async function enterPresentation() {
-        setPresentation(true)
-        try {
-            presentationRequestedRef.current = true
-            await document.documentElement.requestFullscreen()
-        } catch {
-            presentationRequestedRef.current = false
-        }
-    }
+    const openBoardOnSelectedMonitor = React.useCallback(() => {
+        if (typeof window === "undefined") return
+        const selected = monitorOptions.find((m) => m.id === selectedMonitorId) || monitorOptions[0]
+        const targetPanels = Math.max(3, panelCount)
 
-    async function exitPresentation() {
-        setPresentation(false)
+        const qs = new URLSearchParams()
+        qs.set("board", "1")
+        qs.set("panels", String(targetPanels))
+
+        const url = `${window.location.pathname}?${qs.toString()}`
+
+        if (!selected) {
+            const childFallback = window.open(url, "_blank")
+            if (!childFallback) toast.error("Popup was blocked. Please allow popups for this site.")
+            return
+        }
+
+        const features = [
+            "popup=yes",
+            `left=${Math.max(0, Math.floor(selected.left))}`,
+            `top=${Math.max(0, Math.floor(selected.top))}`,
+            `width=${Math.max(800, Math.floor(selected.width))}`,
+            `height=${Math.max(600, Math.floor(selected.height))}`,
+        ].join(",")
+
+        const child = window.open(url, `_queue_board_${Date.now()}`, features)
+        if (!child) {
+            toast.error("Popup was blocked. Please allow popups for this site.")
+            return
+        }
+
         try {
-            if (document.fullscreenElement) {
-                await document.exitFullscreen()
-            }
+            child.focus()
         } catch {
             // ignore
-        } finally {
-            presentationRequestedRef.current = false
         }
-    }
+
+        toast.success(`Queue display opened on ${selected.label}.`)
+    }, [monitorOptions, panelCount, selectedMonitorId])
 
     React.useEffect(() => {
         ; (async () => {
@@ -241,17 +629,10 @@ export default function StaffServingPage() {
         })()
     }, [refresh])
 
-    // Auto-enter Presentation Mode when opening /staff/now-serving?present=1
     React.useEffect(() => {
-        if (autoPresentDoneRef.current) return
-
-        const qs = new URLSearchParams(location.search || "")
-        const shouldPresent = parseBool(qs.get("present"))
-        if (!shouldPresent) return
-
-        autoPresentDoneRef.current = true
-        void enterPresentation()
-    }, [location.search])
+        if (boardMode) return
+        void loadMonitorOptions(true)
+    }, [boardMode, loadMonitorOptions])
 
     React.useEffect(() => {
         if (!autoRefresh) return
@@ -260,18 +641,6 @@ export default function StaffServingPage() {
         }, 5000)
         return () => window.clearInterval(t)
     }, [autoRefresh, refresh])
-
-    React.useEffect(() => {
-        const onFsChange = () => {
-            const isFs = typeof document !== "undefined" && !!document.fullscreenElement
-            if (presentation && presentationRequestedRef.current && !isFs) {
-                presentationRequestedRef.current = false
-                setPresentation(false)
-            }
-        }
-        document.addEventListener("fullscreenchange", onFsChange)
-        return () => document.removeEventListener("fullscreenchange", onFsChange)
-    }, [presentation])
 
     async function onCallNext() {
         if (!assignedOk) return toast.error("You are not assigned to a department/window.")
@@ -321,48 +690,90 @@ export default function StaffServingPage() {
         }
     }
 
-    // Presentation overlay (distinct "billboard" style)
-    if (presentation) {
+    // ===== Dedicated queue display board mode =====
+    if (boardMode) {
+        const boardWindows: StaffDisplayBoardWindow[] = snapshot?.board?.windows ?? []
+        const resolvedPanels = Math.max(3, panelCount, boardWindows.length)
+        const panelRows: Array<StaffDisplayBoardWindow | null> = [...boardWindows]
+
+        while (panelRows.length < resolvedPanels) panelRows.push(null)
+
+        const columns = Math.min(4, Math.max(3, resolvedPanels >= 4 ? 4 : 3))
+
+        const globalUpNextNumbers = (snapshot?.upNext?.length
+            ? snapshot.upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
+            : upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
+        ) as number[]
+
+        const globalHoldNumbers = holdTickets.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
+
         return (
             <div className="fixed inset-0 z-50 bg-background">
                 <div className="flex h-full w-full flex-col">
-                    <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-col gap-3 border-b p-4 lg:flex-row lg:items-center lg:justify-between">
                         <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="secondary">Dept: {departmentId ?? "—"}</Badge>
+                                <Badge variant="secondary">Manager: {snapshot?.board?.transactionManager || "—"}</Badge>
+                                <Badge variant="secondary">Panels: {resolvedPanels}</Badge>
+                                <Badge variant="secondary">Windows: {boardWindows.length}</Badge>
                                 <Badge variant="secondary">
-                                    Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
+                                    Generated: {fmtTime(snapshot?.meta?.generatedAt || null)}
                                 </Badge>
-                                {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
-                                {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
+
+                            <div className="mt-2">
+                                <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                    Assigned departments
+                                </div>
+                                {assignedDepartmentItems.length ? (
+                                    <div className="mt-1 flex flex-wrap gap-2">
+                                        {assignedDepartmentItems.map((dep) => (
+                                            <Badge key={`board-assigned-${dep.id}`} variant="outline">
+                                                {departmentLabel(dep)}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                        No assigned departments found for this staff account.
+                                    </div>
+                                )}
+                            </div>
+
                             <div className="mt-2 text-sm text-muted-foreground">
-                                Live board • Auto refresh {autoRefresh ? "On" : "Off"} (every 5s)
+                                Multi-window queue display (3+ split panes) • auto refresh every 5s
                             </div>
                         </div>
 
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                             <div className="flex items-center gap-2 rounded-md border px-3 py-2">
-                                <Switch
-                                    id="autoRefreshPm"
-                                    checked={autoRefresh}
-                                    onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
-                                    disabled={busy}
-                                />
-                                <Label htmlFor="autoRefreshPm" className="text-sm">
-                                    Auto refresh
-                                </Label>
+                                <Label htmlFor="panelsBoard" className="text-sm">Panels</Label>
+                                <Select
+                                    value={String(Math.max(3, panelCount))}
+                                    onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}
+                                >
+                                    <SelectTrigger id="panelsBoard" className="h-8 w-[90px]">
+                                        <SelectValue placeholder="Panels" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {[3, 4, 5, 6, 7, 8].map((n) => (
+                                            <SelectItem key={n} value={String(n)}>
+                                                {n}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
 
                             <div className="flex items-center gap-2 rounded-md border px-3 py-2">
                                 <Switch
-                                    id="voiceEnabledPm"
-                                    checked={voiceEnabled}
-                                    onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
-                                    disabled={busy || !voiceSupported}
+                                    id="autoRefreshBoard"
+                                    checked={autoRefresh}
+                                    onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                    disabled={busy}
                                 />
-                                <Label htmlFor="voiceEnabledPm" className="text-sm">
-                                    Voice
+                                <Label htmlFor="autoRefreshBoard" className="text-sm">
+                                    Auto refresh
                                 </Label>
                             </div>
 
@@ -371,105 +782,109 @@ export default function StaffServingPage() {
                                 Refresh
                             </Button>
 
-                            <Button onClick={() => void onCallNext()} disabled={loading || busy || !assignedOk} className="gap-2">
-                                <Megaphone className="h-4 w-4" />
-                                Call next
-                            </Button>
-
                             <Button
-                                variant="outline"
-                                onClick={() => onRecallVoice()}
-                                disabled={
-                                    busy ||
-                                    !assignedOk ||
-                                    !voiceEnabled ||
-                                    !voiceSupported ||
-                                    (!current?.queueNumber && !lastAnnouncedRef.current)
-                                }
-                                className="gap-2"
+                                variant="secondary"
+                                onClick={() => {
+                                    try {
+                                        window.close()
+                                    } catch {
+                                        // ignore
+                                    }
+                                }}
                             >
-                                <Volume2 className="h-4 w-4" />
-                                Recall
-                            </Button>
-
-                            <Button variant="secondary" onClick={() => void exitPresentation()} className="gap-2">
-                                <Minimize2 className="h-4 w-4" />
-                                Exit
+                                Close
                             </Button>
                         </div>
                     </div>
 
-                    <div className="flex min-h-0 flex-1 flex-col gap-6 p-4 lg:p-8">
-                        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border bg-muted p-6 lg:p-10">
-                            <div className="flex items-center justify-between">
-                                <div className="text-sm tracking-wide text-muted-foreground">NOW SERVING</div>
-                                {current ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
-                            </div>
+                    <div className="min-h-0 flex-1 overflow-auto p-4 lg:p-6">
+                        <div
+                            className="grid gap-4"
+                            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+                        >
+                            {panelRows.map((row, idx) => {
+                                if (!row) {
+                                    return (
+                                        <Card key={`empty-${idx}`} className="min-h-[380px] border-dashed">
+                                            <CardHeader className="pb-2">
+                                                <CardTitle className="text-base">Unassigned panel</CardTitle>
+                                                <CardDescription>
+                                                    Add more active windows under this manager to fill this slot.
+                                                </CardDescription>
+                                            </CardHeader>
+                                            <CardContent className="flex h-[250px] items-center justify-center text-sm text-muted-foreground">
+                                                No active window bound.
+                                            </CardContent>
+                                        </Card>
+                                    )
+                                }
 
-                            <div className="mt-6 flex flex-1 flex-col items-center justify-center text-center">
-                                {current ? (
-                                    <>
-                                        <div className="text-[clamp(5rem,20vw,14rem)] font-semibold leading-none tracking-tight">
-                                            #{current.queueNumber}
-                                        </div>
-                                        <div className="mt-5 text-xl text-muted-foreground">Student ID: {current.studentId ?? "—"}</div>
-                                        <div className="mt-2 text-base text-muted-foreground">
-                                            Called at: {fmtTime((current as any).calledAt)}
-                                        </div>
-                                        <div className="mt-1 text-sm text-muted-foreground">
-                                            Hold attempts: {current.holdAttempts ?? 0}
-                                        </div>
-                                    </>
-                                ) : (
-                                    <div className="text-2xl text-muted-foreground">No ticket called for your window.</div>
-                                )}
-                            </div>
+                                const previewUpNext = getTwoNumberSlice(globalUpNextNumbers, idx)
+                                const previewHold = getTwoNumberSlice(globalHoldNumbers, idx)
 
-                            <Separator className="my-6" />
+                                const currentForThisWindow =
+                                    current && current.windowNumber === row.number ? current : null
 
-                            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                <Button
-                                    type="button"
-                                    variant="secondary"
-                                    onClick={() => void onHoldNoShow()}
-                                    disabled={busy || !current}
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <PauseCircle className="h-4 w-4" />
-                                    Hold / No-show
-                                </Button>
+                                const studentLabel =
+                                    (row.nowServing as any)?.studentName ||
+                                    (row.nowServing as any)?.studentId ||
+                                    (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
 
-                                <Button
-                                    type="button"
-                                    onClick={() => void onServed()}
-                                    disabled={busy || !current}
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <CheckCircle2 className="h-4 w-4" />
-                                    Mark served
-                                </Button>
-                            </div>
+                                return (
+                                    <Card key={row.id || `window-${idx}`} className="min-h-[380px]">
+                                        <CardContent className="p-5">
+                                            <div className="flex h-full flex-col">
+                                                <div className="text-center text-[clamp(1rem,2.2vw,1.5rem)] font-semibold">
+                                                    Window {row.number}
+                                                </div>
+
+                                                <div className="mt-4 text-center text-[clamp(1rem,2vw,1.4rem)] font-medium">
+                                                    Now Serving:
+                                                </div>
+
+                                                <div className="mt-3 text-center text-[clamp(5rem,12vw,10rem)] font-bold leading-none tracking-tight">
+                                                    {queueNumberLabel(row.nowServing?.queueNumber)}
+                                                </div>
+
+                                                <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide">
+                                                    {studentLabel}
+                                                </div>
+
+                                                <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
+                                                    <div className="text-center">
+                                                        <div className="font-medium">up next:</div>
+                                                        <div className="mt-1 leading-6">
+                                                            {previewUpNext.length
+                                                                ? previewUpNext.map((n) => (
+                                                                    <div key={`up-${row.id}-${n}`}>#{n}</div>
+                                                                ))
+                                                                : <div>—</div>}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="text-center">
+                                                        <div className="font-medium">on hold:</div>
+                                                        <div className="mt-1 leading-6">
+                                                            {previewHold.length
+                                                                ? previewHold.map((n) => (
+                                                                    <div key={`hold-${row.id}-${n}`}>#{n}</div>
+                                                                ))
+                                                                : <div>—</div>}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="mt-5 text-center text-xs text-muted-foreground">
+                                                    {row.nowServing
+                                                        ? `Called at ${fmtTime(row.nowServing.calledAt)}`
+                                                        : "No active called ticket"}
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                )
+                            })}
                         </div>
-
-                        <Card>
-                            <CardHeader className="pb-2">
-                                <CardTitle className="text-base">Up next ticker</CardTitle>
-                                <CardDescription>Waiting tickets preview for announcement order.</CardDescription>
-                            </CardHeader>
-                            <CardContent>
-                                {upNext.length === 0 ? (
-                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">No WAITING tickets.</div>
-                                ) : (
-                                    <div className="flex flex-wrap gap-2">
-                                        {upNext.map((t, idx) => (
-                                            <Badge key={t._id} variant={idx === 0 ? "default" : "secondary"} className="px-3 py-1 text-sm">
-                                                #{t.queueNumber}
-                                            </Badge>
-                                        ))}
-                                    </div>
-                                )}
-                            </CardContent>
-                        </Card>
                     </div>
                 </div>
             </div>
@@ -488,7 +903,7 @@ export default function StaffServingPage() {
                                     Now Serving Board
                                 </CardTitle>
                                 <CardDescription>
-                                    Dedicated operator board for live calling. Use <strong>?present=1</strong> to auto-open presentation mode.
+                                    Dedicated operator board for live calling. Open <strong>?board=1&amp;panels=3</strong> for monitor display mode.
                                 </CardDescription>
                             </div>
 
@@ -527,16 +942,6 @@ export default function StaffServingPage() {
                                     <Volume2 className="h-4 w-4" />
                                     Recall voice
                                 </Button>
-
-                                <Button
-                                    variant="secondary"
-                                    onClick={() => void enterPresentation()}
-                                    disabled={busy}
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <Maximize2 className="h-4 w-4" />
-                                    Presentation
-                                </Button>
                             </div>
                         </div>
 
@@ -544,9 +949,15 @@ export default function StaffServingPage() {
 
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <Badge variant="secondary">Dept: {departmentId ?? "—"}</Badge>
+                                <Badge variant="secondary">Assigned depts: {assignedDepartmentItems.length}</Badge>
                                 <Badge variant="secondary">
                                     Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    Manager: {snapshot?.board?.transactionManager || "—"}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    Managed windows: {snapshot?.board?.windows?.length ?? 0}
                                 </Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
@@ -576,6 +987,138 @@ export default function StaffServingPage() {
                                         Voice
                                     </Label>
                                 </div>
+                            </div>
+                        </div>
+
+                        <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-2">
+                            <div>
+                                <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                    Assigned departments
+                                </div>
+                                {assignedDepartmentItems.length ? (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        {assignedDepartmentItems.map((dep) => (
+                                            <Badge key={`assigned-${dep.id}`} variant="outline">
+                                                {departmentLabel(dep)}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="mt-2 text-xs text-muted-foreground">
+                                        No assigned departments found for this staff account.
+                                    </div>
+                                )}
+                            </div>
+
+                            <div>
+                                <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                    Handled departments (effective scope)
+                                </div>
+                                {handledDepartmentItems.length ? (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        {handledDepartmentItems.map((dep) => (
+                                            <Badge key={`handled-${dep.id}`} variant="secondary">
+                                                {departmentLabel(dep)}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="mt-2 text-xs text-muted-foreground">
+                                        No handled departments available.
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-12">
+                            <div className="lg:col-span-3">
+                                <Label htmlFor="monitorSelect" className="mb-2 block text-sm">Display monitor</Label>
+                                <Select
+                                    value={selectedMonitorId || undefined}
+                                    onValueChange={setSelectedMonitorId}
+                                    disabled={loadingMonitors || !monitorOptions.length}
+                                >
+                                    <SelectTrigger id="monitorSelect" className="w-full">
+                                        <SelectValue placeholder="Select monitor" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {monitorOptions.map((m) => (
+                                            <SelectItem key={m.id} value={m.id}>
+                                                {m.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <div className="lg:col-span-2">
+                                <Label htmlFor="panelCountSelect" className="mb-2 block text-sm">Split panels</Label>
+                                <Select value={String(panelCount)} onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}>
+                                    <SelectTrigger id="panelCountSelect" className="w-full">
+                                        <SelectValue placeholder="Panels" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {[3, 4, 5, 6, 7, 8].map((n) => (
+                                            <SelectItem key={n} value={String(n)}>
+                                                {n}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <div className="lg:col-span-3">
+                                <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">Announcement voice (English)</Label>
+                                <Select
+                                    value={selectedVoiceType}
+                                    onValueChange={(v) => setSelectedVoiceType(v === "man" ? "man" : "woman")}
+                                    disabled={!voiceSupported}
+                                >
+                                    <SelectTrigger id="voiceTypeSelect" className="w-full">
+                                        <SelectValue placeholder="Select voice type" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="woman">
+                                            Woman ({formatVoiceLabel(resolvedEnglishVoices.woman)})
+                                        </SelectItem>
+                                        <SelectItem value="man">
+                                            Man ({formatVoiceLabel(resolvedEnglishVoices.man)})
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <div className="flex flex-col justify-end gap-2 lg:col-span-2">
+                                <Button
+                                    variant="outline"
+                                    className="w-full gap-2"
+                                    onClick={() => void loadMonitorOptions(false)}
+                                    disabled={loadingMonitors}
+                                >
+                                    <Monitor className="h-4 w-4" />
+                                    {loadingMonitors ? "Scanning..." : "Refresh monitors"}
+                                </Button>
+                            </div>
+
+                            <div className="flex flex-col justify-end gap-2 lg:col-span-2">
+                                <Button
+                                    className="w-full gap-2"
+                                    onClick={openBoardOnSelectedMonitor}
+                                    disabled={!monitorOptions.length}
+                                >
+                                    <ExternalLink className="h-4 w-4" />
+                                    Open queue board
+                                </Button>
+                            </div>
+
+                            <div className="lg:col-span-12 text-xs text-muted-foreground">
+                                {monitorApiSupported
+                                    ? "Monitor hardware picker is active. Window placement uses browser window-management support."
+                                    : "Monitor hardware API not available in this browser context. Fallback opens on current monitor."}
+                            </div>
+
+                            <div className="lg:col-span-12 text-xs text-muted-foreground">
+                                Voice engine: react-text-to-speech • English only • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
                             </div>
                         </div>
                     </CardHeader>
@@ -659,25 +1202,121 @@ export default function StaffServingPage() {
                                 <Card className="lg:col-span-4">
                                     <CardHeader>
                                         <CardTitle>Operator rail</CardTitle>
-                                        <CardDescription>Quick view of next tickets in line.</CardDescription>
+                                        <CardDescription>Quick view of next and hold queues.</CardDescription>
+                                    </CardHeader>
+
+                                    <CardContent className="space-y-4">
+                                        <div>
+                                            <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">Up next</div>
+                                            {upNext.length === 0 ? (
+                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">No WAITING tickets.</div>
+                                            ) : (
+                                                <div className="grid gap-2">
+                                                    {upNext.slice(0, 6).map((t, idx) => (
+                                                        <div key={t._id} className="flex items-center justify-between rounded-xl border p-3">
+                                                            <div className="text-xl font-semibold">#{t.queueNumber}</div>
+                                                            <div className="text-right text-xs text-muted-foreground">
+                                                                <div>{idx === 0 ? "Next" : "Waiting"}</div>
+                                                                <div>{fmtTime((t as any).waitingSince)}</div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">On hold</div>
+                                            {holdTickets.length === 0 ? (
+                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">No HOLD tickets.</div>
+                                            ) : (
+                                                <div className="flex flex-wrap gap-2">
+                                                    {holdTickets.slice(0, 8).map((t) => (
+                                                        <Badge key={`hold-${t._id}`} variant="secondary" className="px-3 py-1 text-sm">
+                                                            #{t.queueNumber}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+
+                                {/* Multi-window manager preview */}
+                                <Card className="lg:col-span-12">
+                                    <CardHeader>
+                                        <CardTitle className="flex items-center gap-2">
+                                            <LayoutGrid className="h-4 w-4" />
+                                            Manager multi-window preview
+                                        </CardTitle>
+                                        <CardDescription>
+                                            Queue display layout mirrors window cards: big number + student label + up next + on hold.
+                                        </CardDescription>
                                     </CardHeader>
 
                                     <CardContent>
-                                        {upNext.length === 0 ? (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                                No WAITING tickets.
+                                        {snapshot?.board?.windows?.length ? (
+                                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                                {snapshot.board.windows.map((w, idx) => {
+                                                    const previewUpNext = getTwoNumberSlice(
+                                                        (snapshot?.upNext?.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n)) as number[]) || [],
+                                                        idx,
+                                                    )
+                                                    const previewHold = getTwoNumberSlice(
+                                                        holdTickets.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n)),
+                                                        idx,
+                                                    )
+
+                                                    const currentForThisWindow =
+                                                        current && current.windowNumber === w.number ? current : null
+
+                                                    const studentLabel =
+                                                        (w.nowServing as any)?.studentName ||
+                                                        (w.nowServing as any)?.studentId ||
+                                                        (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
+
+                                                    return (
+                                                        <div key={w.id} className="rounded-xl border p-4">
+                                                            <div className="text-center text-lg font-semibold">
+                                                                Window {w.number}
+                                                            </div>
+                                                            <div className="mt-3 text-center text-base font-medium">Now Serving:</div>
+                                                            <div className="mt-2 text-center text-[clamp(3.4rem,8vw,6rem)] font-bold leading-none">
+                                                                {queueNumberLabel(w.nowServing?.queueNumber)}
+                                                            </div>
+                                                            <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide">
+                                                                {studentLabel}
+                                                            </div>
+
+                                                            <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                                                <div className="text-center">
+                                                                    <div className="font-medium">up next:</div>
+                                                                    <div className="mt-1 leading-5">
+                                                                        {previewUpNext.length
+                                                                            ? previewUpNext.map((n) => (
+                                                                                <div key={`preview-up-${w.id}-${n}`}>#{n}</div>
+                                                                            ))
+                                                                            : <div>—</div>}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="text-center">
+                                                                    <div className="font-medium">on hold:</div>
+                                                                    <div className="mt-1 leading-5">
+                                                                        {previewHold.length
+                                                                            ? previewHold.map((n) => (
+                                                                                <div key={`preview-hold-${w.id}-${n}`}>#{n}</div>
+                                                                            ))
+                                                                            : <div>—</div>}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                })}
                                             </div>
                                         ) : (
-                                            <div className="grid gap-3">
-                                                {upNext.map((t, idx) => (
-                                                    <div key={t._id} className="flex items-center justify-between rounded-xl border p-4">
-                                                        <div className="text-2xl font-semibold">#{t.queueNumber}</div>
-                                                        <div className="text-right text-xs text-muted-foreground">
-                                                            <div>{idx === 0 ? "Next to call" : "Waiting"}</div>
-                                                            <div>{fmtTime((t as any).waitingSince)}</div>
-                                                        </div>
-                                                    </div>
-                                                ))}
+                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                                No active windows found for your current manager scope.
                                             </div>
                                         )}
                                     </CardContent>
