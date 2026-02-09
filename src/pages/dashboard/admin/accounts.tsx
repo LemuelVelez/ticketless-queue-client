@@ -38,6 +38,7 @@ import {
 
 import {
     DropdownMenu,
+    DropdownMenuCheckboxItem,
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuLabel,
@@ -59,8 +60,21 @@ type AccountUser = {
     role?: AccountRole
     active: boolean
     assignedDepartment: string | null
+    assignedDepartments?: string[]
     assignedWindow: string | null
     assignedTransactionManager?: string | null
+}
+
+type AccountRow = AccountUser & {
+    role: AccountRole
+    assignedDepartment: string | null
+    assignedDepartments: string[]
+}
+
+type TakenDepartment = {
+    userId: string
+    name: string | null
+    email: string | null
 }
 
 const DEFAULT_MANAGER = "REGISTRAR"
@@ -89,6 +103,29 @@ function prettyManager(value?: string) {
         .split("_")
         .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s))
         .join(" ")
+}
+
+function uniqueStringIds(values: Array<string | null | undefined>) {
+    const seen = new Set<string>()
+    const out: string[] = []
+
+    for (const raw of values) {
+        const s = String(raw ?? "").trim()
+        if (!s || seen.has(s)) continue
+        seen.add(s)
+        out.push(s)
+    }
+
+    return out
+}
+
+function extractUserDepartmentIds(user: Partial<AccountUser>) {
+    return uniqueStringIds([...(user.assignedDepartments ?? []), user.assignedDepartment ?? ""])
+}
+
+function extractWindowDepartmentIds(windowDoc?: ServiceWindow | null) {
+    if (!windowDoc) return []
+    return uniqueStringIds([...(windowDoc.departmentIds ?? []), windowDoc.department])
 }
 
 function roleBadge(role: AccountRole) {
@@ -144,7 +181,7 @@ export default function AdminAccountsPage() {
     const [cName, setCName] = React.useState("")
     const [cEmail, setCEmail] = React.useState("")
     const [cPassword, setCPassword] = React.useState("")
-    const [cDepartmentId, setCDepartmentId] = React.useState<string>("")
+    const [cDepartmentIds, setCDepartmentIds] = React.useState<string[]>([])
     const [cWindowId, setCWindowId] = React.useState<string>("")
     const [cRole, setCRole] = React.useState<AccountRole>("STAFF")
     const [cTransactionManager, setCTransactionManager] = React.useState<string>(DEFAULT_MANAGER)
@@ -153,7 +190,7 @@ export default function AdminAccountsPage() {
     const [eName, setEName] = React.useState("")
     const [eRole, setERole] = React.useState<AccountRole>("STAFF")
     const [eActive, setEActive] = React.useState(true)
-    const [eDepartmentId, setEDepartmentId] = React.useState<string>("")
+    const [eDepartmentIds, setEDepartmentIds] = React.useState<string[]>([])
     const [eWindowId, setEWindowId] = React.useState<string>("")
     const [eTransactionManager, setETransactionManager] = React.useState<string>(DEFAULT_MANAGER)
 
@@ -173,6 +210,27 @@ export default function AdminAccountsPage() {
     }, [windows])
 
     const enabledDepartments = React.useMemo(() => departments.filter((d) => isEnabledFlag(d.enabled)), [departments])
+
+    const enabledWindows = React.useMemo(() => windows.filter((w) => isEnabledFlag(w.enabled)), [windows])
+
+    const inferManagerFromDepartment = React.useCallback(
+        (departmentId?: string | null) => {
+            const id = String(departmentId ?? "").trim()
+            if (!id) return DEFAULT_MANAGER
+            const dept = deptById.get(id)
+            return normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
+        },
+        [deptById],
+    )
+
+    const inferManagerFromDepartments = React.useCallback(
+        (departmentIds: string[]) => {
+            const ids = uniqueStringIds(departmentIds ?? [])
+            if (ids.length === 0) return DEFAULT_MANAGER
+            return inferManagerFromDepartment(ids[0])
+        },
+        [inferManagerFromDepartment],
+    )
 
     const managerOptions = React.useMemo(() => {
         const set = new Set<string>()
@@ -197,29 +255,12 @@ export default function AdminAccountsPage() {
         return Array.from(set).sort((a, b) => a.localeCompare(b))
     }, [enabledDepartments, users, cTransactionManager, eTransactionManager])
 
-    const enabledWindows = React.useMemo(() => windows.filter((w) => isEnabledFlag(w.enabled)), [windows])
-
-    const windowsForDept = React.useCallback(
-        (departmentId: string) => enabledWindows.filter((w) => w.department === departmentId),
-        [enabledWindows],
-    )
-
-    const inferManagerFromDepartment = React.useCallback(
-        (departmentId?: string | null) => {
-            const id = String(departmentId ?? "").trim()
-            if (!id) return DEFAULT_MANAGER
-            const dept = deptById.get(id)
-            return normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-        },
-        [deptById],
-    )
-
     const departmentsForManager = React.useCallback(
         (manager: string) => {
             const key = normalizeManagerKey(manager, DEFAULT_MANAGER)
-            return enabledDepartments.filter(
-                (d) => normalizeManagerKey(d.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER) === key,
-            )
+            return enabledDepartments
+                .filter((d) => normalizeManagerKey(d.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER) === key)
+                .sort((a, b) => a.name.localeCompare(b.name))
         },
         [enabledDepartments],
     )
@@ -248,12 +289,104 @@ export default function AdminAccountsPage() {
         void fetchAll()
     }, [fetchAll])
 
-    const rows = React.useMemo(() => {
+    const rows = React.useMemo<AccountRow[]>(() => {
         return (users ?? []).map((u) => {
             const role = (u.role ?? "STAFF") as AccountRole
-            return { ...u, role }
+            const assignedDepartments = extractUserDepartmentIds(u)
+            const assignedDepartment = u.assignedDepartment ? String(u.assignedDepartment) : assignedDepartments[0] ?? null
+            return {
+                ...u,
+                role,
+                assignedDepartment,
+                assignedDepartments,
+            }
         })
     }, [users])
+
+    const takenDepartmentById = React.useMemo(() => {
+        const map = new Map<string, TakenDepartment>()
+
+        for (const u of rows) {
+            if (u.role !== "STAFF") continue
+            const uid = userId(u)
+            if (!uid) continue
+
+            for (const depId of u.assignedDepartments) {
+                if (!depId || map.has(depId)) continue
+                map.set(depId, {
+                    userId: uid,
+                    name: u.name ?? null,
+                    email: u.email ?? null,
+                })
+            }
+        }
+
+        return map
+    }, [rows])
+
+    const isDepartmentTakenByOther = React.useCallback(
+        (departmentId: string, currentUserId?: string | null) => {
+            const taken = takenDepartmentById.get(departmentId)
+            if (!taken) return false
+            if (currentUserId && taken.userId === currentUserId) return false
+            return true
+        },
+        [takenDepartmentById],
+    )
+
+    const getWindowManager = React.useCallback(
+        (w: ServiceWindow) => {
+            const depIds = extractWindowDepartmentIds(w)
+            if (depIds.length === 0) return null
+
+            const managers = new Set<string>()
+            for (const depId of depIds) {
+                const dep = deptById.get(depId)
+                const manager = normalizeManagerKey(dep?.transactionManager || "", "")
+                if (!manager) return null
+                managers.add(manager)
+            }
+
+            if (managers.size !== 1) return null
+            return Array.from(managers)[0]
+        },
+        [deptById],
+    )
+
+    const windowsForManager = React.useCallback(
+        (manager: string, currentUserId?: string | null) => {
+            const managerKey = normalizeManagerKey(manager, DEFAULT_MANAGER)
+
+            return enabledWindows
+                .filter((w) => {
+                    const depIds = extractWindowDepartmentIds(w)
+                    if (depIds.length === 0) return false
+
+                    const winManager = getWindowManager(w)
+                    if (!winManager || winManager !== managerKey) return false
+
+                    for (const depId of depIds) {
+                        if (isDepartmentTakenByOther(depId, currentUserId)) return false
+                    }
+
+                    return true
+                })
+                .sort((a, b) => a.number - b.number || a.name.localeCompare(b.name))
+        },
+        [enabledWindows, getWindowManager, isDepartmentTakenByOther],
+    )
+
+    const windowLabel = React.useCallback(
+        (w: ServiceWindow) => {
+            const depIds = extractWindowDepartmentIds(w)
+            const depNames = depIds
+                .map((id) => deptById.get(id)?.name)
+                .filter((v): v is string => Boolean(v))
+            const suffix = depNames.length > 0 ? ` • ${depNames.join(", ")}` : ""
+            return `${w.name} (#${w.number})${suffix}`
+        },
+        [deptById],
+    )
 
     const filtered = React.useMemo(() => {
         const query = q.trim().toLowerCase()
@@ -264,7 +397,8 @@ export default function AdminAccountsPage() {
                 if (tab === "inactive" && u.active) return false
 
                 if (deptFilter !== "all") {
-                    if ((u.assignedDepartment ?? "") !== deptFilter) return false
+                    const ids = u.assignedDepartments ?? []
+                    if (!ids.includes(deptFilter)) return false
                 }
 
                 if (!query) return true
@@ -274,17 +408,40 @@ export default function AdminAccountsPage() {
             .sort((a, b) => (a.active === b.active ? a.name.localeCompare(b.name) : a.active ? -1 : 1))
     }, [rows, q, deptFilter, tab])
 
-    function openEdit(u: AccountUser & { role: AccountRole }) {
+    const createDepartmentOptions = React.useMemo(
+        () => departmentsForManager(cTransactionManager || DEFAULT_MANAGER),
+        [departmentsForManager, cTransactionManager],
+    )
+
+    const selectedEditUserId = selected ? userId(selected) : ""
+
+    const editDepartmentOptions = React.useMemo(
+        () => departmentsForManager(eTransactionManager || DEFAULT_MANAGER),
+        [departmentsForManager, eTransactionManager],
+    )
+
+    const createWindowOptions = React.useMemo(
+        () => windowsForManager(cTransactionManager || DEFAULT_MANAGER, null),
+        [windowsForManager, cTransactionManager],
+    )
+
+    const editWindowOptions = React.useMemo(
+        () => windowsForManager(eTransactionManager || DEFAULT_MANAGER, selectedEditUserId || null),
+        [windowsForManager, eTransactionManager, selectedEditUserId],
+    )
+
+    function openEdit(u: AccountRow) {
         setSelected(u)
         setEName(u.name ?? "")
         setEActive(!!u.active)
-
         setERole(u.role ?? "STAFF")
-        setEDepartmentId(u.assignedDepartment ?? "")
+
+        const nextDepartmentIds = extractUserDepartmentIds(u)
+        setEDepartmentIds(nextDepartmentIds)
         setEWindowId(u.assignedWindow ?? "")
 
         const manager = normalizeManagerKey(
-            u.assignedTransactionManager || inferManagerFromDepartment(u.assignedDepartment) || DEFAULT_MANAGER,
+            u.assignedTransactionManager || inferManagerFromDepartments(nextDepartmentIds) || DEFAULT_MANAGER,
             DEFAULT_MANAGER,
         )
         setETransactionManager(manager)
@@ -307,10 +464,29 @@ export default function AdminAccountsPage() {
         setCName("")
         setCEmail("")
         setCPassword("")
-        setCDepartmentId("")
+        setCDepartmentIds([])
         setCWindowId("")
         setCRole("STAFF")
         setCTransactionManager(DEFAULT_MANAGER)
+    }
+
+    function toggleCreateDepartment(depId: string, checked: boolean) {
+        if (isDepartmentTakenByOther(depId, null)) return
+
+        setCDepartmentIds((prev) => {
+            const next = checked ? uniqueStringIds([...prev, depId]) : prev.filter((x) => x !== depId)
+            return next
+        })
+    }
+
+    function toggleEditDepartment(depId: string, checked: boolean) {
+        const sid = selected ? userId(selected) : ""
+        if (isDepartmentTakenByOther(depId, sid || null)) return
+
+        setEDepartmentIds((prev) => {
+            const next = checked ? uniqueStringIds([...prev, depId]) : prev.filter((x) => x !== depId)
+            return next
+        })
     }
 
     async function handleCreate() {
@@ -331,28 +507,53 @@ export default function AdminAccountsPage() {
 
         if (cRole === "STAFF") {
             const manager = normalizeManagerKey(
-                cTransactionManager || inferManagerFromDepartment(cDepartmentId) || DEFAULT_MANAGER,
+                cTransactionManager || inferManagerFromDepartments(cDepartmentIds) || DEFAULT_MANAGER,
                 DEFAULT_MANAGER,
             )
 
-            if (!cDepartmentId) return toast.error("Department is required for STAFF.")
             if (!cWindowId) return toast.error("Window is required for STAFF.")
+            if (cDepartmentIds.length === 0) return toast.error("Select at least one department for STAFF.")
 
-            const dept = deptById.get(cDepartmentId)
-            if (!dept) return toast.error("Selected department does not exist.")
+            const finalDepartmentIds = uniqueStringIds(cDepartmentIds)
 
-            const deptManager = normalizeManagerKey(dept.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-            if (deptManager !== manager) {
-                return toast.error(
-                    `Selected department belongs to ${prettyManager(deptManager)}. Please pick a matching manager.`,
-                )
+            for (const depId of finalDepartmentIds) {
+                const dept = deptById.get(depId)
+                if (!dept) return toast.error("A selected department does not exist.")
+
+                const deptManager = normalizeManagerKey(dept.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
+                if (deptManager !== manager) {
+                    return toast.error(
+                        `All selected departments must belong to ${prettyManager(manager)}.`,
+                    )
+                }
+
+                if (isDepartmentTakenByOther(depId, null)) {
+                    const taken = takenDepartmentById.get(depId)
+                    const deptName = dept.name || "department"
+                    const holder = taken?.name || taken?.email || "another staff"
+                    return toast.error(`${deptName} is already assigned to ${holder}.`)
+                }
             }
 
-            payload.departmentId = cDepartmentId
+            const selectedWindow = winById.get(cWindowId)
+            if (!selectedWindow) return toast.error("Selected window does not exist.")
+
+            const windowDepartmentIds = extractWindowDepartmentIds(selectedWindow)
+            for (const depId of windowDepartmentIds) {
+                if (isDepartmentTakenByOther(depId, null)) {
+                    const depName = deptById.get(depId)?.name || "A window department"
+                    const taken = takenDepartmentById.get(depId)
+                    const holder = taken?.name || taken?.email || "another staff"
+                    return toast.error(`${depName} (from selected window) is already assigned to ${holder}.`)
+                }
+            }
+
+            payload.departmentIds = uniqueStringIds([...finalDepartmentIds, ...windowDepartmentIds])
             payload.windowId = cWindowId
             payload.transactionManager = manager
         } else {
             payload.departmentId = null
+            payload.departmentIds = null
             payload.windowId = null
             payload.transactionManager = null
         }
@@ -387,28 +588,63 @@ export default function AdminAccountsPage() {
         }
 
         if (eRole === "STAFF") {
+            if (eDepartmentIds.length === 0) return toast.error("Select at least one department for STAFF.")
+
             const manager = normalizeManagerKey(
-                eTransactionManager || inferManagerFromDepartment(eDepartmentId) || DEFAULT_MANAGER,
+                eTransactionManager || inferManagerFromDepartments(eDepartmentIds) || DEFAULT_MANAGER,
                 DEFAULT_MANAGER,
             )
 
-            if (eDepartmentId) {
-                const dept = deptById.get(eDepartmentId)
-                if (!dept) return toast.error("Selected department does not exist.")
+            let finalDepartmentIds = uniqueStringIds(eDepartmentIds)
+
+            for (const depId of finalDepartmentIds) {
+                const dept = deptById.get(depId)
+                if (!dept) return toast.error("A selected department does not exist.")
 
                 const deptManager = normalizeManagerKey(dept.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
                 if (deptManager !== manager) {
                     return toast.error(
-                        `Selected department belongs to ${prettyManager(deptManager)}. Please pick a matching manager.`,
+                        `All selected departments must belong to ${prettyManager(manager)}.`,
                     )
+                }
+
+                if (isDepartmentTakenByOther(depId, id)) {
+                    const taken = takenDepartmentById.get(depId)
+                    const deptName = dept.name || "department"
+                    const holder = taken?.name || taken?.email || "another staff"
+                    return toast.error(`${deptName} is already assigned to ${holder}.`)
                 }
             }
 
-            payload.departmentId = eDepartmentId || null
+            if (eWindowId) {
+                const selectedWindow = winById.get(eWindowId)
+                if (!selectedWindow) return toast.error("Selected window does not exist.")
+
+                const winManager = getWindowManager(selectedWindow)
+                if (!winManager || winManager !== manager) {
+                    return toast.error(`Selected window does not belong to ${prettyManager(manager)}.`)
+                }
+
+                const winDeps = extractWindowDepartmentIds(selectedWindow)
+
+                for (const depId of winDeps) {
+                    if (isDepartmentTakenByOther(depId, id)) {
+                        const depName = deptById.get(depId)?.name || "A window department"
+                        const taken = takenDepartmentById.get(depId)
+                        const holder = taken?.name || taken?.email || "another staff"
+                        return toast.error(`${depName} (from selected window) is already assigned to ${holder}.`)
+                    }
+                }
+
+                finalDepartmentIds = uniqueStringIds([...finalDepartmentIds, ...winDeps])
+            }
+
+            payload.departmentIds = finalDepartmentIds
             payload.windowId = eWindowId || null
             payload.transactionManager = manager
         } else {
             payload.departmentId = null
+            payload.departmentIds = null
             payload.windowId = null
             payload.transactionManager = null
         }
@@ -494,8 +730,8 @@ export default function AdminAccountsPage() {
                             <div className="min-w-0">
                                 <CardTitle>Account Management</CardTitle>
                                 <CardDescription>
-                                    Create users, update roles, reset passwords, assign manager-aligned departments/windows,
-                                    and disable or delete accounts.
+                                    Create users, update roles, reset passwords, assign one transaction manager with
+                                    multiple departments per staff, and prevent department reuse across staff.
                                 </CardDescription>
                             </div>
 
@@ -541,11 +777,14 @@ export default function AdminAccountsPage() {
                                     </SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="all">All departments</SelectItem>
-                                        {enabledDepartments.map((d) => (
-                                            <SelectItem key={d._id} value={d._id}>
-                                                {d.name}
-                                            </SelectItem>
-                                        ))}
+                                        {departments
+                                            .slice()
+                                            .sort((a, b) => a.name.localeCompare(b.name))
+                                            .map((d) => (
+                                                <SelectItem key={d._id} value={d._id}>
+                                                    {d.name}
+                                                </SelectItem>
+                                            ))}
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -575,7 +814,7 @@ export default function AdminAccountsPage() {
                                         <Skeleton className="h-10 w-full" />
                                     </div>
                                 ) : (
-                                    <div className="rounded-lg border overflow-x-auto">
+                                    <div className="overflow-x-auto rounded-lg border">
                                         <Table>
                                             <TableHeader>
                                                 <TableRow>
@@ -583,7 +822,7 @@ export default function AdminAccountsPage() {
                                                     <TableHead className="hidden md:table-cell">Email</TableHead>
                                                     <TableHead>Role</TableHead>
                                                     <TableHead className="hidden xl:table-cell">Manager</TableHead>
-                                                    <TableHead className="hidden lg:table-cell">Department</TableHead>
+                                                    <TableHead className="hidden lg:table-cell">Departments</TableHead>
                                                     <TableHead className="hidden lg:table-cell">Window</TableHead>
                                                     <TableHead className="text-right">Status</TableHead>
                                                     <TableHead className="w-14" />
@@ -595,10 +834,12 @@ export default function AdminAccountsPage() {
                                                     const id = userId(u) || u.email
                                                     const role = (u.role ?? "STAFF") as AccountRole
 
-                                                    const deptName =
-                                                        u.assignedDepartment && deptById.get(u.assignedDepartment)
-                                                            ? deptById.get(u.assignedDepartment)!.name
-                                                            : "—"
+                                                    const departmentNames =
+                                                        u.assignedDepartments.length > 0
+                                                            ? u.assignedDepartments
+                                                                .map((depId) => deptById.get(depId)?.name)
+                                                                .filter((v): v is string => Boolean(v))
+                                                            : []
 
                                                     const winName =
                                                         u.assignedWindow && winById.get(u.assignedWindow)
@@ -609,7 +850,7 @@ export default function AdminAccountsPage() {
                                                         role === "STAFF"
                                                             ? normalizeManagerKey(
                                                                 u.assignedTransactionManager ||
-                                                                inferManagerFromDepartment(u.assignedDepartment) ||
+                                                                inferManagerFromDepartments(u.assignedDepartments) ||
                                                                 DEFAULT_MANAGER,
                                                                 DEFAULT_MANAGER,
                                                             )
@@ -646,7 +887,22 @@ export default function AdminAccountsPage() {
                                                             </TableCell>
 
                                                             <TableCell className="hidden lg:table-cell">
-                                                                <span className="text-muted-foreground">{deptName}</span>
+                                                                {departmentNames.length > 0 ? (
+                                                                    <div className="flex flex-wrap gap-1">
+                                                                        {departmentNames.slice(0, 2).map((name) => (
+                                                                            <Badge key={`${id}-${name}`} variant="secondary">
+                                                                                {name}
+                                                                            </Badge>
+                                                                        ))}
+                                                                        {departmentNames.length > 2 ? (
+                                                                            <Badge variant="outline">
+                                                                                +{departmentNames.length - 2} more
+                                                                            </Badge>
+                                                                        ) : null}
+                                                                    </div>
+                                                                ) : (
+                                                                    <span className="text-muted-foreground">—</span>
+                                                                )}
                                                             </TableCell>
 
                                                             <TableCell className="hidden lg:table-cell">
@@ -662,11 +918,7 @@ export default function AdminAccountsPage() {
                                                             <TableCell className="text-right">
                                                                 <DropdownMenu>
                                                                     <DropdownMenuTrigger asChild>
-                                                                        <Button
-                                                                            variant="ghost"
-                                                                            size="icon"
-                                                                            aria-label="Row actions"
-                                                                        >
+                                                                        <Button variant="ghost" size="icon" aria-label="Row actions">
                                                                             <MoreHorizontal className="h-4 w-4" />
                                                                         </Button>
                                                                     </DropdownMenuTrigger>
@@ -676,7 +928,7 @@ export default function AdminAccountsPage() {
                                                                         <DropdownMenuSeparator />
 
                                                                         <DropdownMenuItem
-                                                                            onClick={() => openEdit({ ...(u as any), role } as any)}
+                                                                            onClick={() => openEdit(u)}
                                                                             className="cursor-pointer"
                                                                         >
                                                                             Edit account
@@ -771,7 +1023,7 @@ export default function AdminAccountsPage() {
                                     const next = v as AccountRole
                                     setCRole(next)
                                     if (next === "ADMIN") {
-                                        setCDepartmentId("")
+                                        setCDepartmentIds([])
                                         setCWindowId("")
                                     } else if (!cTransactionManager) {
                                         setCTransactionManager(DEFAULT_MANAGER)
@@ -789,125 +1041,140 @@ export default function AdminAccountsPage() {
                         </div>
 
                         <div className="grid gap-2">
-                            <Label htmlFor="c-transaction-manager">Transaction manager</Label>
-                            <Input
-                                id="c-transaction-manager"
-                                list="c-transaction-manager-options"
-                                value={cTransactionManager}
-                                onChange={(e) => {
-                                    const nextManager = normalizeManagerKey(e.target.value, "")
-                                    setCTransactionManager(nextManager)
-
-                                    if (cDepartmentId) {
-                                        const dept = deptById.get(cDepartmentId)
-                                        const deptManager = normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-                                        if (!nextManager || deptManager !== nextManager) {
-                                            setCDepartmentId("")
-                                            setCWindowId("")
-                                        }
-                                    }
-                                }}
-                                onBlur={() => {
-                                    if (!String(cTransactionManager || "").trim()) {
-                                        setCTransactionManager(DEFAULT_MANAGER)
-                                    }
-                                }}
-                                placeholder="e.g., REGISTRAR"
-                                disabled={cRole === "ADMIN"}
-                            />
-                            <datalist id="c-transaction-manager-options">
-                                {managerOptions.map((m) => (
-                                    <option key={`c-manager-opt-${m}`} value={m}>
-                                        {prettyManager(m)}
-                                    </option>
-                                ))}
-                            </datalist>
-
-                            <div className="flex flex-wrap gap-2">
-                                {managerOptions.slice(0, 6).map((m) => (
-                                    <Button
-                                        key={`c-manager-chip-${m}`}
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={cRole === "ADMIN"}
-                                        onClick={() => {
-                                            setCTransactionManager(m)
-
-                                            if (cDepartmentId) {
-                                                const dept = deptById.get(cDepartmentId)
-                                                const deptManager = normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-                                                if (deptManager !== m) {
-                                                    setCDepartmentId("")
-                                                    setCWindowId("")
-                                                }
-                                            }
-                                        }}
-                                    >
-                                        {prettyManager(m)}
-                                    </Button>
-                                ))}
-                            </div>
-
-                            <p className="text-xs text-muted-foreground">
-                                Type any manager key. Departments are limited to the selected manager.
-                            </p>
-                        </div>
-
-                        <div className="grid gap-2">
-                            <Label>Department</Label>
+                            <Label>Transaction manager</Label>
                             <Select
-                                value={cDepartmentId || "none"}
+                                value={normalizeManagerKey(cTransactionManager, DEFAULT_MANAGER)}
                                 onValueChange={(v) => {
-                                    const next = v === "none" ? "" : v
-                                    setCDepartmentId(next)
+                                    const next = normalizeManagerKey(v, DEFAULT_MANAGER)
+                                    setCTransactionManager(next)
+                                    setCDepartmentIds([])
                                     setCWindowId("")
-
-                                    if (next) {
-                                        const dept = deptById.get(next)
-                                        const deptManager = normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-                                        setCTransactionManager(deptManager)
-                                    }
                                 }}
                                 disabled={cRole === "ADMIN"}
                             >
                                 <SelectTrigger className="w-full min-w-0">
-                                    <SelectValue placeholder="Select department" />
+                                    <SelectValue placeholder="Select manager" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="none">Unassigned</SelectItem>
-                                    {departmentsForManager(cTransactionManager || DEFAULT_MANAGER).map((d) => (
-                                        <SelectItem key={d._id} value={d._id}>
-                                            {d.name}
+                                    {managerOptions.map((m) => (
+                                        <SelectItem key={`c-manager-${m}`} value={m}>
+                                            {prettyManager(m)}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
+                            <p className="text-xs text-muted-foreground">
+                                STAFF must have one manager. Departments and windows are limited to that manager.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Departments</Label>
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="w-full justify-between"
+                                        disabled={cRole === "ADMIN"}
+                                    >
+                                        <span className="truncate">
+                                            {cDepartmentIds.length > 0
+                                                ? `${cDepartmentIds.length} selected`
+                                                : "Select departments"}
+                                        </span>
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="start" className="max-h-72 w-md overflow-y-auto">
+                                    {createDepartmentOptions.length === 0 ? (
+                                        <DropdownMenuItem disabled>No available departments for this manager.</DropdownMenuItem>
+                                    ) : (
+                                        createDepartmentOptions.map((d) => {
+                                            const taken = isDepartmentTakenByOther(d._id, null)
+                                            const holder = takenDepartmentById.get(d._id)
+                                            const checked = cDepartmentIds.includes(d._id)
+
+                                            return (
+                                                <DropdownMenuCheckboxItem
+                                                    key={`c-dept-${d._id}`}
+                                                    checked={checked}
+                                                    disabled={taken}
+                                                    onSelect={(e) => e.preventDefault()}
+                                                    onCheckedChange={(v) => toggleCreateDepartment(d._id, v === true)}
+                                                >
+                                                    <div className="flex min-w-0 flex-col">
+                                                        <span className="truncate">{d.name}</span>
+                                                        {taken ? (
+                                                            <span className="truncate text-xs text-muted-foreground">
+                                                                Taken by {holder?.name || holder?.email || "another staff"}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                </DropdownMenuCheckboxItem>
+                                            )
+                                        })
+                                    )}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+
+                            {cDepartmentIds.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                    {cDepartmentIds.map((depId) => {
+                                        const dep = deptById.get(depId)
+                                        return (
+                                            <Badge key={`c-selected-${depId}`} variant="secondary">
+                                                {dep?.name || depId}
+                                            </Badge>
+                                        )
+                                    })}
+                                </div>
+                            ) : null}
                         </div>
 
                         <div className="grid gap-2">
                             <Label>Window</Label>
                             <Select
                                 value={cWindowId || "none"}
-                                onValueChange={(v) => setCWindowId(v === "none" ? "" : v)}
-                                disabled={cRole === "ADMIN" || !cDepartmentId}
+                                onValueChange={(v) => {
+                                    const next = v === "none" ? "" : v
+                                    setCWindowId(next)
+
+                                    if (!next) return
+                                    const selectedWindow = winById.get(next)
+                                    if (!selectedWindow) return
+
+                                    const winDeptIds = extractWindowDepartmentIds(selectedWindow)
+
+                                    const blocked = winDeptIds.find((depId) => isDepartmentTakenByOther(depId, null))
+                                    if (blocked) {
+                                        const holder = takenDepartmentById.get(blocked)
+                                        const depName = deptById.get(blocked)?.name || "A window department"
+                                        toast.error(
+                                            `${depName} is already assigned to ${holder?.name || holder?.email || "another staff"}.`,
+                                        )
+                                        setCWindowId("")
+                                        return
+                                    }
+
+                                    setCDepartmentIds((prev) => uniqueStringIds([...prev, ...winDeptIds]))
+                                }}
+                                disabled={cRole === "ADMIN"}
                             >
                                 <SelectTrigger className="w-full min-w-0">
-                                    <SelectValue
-                                        placeholder={cDepartmentId ? "Select window" : "Select department first"}
-                                    />
+                                    <SelectValue placeholder="Select window" />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">Unassigned</SelectItem>
-                                    {cDepartmentId
-                                        ? windowsForDept(cDepartmentId).map((w) => (
-                                            <SelectItem key={w._id} value={w._id}>
-                                                {w.name} (#{w.number})
-                                            </SelectItem>
-                                        ))
-                                        : null}
+                                    {createWindowOptions.map((w) => (
+                                        <SelectItem key={w._id} value={w._id}>
+                                            {windowLabel(w)}
+                                        </SelectItem>
+                                    ))}
                                 </SelectContent>
                             </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Selecting a window automatically includes its departments.
+                            </p>
                         </div>
                     </div>
 
@@ -963,7 +1230,7 @@ export default function AdminAccountsPage() {
                                     const next = v as AccountRole
                                     setERole(next)
                                     if (next === "ADMIN") {
-                                        setEDepartmentId("")
+                                        setEDepartmentIds([])
                                         setEWindowId("")
                                     } else if (!eTransactionManager) {
                                         setETransactionManager(DEFAULT_MANAGER)
@@ -989,123 +1256,142 @@ export default function AdminAccountsPage() {
                         </div>
 
                         <div className="grid gap-2">
-                            <Label htmlFor="e-transaction-manager">Transaction manager</Label>
-                            <Input
-                                id="e-transaction-manager"
-                                list="e-transaction-manager-options"
-                                value={eTransactionManager}
-                                onChange={(e) => {
-                                    const nextManager = normalizeManagerKey(e.target.value, "")
-                                    setETransactionManager(nextManager)
-
-                                    if (eDepartmentId) {
-                                        const dept = deptById.get(eDepartmentId)
-                                        const deptManager = normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-                                        if (!nextManager || deptManager !== nextManager) {
-                                            setEDepartmentId("")
-                                            setEWindowId("")
-                                        }
-                                    }
-                                }}
-                                onBlur={() => {
-                                    if (!String(eTransactionManager || "").trim()) {
-                                        setETransactionManager(DEFAULT_MANAGER)
-                                    }
-                                }}
-                                placeholder="e.g., REGISTRAR"
-                                disabled={eRole === "ADMIN"}
-                            />
-                            <datalist id="e-transaction-manager-options">
-                                {managerOptions.map((m) => (
-                                    <option key={`e-manager-opt-${m}`} value={m}>
-                                        {prettyManager(m)}
-                                    </option>
-                                ))}
-                            </datalist>
-
-                            <div className="flex flex-wrap gap-2">
-                                {managerOptions.slice(0, 6).map((m) => (
-                                    <Button
-                                        key={`e-manager-chip-${m}`}
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={eRole === "ADMIN"}
-                                        onClick={() => {
-                                            setETransactionManager(m)
-
-                                            if (eDepartmentId) {
-                                                const dept = deptById.get(eDepartmentId)
-                                                const deptManager = normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-                                                if (deptManager !== m) {
-                                                    setEDepartmentId("")
-                                                    setEWindowId("")
-                                                }
-                                            }
-                                        }}
-                                    >
-                                        {prettyManager(m)}
-                                    </Button>
-                                ))}
-                            </div>
-
-                            <p className="text-xs text-muted-foreground">
-                                Type any manager key. Departments are limited to the selected manager.
-                            </p>
-                        </div>
-
-                        <div className="grid gap-2">
-                            <Label>Department</Label>
+                            <Label>Transaction manager</Label>
                             <Select
-                                value={eDepartmentId || "none"}
+                                value={normalizeManagerKey(eTransactionManager, DEFAULT_MANAGER)}
                                 onValueChange={(v) => {
-                                    const next = v === "none" ? "" : v
-                                    setEDepartmentId(next)
+                                    const next = normalizeManagerKey(v, DEFAULT_MANAGER)
+                                    setETransactionManager(next)
+                                    setEDepartmentIds([])
                                     setEWindowId("")
-
-                                    if (next) {
-                                        const dept = deptById.get(next)
-                                        const deptManager = normalizeManagerKey(dept?.transactionManager || DEFAULT_MANAGER, DEFAULT_MANAGER)
-                                        setETransactionManager(deptManager)
-                                    }
                                 }}
                                 disabled={eRole === "ADMIN"}
                             >
                                 <SelectTrigger className="w-full min-w-0">
-                                    <SelectValue placeholder="Select department" />
+                                    <SelectValue placeholder="Select manager" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="none">Unassigned</SelectItem>
-                                    {departmentsForManager(eTransactionManager || DEFAULT_MANAGER).map((d) => (
-                                        <SelectItem key={d._id} value={d._id}>
-                                            {d.name}
+                                    {managerOptions.map((m) => (
+                                        <SelectItem key={`e-manager-${m}`} value={m}>
+                                            {prettyManager(m)}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
+                            <p className="text-xs text-muted-foreground">
+                                STAFF must keep one manager. All assigned departments must match it.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Departments</Label>
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="w-full justify-between"
+                                        disabled={eRole === "ADMIN"}
+                                    >
+                                        <span className="truncate">
+                                            {eDepartmentIds.length > 0
+                                                ? `${eDepartmentIds.length} selected`
+                                                : "Select departments"}
+                                        </span>
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="start" className="max-h-72 w-md overflow-y-auto">
+                                    {editDepartmentOptions.length === 0 ? (
+                                        <DropdownMenuItem disabled>No available departments for this manager.</DropdownMenuItem>
+                                    ) : (
+                                        editDepartmentOptions.map((d) => {
+                                            const sid = selected ? userId(selected) : ""
+                                            const taken = isDepartmentTakenByOther(d._id, sid || null)
+                                            const holder = takenDepartmentById.get(d._id)
+                                            const checked = eDepartmentIds.includes(d._id)
+
+                                            return (
+                                                <DropdownMenuCheckboxItem
+                                                    key={`e-dept-${d._id}`}
+                                                    checked={checked}
+                                                    disabled={taken}
+                                                    onSelect={(e) => e.preventDefault()}
+                                                    onCheckedChange={(v) => toggleEditDepartment(d._id, v === true)}
+                                                >
+                                                    <div className="flex min-w-0 flex-col">
+                                                        <span className="truncate">{d.name}</span>
+                                                        {taken ? (
+                                                            <span className="truncate text-xs text-muted-foreground">
+                                                                Taken by {holder?.name || holder?.email || "another staff"}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                </DropdownMenuCheckboxItem>
+                                            )
+                                        })
+                                    )}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+
+                            {eDepartmentIds.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                    {eDepartmentIds.map((depId) => {
+                                        const dep = deptById.get(depId)
+                                        return (
+                                            <Badge key={`e-selected-${depId}`} variant="secondary">
+                                                {dep?.name || depId}
+                                            </Badge>
+                                        )
+                                    })}
+                                </div>
+                            ) : null}
                         </div>
 
                         <div className="grid gap-2">
                             <Label>Window</Label>
                             <Select
                                 value={eWindowId || "none"}
-                                onValueChange={(v) => setEWindowId(v === "none" ? "" : v)}
-                                disabled={eRole === "ADMIN" || !eDepartmentId}
+                                onValueChange={(v) => {
+                                    const next = v === "none" ? "" : v
+                                    setEWindowId(next)
+
+                                    if (!next) return
+                                    const selectedWindow = winById.get(next)
+                                    if (!selectedWindow) return
+
+                                    const sid = selected ? userId(selected) : ""
+                                    const winDeps = extractWindowDepartmentIds(selectedWindow)
+
+                                    const blocked = winDeps.find((depId) => isDepartmentTakenByOther(depId, sid || null))
+                                    if (blocked) {
+                                        const holder = takenDepartmentById.get(blocked)
+                                        const depName = deptById.get(blocked)?.name || "A window department"
+                                        toast.error(
+                                            `${depName} is already assigned to ${holder?.name || holder?.email || "another staff"}.`,
+                                        )
+                                        setEWindowId("")
+                                        return
+                                    }
+
+                                    setEDepartmentIds((prev) => uniqueStringIds([...prev, ...winDeps]))
+                                }}
+                                disabled={eRole === "ADMIN"}
                             >
                                 <SelectTrigger className="w-full min-w-0">
-                                    <SelectValue placeholder={eDepartmentId ? "Select window" : "Select department first"} />
+                                    <SelectValue placeholder="Select window" />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">Unassigned</SelectItem>
-                                    {eDepartmentId
-                                        ? windowsForDept(eDepartmentId).map((w) => (
-                                            <SelectItem key={w._id} value={w._id}>
-                                                {w.name} (#{w.number})
-                                            </SelectItem>
-                                        ))
-                                        : null}
+                                    {editWindowOptions.map((w) => (
+                                        <SelectItem key={w._id} value={w._id}>
+                                            {windowLabel(w)}
+                                        </SelectItem>
+                                    ))}
                                 </SelectContent>
                             </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Selecting a window automatically includes its departments.
+                            </p>
                         </div>
                     </div>
 
