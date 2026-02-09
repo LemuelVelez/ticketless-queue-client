@@ -314,6 +314,30 @@ export type ReportsTimeseriesResponse = {
     series: ReportsTimeseriesPoint[]
 }
 
+/** =========================
+ * SMS TYPES (STAFF)
+ * ========================= */
+
+export type StaffSendSmsRequest = {
+    number: string
+    message: string
+    senderName?: string
+}
+
+export type StaffSendTicketCalledSmsRequest = {
+    message?: string
+    senderName?: string
+}
+
+export type StaffSmsResponse = {
+    ok: boolean
+    provider?: string
+    number?: string
+    ticketId?: string
+    result?: any
+    error?: string
+}
+
 export const staffApi = {
     myAssignment: () =>
         api
@@ -348,6 +372,13 @@ export const staffApi = {
     holdNoShow: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/hold`),
 
     returnFromHold: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/return`),
+
+    // ✅ SMS endpoints
+    sendSms: (payload: StaffSendSmsRequest) =>
+        api.post<StaffSmsResponse>("/staff/sms/send", payload),
+
+    sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketCalledSmsRequest) =>
+        api.post<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}),
 
     // ✅ Staff reports (scoped to assigned department on backend)
     getReportsSummary: (opts?: { from?: string; to?: string }) =>

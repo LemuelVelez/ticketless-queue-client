@@ -7,9 +7,11 @@ import {
     ExternalLink,
     LayoutGrid,
     Megaphone,
+    MessageSquare,
     Monitor,
     PauseCircle,
     RefreshCw,
+    Send,
     Ticket as TicketIcon,
     Volume2,
 } from "lucide-react"
@@ -36,6 +38,17 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 
 function fmtTime(v?: string | null) {
     if (!v) return "—"
@@ -281,6 +294,11 @@ function departmentLabel(dep?: Partial<DepartmentAssignment> | null) {
     return name || code || "—"
 }
 
+function defaultSmsCalledMessage(queueNumber: number, windowNumber?: number) {
+    const windowText = typeof windowNumber === "number" ? ` at Window ${windowNumber}` : ""
+    return `Queue update: Your ticket #${queueNumber} is now being served${windowText}.`
+}
+
 export default function StaffServingPage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -342,6 +360,14 @@ export default function StaffServingPage() {
     const voiceUnsupportedWarnedRef = React.useRef(false)
     const englishVoiceWarnedRef = React.useRef(false)
     const lastAnnouncedRef = React.useRef<number | null>(null)
+
+    // -------- SMS states --------
+    const [autoSmsOnCall, setAutoSmsOnCall] = React.useState(false)
+    const [smsDialogOpen, setSmsDialogOpen] = React.useState(false)
+    const [smsBusy, setSmsBusy] = React.useState(false)
+    const [smsUseDefaultMessage, setSmsUseDefaultMessage] = React.useState(true)
+    const [smsCustomMessage, setSmsCustomMessage] = React.useState("")
+    const [smsSenderName, setSmsSenderName] = React.useState("")
 
     const { voices } = useVoices()
     const { speak: speakWithPackage, stop: stopSpeech } = useSpeak({
@@ -446,6 +472,70 @@ export default function StaffServingPage() {
         if (!n) return toast.message("No ticket to announce.")
         announceCall(n)
     }, [announceCall, current?.queueNumber])
+
+    const sendCalledSms = React.useCallback(
+        async (
+            ticket: TicketType,
+            opts?: { message?: string; senderName?: string; toastOnSuccess?: boolean },
+        ) => {
+            if (!ticket?._id) {
+                toast.error("No active ticket selected for SMS.")
+                return false
+            }
+
+            setSmsBusy(true)
+            try {
+                const message = String(opts?.message ?? "").trim()
+                const senderName = String(opts?.senderName ?? "").trim()
+
+                const payload = {
+                    ...(message ? { message } : {}),
+                    ...(senderName ? { senderName } : {}),
+                }
+
+                const res = await staffApi.sendTicketCalledSms(ticket._id, payload)
+
+                if (opts?.toastOnSuccess !== false) {
+                    toast.success(
+                        `SMS sent for #${ticket.queueNumber}${res?.number ? ` to ${res.number}` : ""}.`,
+                    )
+                }
+
+                return true
+            } catch (e: any) {
+                toast.error(e?.message ?? "Failed to send SMS.")
+                return false
+            } finally {
+                setSmsBusy(false)
+            }
+        },
+        [],
+    )
+
+    const onSendSmsFromDialog = React.useCallback(async () => {
+        if (!current?._id) {
+            toast.message("No active ticket selected for SMS.")
+            return
+        }
+
+        const custom = smsUseDefaultMessage ? "" : smsCustomMessage.trim()
+        if (!smsUseDefaultMessage && !custom) {
+            toast.error("Custom message is required.")
+            return
+        }
+
+        const ok = await sendCalledSms(current, {
+            message: custom || undefined,
+            senderName: smsSenderName.trim() || undefined,
+            toastOnSuccess: true,
+        })
+
+        if (!ok) return
+
+        setSmsDialogOpen(false)
+        setSmsUseDefaultMessage(true)
+        setSmsCustomMessage("")
+    }, [current, sendCalledSms, smsCustomMessage, smsSenderName, smsUseDefaultMessage])
 
     const loadMonitorOptions = React.useCallback(async (silent = false) => {
         if (typeof window === "undefined") return
@@ -650,6 +740,11 @@ export default function StaffServingPage() {
             setCurrent(res.ticket)
             toast.success(`Called #${res.ticket.queueNumber}`)
             announceCall(res.ticket.queueNumber)
+
+            if (autoSmsOnCall) {
+                await sendCalledSms(res.ticket, { toastOnSuccess: true })
+            }
+
             await refresh()
         } catch (e: any) {
             toast.error(e?.message ?? "No waiting tickets.")
@@ -942,6 +1037,92 @@ export default function StaffServingPage() {
                                     <Volume2 className="h-4 w-4" />
                                     Recall voice
                                 </Button>
+
+                                <Dialog open={smsDialogOpen} onOpenChange={setSmsDialogOpen}>
+                                    <DialogTrigger asChild>
+                                        <Button
+                                            variant="outline"
+                                            disabled={busy || smsBusy || !assignedOk || !current?._id}
+                                            className="w-full gap-2 sm:w-auto"
+                                        >
+                                            <MessageSquare className="h-4 w-4" />
+                                            Send SMS
+                                        </Button>
+                                    </DialogTrigger>
+                                    <DialogContent className="sm:max-w-[620px]">
+                                        <DialogHeader>
+                                            <DialogTitle>Send SMS notification</DialogTitle>
+                                            <DialogDescription>
+                                                Notify the current ticket via Semaphore SMS.
+                                                {current
+                                                    ? ` Ticket #${current.queueNumber} • Student ID: ${current.studentId || "—"}`
+                                                    : " No active ticket selected."}
+                                            </DialogDescription>
+                                        </DialogHeader>
+
+                                        <div className="grid gap-4 py-1">
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="smsSenderName">Sender name (optional)</Label>
+                                                <Input
+                                                    id="smsSenderName"
+                                                    value={smsSenderName}
+                                                    onChange={(e) => setSmsSenderName(e.target.value)}
+                                                    placeholder="e.g. QUEUE"
+                                                />
+                                            </div>
+
+                                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                                                <Label htmlFor="smsUseDefaultMessage" className="text-sm">
+                                                    Use default called message
+                                                </Label>
+                                                <Switch
+                                                    id="smsUseDefaultMessage"
+                                                    checked={smsUseDefaultMessage}
+                                                    onCheckedChange={(v) => setSmsUseDefaultMessage(Boolean(v))}
+                                                />
+                                            </div>
+
+                                            {smsUseDefaultMessage ? (
+                                                <div className="rounded-md border bg-muted p-3 text-sm text-muted-foreground">
+                                                    {current
+                                                        ? defaultSmsCalledMessage(current.queueNumber, windowInfo?.number)
+                                                        : "Queue update message preview will appear when an active ticket is selected."}
+                                                </div>
+                                            ) : (
+                                                <div className="grid gap-2">
+                                                    <Label htmlFor="smsCustomMessage">Custom message</Label>
+                                                    <Textarea
+                                                        id="smsCustomMessage"
+                                                        value={smsCustomMessage}
+                                                        onChange={(e) => setSmsCustomMessage(e.target.value)}
+                                                        placeholder="Type your custom SMS message..."
+                                                        rows={4}
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <DialogFooter>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                onClick={() => setSmsDialogOpen(false)}
+                                                disabled={smsBusy}
+                                            >
+                                                Cancel
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                onClick={() => void onSendSmsFromDialog()}
+                                                disabled={smsBusy || !current?._id}
+                                                className="gap-2"
+                                            >
+                                                <Send className="h-4 w-4" />
+                                                {smsBusy ? "Sending..." : "Send SMS"}
+                                            </Button>
+                                        </DialogFooter>
+                                    </DialogContent>
+                                </Dialog>
                             </div>
                         </div>
 
@@ -958,6 +1139,9 @@ export default function StaffServingPage() {
                                 </Badge>
                                 <Badge variant="secondary">
                                     Managed windows: {snapshot?.board?.windows?.length ?? 0}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    SMS: {smsBusy ? "Sending..." : autoSmsOnCall ? "Auto on call" : "Manual"}
                                 </Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
@@ -985,6 +1169,18 @@ export default function StaffServingPage() {
                                     />
                                     <Label htmlFor="voiceEnabled" className="text-sm">
                                         Voice
+                                    </Label>
+                                </div>
+
+                                <div className="flex items-center gap-2 rounded-md border px-3 py-2">
+                                    <Switch
+                                        id="autoSmsOnCall"
+                                        checked={autoSmsOnCall}
+                                        onCheckedChange={(v) => setAutoSmsOnCall(Boolean(v))}
+                                        disabled={busy || smsBusy || !assignedOk}
+                                    />
+                                    <Label htmlFor="autoSmsOnCall" className="text-sm">
+                                        Auto SMS on call
                                     </Label>
                                 </div>
                             </div>
@@ -1120,6 +1316,10 @@ export default function StaffServingPage() {
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
                                 Voice engine: react-text-to-speech • English only • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
                             </div>
+
+                            <div className="lg:col-span-12 text-xs text-muted-foreground">
+                                SMS engine: Semaphore via backend • {autoSmsOnCall ? "Auto send is enabled when calling next." : "Manual send mode is enabled."}
+                            </div>
                         </div>
                     </CardHeader>
 
@@ -1168,6 +1368,17 @@ export default function StaffServingPage() {
                                                 </div>
 
                                                 <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        onClick={() => setSmsDialogOpen(true)}
+                                                        disabled={busy || smsBusy || !current?._id}
+                                                        className="w-full gap-2 sm:w-auto"
+                                                    >
+                                                        <MessageSquare className="h-4 w-4" />
+                                                        Send SMS
+                                                    </Button>
+
                                                     <Button
                                                         type="button"
                                                         variant="secondary"
