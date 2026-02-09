@@ -24,7 +24,18 @@ export type Department = {
 
 export type ServiceWindow = {
     _id: string
+
+    /**
+     * Legacy primary department (kept by backend for compatibility).
+     * This is the first item from departmentIds.
+     */
     department: string
+
+    /**
+     * A window may be bound to multiple departments.
+     */
+    departmentIds?: string[]
+
     name: string
     number: number
     enabled?: boolean
@@ -58,8 +69,23 @@ export type StaffUser = {
     email: string
     role: UserRole
     active: boolean
+
+    /**
+     * Legacy primary department (kept for backward compatibility)
+     */
     assignedDepartment: string | null
+
+    /**
+     * New multi-department assignment for STAFF users.
+     * Staff can belong to several departments.
+     */
+    assignedDepartments?: string[]
+
+    /**
+     * Staff can be assigned to one window at a time.
+     */
     assignedWindow: string | null
+
     assignedTransactionManager?: string | null
 }
 
@@ -72,11 +98,12 @@ type CreateUserPayload = {
     /**
      * STAFF assignment:
      * - transactionManager is the top-level office (e.g. REGISTRAR)
-     * - departmentId must belong to that manager
-     * - windowId must belong to that department
+     * - departmentIds may contain multiple departments
+     * - windowId is a single window assignment
      */
     transactionManager?: string | null
-    departmentId?: string | null
+    departmentId?: string | null // legacy single department
+    departmentIds?: string[] | null // new multi-department assignment
     windowId?: string | null
 }
 
@@ -85,7 +112,8 @@ type UpdateUserPayload = {
     active?: boolean
     role?: UserRole
     transactionManager?: string | null
-    departmentId?: string | null
+    departmentId?: string | null // legacy single department
+    departmentIds?: string[] | null // new multi-department assignment
     windowId?: string | null
     password?: string
 }
@@ -182,14 +210,16 @@ export const adminApi = {
     getSettings: () => api.get<{ settings: Setting | null }>("/admin/settings"),
     updateSettings: (payload: Partial<Setting>) => api.put<{ settings: Setting }>("/admin/settings", payload),
 
-    // DEPARTMENTS
+    // DEPARTMENTS (CRUD)
     listDepartments: () => api.get<{ departments: Department[] }>("/admin/departments"),
+    getDepartment: (id: string) => api.get<{ department: Department }>(`/admin/departments/${id}`),
     createDepartment: (payload: { name: string; code?: string; transactionManager?: string }) =>
         api.post<{ department: Department }>("/admin/departments", payload),
     updateDepartment: (
         id: string,
         payload: { name?: string; code?: string; transactionManager?: string; enabled?: boolean }
     ) => api.put<{ department: Department }>(`/admin/departments/${id}`, payload),
+    deleteDepartment: (id: string) => api.delete<{ ok: true }>(`/admin/departments/${id}`),
 
     // TRANSACTION PURPOSES
     listTransactionPurposes: (opts?: {
@@ -233,15 +263,25 @@ export const adminApi = {
 
     deleteTransactionPurpose: (id: string) => api.delete<{ ok: true }>(`/admin/transaction-purposes/${id}`),
 
-    // WINDOWS
+    // WINDOWS (CRUD)
     listWindows: (opts?: { departmentId?: string }) => {
         const qs = opts?.departmentId ? `?departmentId=${encodeURIComponent(opts.departmentId)}` : ""
         return api.get<{ windows: ServiceWindow[] }>(`/admin/windows${qs}`)
     },
-    createWindow: (payload: { departmentId: string; name: string; number: number }) =>
+    getWindow: (id: string) => api.get<{ window: ServiceWindow }>(`/admin/windows/${id}`),
+    createWindow: (payload: { departmentId?: string; departmentIds?: string[]; name: string; number: number }) =>
         api.post<{ window: ServiceWindow }>("/admin/windows", payload),
-    updateWindow: (id: string, payload: { name?: string; number?: number; enabled?: boolean }) =>
-        api.put<{ window: ServiceWindow }>(`/admin/windows/${id}`, payload),
+    updateWindow: (
+        id: string,
+        payload: {
+            name?: string
+            number?: number
+            enabled?: boolean
+            departmentId?: string | null
+            departmentIds?: string[]
+        }
+    ) => api.put<{ window: ServiceWindow }>(`/admin/windows/${id}`, payload),
+    deleteWindow: (id: string) => api.delete<{ ok: true }>(`/admin/windows/${id}`),
 
     // ACCOUNTS (backend still uses /admin/staff endpoints; now supports both ADMIN & STAFF)
     listStaff: () => api.get<{ staff: StaffUser[] }>("/admin/staff"),

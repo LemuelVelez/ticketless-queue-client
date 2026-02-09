@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as React from "react"
-import { useLocation } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
 import {
     MoreHorizontal,
@@ -113,6 +113,29 @@ function safeInt(v: string, fallback: number) {
     return n
 }
 
+function uniqueStringIds(values: Array<string | null | undefined>) {
+    const seen = new Set<string>()
+    const out: string[] = []
+
+    for (const raw of values) {
+        const s = String(raw ?? "").trim()
+        if (!s) continue
+        if (seen.has(s)) continue
+        seen.add(s)
+        out.push(s)
+    }
+
+    return out
+}
+
+function getWindowDepartmentIds(win?: ServiceWindow | null): string[] {
+    if (!win) return []
+    return uniqueStringIds([
+        ...(Array.isArray(win.departmentIds) ? win.departmentIds : []),
+        win.department ?? "",
+    ])
+}
+
 export default function AdminDepartmentsPage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -149,6 +172,7 @@ export default function AdminDepartmentsPage() {
     // dialogs - departments
     const [createDeptOpen, setCreateDeptOpen] = React.useState(false)
     const [editDeptOpen, setEditDeptOpen] = React.useState(false)
+    const [deleteDeptOpen, setDeleteDeptOpen] = React.useState(false)
 
     // dialogs - purposes
     const [createPurposeOpen, setCreatePurposeOpen] = React.useState(false)
@@ -192,11 +216,16 @@ export default function AdminDepartmentsPage() {
 
     const windowsByDept = React.useMemo(() => {
         const m = new Map<string, ServiceWindow[]>()
+
         for (const w of windows) {
-            const arr = m.get(w.department) ?? []
-            arr.push(w)
-            m.set(w.department, arr)
+            const deptIds = getWindowDepartmentIds(w)
+            for (const depId of deptIds) {
+                const arr = m.get(depId) ?? []
+                arr.push(w)
+                m.set(depId, arr)
+            }
         }
+
         return m
     }, [windows])
 
@@ -382,6 +411,11 @@ export default function AdminDepartmentsPage() {
         setEditDeptOpen(true)
     }
 
+    function openDeleteDept(d: Department) {
+        setSelectedDept(d)
+        setDeleteDeptOpen(true)
+    }
+
     function openEditPurpose(p: TransactionPurpose) {
         setSelectedPurpose(p)
 
@@ -509,6 +543,24 @@ export default function AdminDepartmentsPage() {
             await fetchAll()
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed to update department."
+            toast.error(msg)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    async function handleDeleteDept() {
+        if (!selectedDept?._id) return toast.error("Invalid department id.")
+
+        setSaving(true)
+        try {
+            await adminApi.deleteDepartment(selectedDept._id)
+            toast.success("Department deleted.")
+            setDeleteDeptOpen(false)
+            setSelectedDept(null)
+            await fetchAll()
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to delete department."
             toast.error(msg)
         } finally {
             setSaving(false)
@@ -659,9 +711,7 @@ export default function AdminDepartmentsPage() {
                                     <div className="min-w-0">
                                         <CardTitle>Department Management</CardTitle>
                                         <CardDescription>
-                                            Create departments and assign a top-level transaction manager key.
-                                            Managers are dynamic (not fixed) and can be added/updated through department
-                                            and purpose CRUD.
+                                            Create, update, and organize departments while assigning a transaction manager key.
                                         </CardDescription>
                                     </div>
 
@@ -689,10 +739,10 @@ export default function AdminDepartmentsPage() {
                                         </Button>
 
                                         <Button asChild variant="secondary" className="w-full gap-2 sm:w-auto">
-                                            <a href="/admin/windows">
+                                            <Link to="/admin/windows">
                                                 <LayoutGrid className="h-4 w-4" />
                                                 Manage windows
-                                            </a>
+                                            </Link>
                                         </Button>
                                     </div>
                                 </div>
@@ -813,7 +863,7 @@ export default function AdminDepartmentsPage() {
                                                                             </Button>
                                                                         </DropdownMenuTrigger>
 
-                                                                        <DropdownMenuContent align="end" className="w-44">
+                                                                        <DropdownMenuContent align="end" className="w-52">
                                                                             <DropdownMenuLabel>Actions</DropdownMenuLabel>
                                                                             <DropdownMenuSeparator />
                                                                             <DropdownMenuItem
@@ -821,6 +871,13 @@ export default function AdminDepartmentsPage() {
                                                                                 className="cursor-pointer"
                                                                             >
                                                                                 Edit department
+                                                                            </DropdownMenuItem>
+                                                                            <DropdownMenuItem
+                                                                                onClick={() => openDeleteDept(d)}
+                                                                                className="cursor-pointer text-destructive focus:text-destructive"
+                                                                            >
+                                                                                <Trash2 className="mr-2 h-4 w-4" />
+                                                                                Delete department
                                                                             </DropdownMenuItem>
                                                                         </DropdownMenuContent>
                                                                     </DropdownMenu>
@@ -852,8 +909,7 @@ export default function AdminDepartmentsPage() {
                                     <div className="min-w-0">
                                         <CardTitle>Transaction Purpose Management</CardTitle>
                                         <CardDescription>
-                                            CRUD for queue transaction purposes per manager category and per department.
-                                            Use this for any office/manager category, including custom ones.
+                                            Configure queue transaction purposes by manager category and department scope.
                                         </CardDescription>
                                     </div>
 
@@ -881,10 +937,10 @@ export default function AdminDepartmentsPage() {
                                         </Button>
 
                                         <Button asChild variant="secondary" className="w-full gap-2 sm:w-auto">
-                                            <a href="/admin/departments">
+                                            <Link to="/admin/departments">
                                                 <Building2 className="h-4 w-4" />
                                                 View departments
-                                            </a>
+                                            </Link>
                                         </Button>
                                     </div>
                                 </div>
@@ -1229,6 +1285,45 @@ export default function AdminDepartmentsPage() {
                 </DialogContent>
             </Dialog>
 
+            {/* Delete Department */}
+            <AlertDialog open={deleteDeptOpen} onOpenChange={setDeleteDeptOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete department?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This will permanently delete{" "}
+                            <span className="font-medium">{selectedDept?.name || "this department"}</span>.
+                            <br />
+                            <br />
+                            A department can only be deleted if it is not referenced by windows, staff assignments, or
+                            transaction purposes.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+
+                    <AlertDialogFooter>
+                        <AlertDialogCancel
+                            disabled={saving}
+                            onClick={() => {
+                                setDeleteDeptOpen(false)
+                                setSelectedDept(null)
+                            }}
+                        >
+                            Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                e.preventDefault()
+                                void handleDeleteDept()
+                            }}
+                            disabled={saving}
+                            className="bg-destructive text-white hover:bg-destructive/90"
+                        >
+                            {saving ? "Deleting…" : "Delete"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
             {/* Create Purpose */}
             <Dialog open={createPurposeOpen} onOpenChange={setCreatePurposeOpen}>
                 <DialogContent className="sm:max-w-2xl">
@@ -1273,8 +1368,9 @@ export default function AdminDepartmentsPage() {
                             <div className="grid gap-2">
                                 <Label>Scopes</Label>
                                 <div className="flex flex-wrap gap-4 rounded-lg border p-3">
-                                    <label className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2">
                                         <Checkbox
+                                            id="c-purpose-scope-internal"
                                             checked={cPurposeScopes.includes("INTERNAL")}
                                             onCheckedChange={(checked) =>
                                                 toggleScope(
@@ -1285,11 +1381,14 @@ export default function AdminDepartmentsPage() {
                                                 )
                                             }
                                         />
-                                        <span className="text-sm">Internal</span>
-                                    </label>
+                                        <Label htmlFor="c-purpose-scope-internal" className="cursor-pointer text-sm font-normal">
+                                            Internal
+                                        </Label>
+                                    </div>
 
-                                    <label className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2">
                                         <Checkbox
+                                            id="c-purpose-scope-external"
                                             checked={cPurposeScopes.includes("EXTERNAL")}
                                             onCheckedChange={(checked) =>
                                                 toggleScope(
@@ -1300,8 +1399,10 @@ export default function AdminDepartmentsPage() {
                                                 )
                                             }
                                         />
-                                        <span className="text-sm">External</span>
-                                    </label>
+                                        <Label htmlFor="c-purpose-scope-external" className="cursor-pointer text-sm font-normal">
+                                            External
+                                        </Label>
+                                    </div>
                                 </div>
                             </div>
 
@@ -1334,23 +1435,31 @@ export default function AdminDepartmentsPage() {
                                         <p className="text-sm text-muted-foreground">No enabled departments found.</p>
                                     ) : (
                                         <div className="grid gap-1">
-                                            {enabledDepartments.map((d) => (
-                                                <label key={`c-purpose-dept-${d._id}`} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-muted/50">
-                                                    <Checkbox
-                                                        checked={cPurposeDepartmentIds.includes(d._id)}
-                                                        onCheckedChange={(checked) =>
-                                                            toggleDepartmentId(
-                                                                cPurposeDepartmentIds,
-                                                                setCPurposeDepartmentIds,
-                                                                d._id,
-                                                                checked === true
-                                                            )
-                                                        }
-                                                    />
-                                                    <span className="text-sm">{d.name}</span>
-                                                    <span className="text-xs text-muted-foreground">{d.code ? `(${d.code})` : ""}</span>
-                                                </label>
-                                            ))}
+                                            {enabledDepartments.map((d) => {
+                                                const checkboxId = `c-purpose-dept-${d._id}`
+                                                return (
+                                                    <div key={checkboxId} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-muted/50">
+                                                        <Checkbox
+                                                            id={checkboxId}
+                                                            checked={cPurposeDepartmentIds.includes(d._id)}
+                                                            onCheckedChange={(checked) =>
+                                                                toggleDepartmentId(
+                                                                    cPurposeDepartmentIds,
+                                                                    setCPurposeDepartmentIds,
+                                                                    d._id,
+                                                                    checked === true
+                                                                )
+                                                            }
+                                                        />
+                                                        <Label htmlFor={checkboxId} className="cursor-pointer text-sm font-normal">
+                                                            {d.name}
+                                                        </Label>
+                                                        <span className="text-xs text-muted-foreground">
+                                                            {d.code ? `(${d.code})` : ""}
+                                                        </span>
+                                                    </div>
+                                                )
+                                            })}
                                         </div>
                                     )}
                                 </div>
@@ -1430,8 +1539,9 @@ export default function AdminDepartmentsPage() {
                             <div className="grid gap-2">
                                 <Label>Scopes</Label>
                                 <div className="flex flex-wrap gap-4 rounded-lg border p-3">
-                                    <label className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2">
                                         <Checkbox
+                                            id="e-purpose-scope-internal"
                                             checked={ePurposeScopes.includes("INTERNAL")}
                                             onCheckedChange={(checked) =>
                                                 toggleScope(
@@ -1442,11 +1552,14 @@ export default function AdminDepartmentsPage() {
                                                 )
                                             }
                                         />
-                                        <span className="text-sm">Internal</span>
-                                    </label>
+                                        <Label htmlFor="e-purpose-scope-internal" className="cursor-pointer text-sm font-normal">
+                                            Internal
+                                        </Label>
+                                    </div>
 
-                                    <label className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2">
                                         <Checkbox
+                                            id="e-purpose-scope-external"
                                             checked={ePurposeScopes.includes("EXTERNAL")}
                                             onCheckedChange={(checked) =>
                                                 toggleScope(
@@ -1457,8 +1570,10 @@ export default function AdminDepartmentsPage() {
                                                 )
                                             }
                                         />
-                                        <span className="text-sm">External</span>
-                                    </label>
+                                        <Label htmlFor="e-purpose-scope-external" className="cursor-pointer text-sm font-normal">
+                                            External
+                                        </Label>
+                                    </div>
                                 </div>
                             </div>
 
@@ -1491,23 +1606,31 @@ export default function AdminDepartmentsPage() {
                                         <p className="text-sm text-muted-foreground">No enabled departments found.</p>
                                     ) : (
                                         <div className="grid gap-1">
-                                            {enabledDepartments.map((d) => (
-                                                <label key={`e-purpose-dept-${d._id}`} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-muted/50">
-                                                    <Checkbox
-                                                        checked={ePurposeDepartmentIds.includes(d._id)}
-                                                        onCheckedChange={(checked) =>
-                                                            toggleDepartmentId(
-                                                                ePurposeDepartmentIds,
-                                                                setEPurposeDepartmentIds,
-                                                                d._id,
-                                                                checked === true
-                                                            )
-                                                        }
-                                                    />
-                                                    <span className="text-sm">{d.name}</span>
-                                                    <span className="text-xs text-muted-foreground">{d.code ? `(${d.code})` : ""}</span>
-                                                </label>
-                                            ))}
+                                            {enabledDepartments.map((d) => {
+                                                const checkboxId = `e-purpose-dept-${d._id}`
+                                                return (
+                                                    <div key={checkboxId} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-muted/50">
+                                                        <Checkbox
+                                                            id={checkboxId}
+                                                            checked={ePurposeDepartmentIds.includes(d._id)}
+                                                            onCheckedChange={(checked) =>
+                                                                toggleDepartmentId(
+                                                                    ePurposeDepartmentIds,
+                                                                    setEPurposeDepartmentIds,
+                                                                    d._id,
+                                                                    checked === true
+                                                                )
+                                                            }
+                                                        />
+                                                        <Label htmlFor={checkboxId} className="cursor-pointer text-sm font-normal">
+                                                            {d.name}
+                                                        </Label>
+                                                        <span className="text-xs text-muted-foreground">
+                                                            {d.code ? `(${d.code})` : ""}
+                                                        </span>
+                                                    </div>
+                                                )
+                                            })}
                                         </div>
                                     )}
                                 </div>
