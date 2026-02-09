@@ -60,6 +60,7 @@ export type StaffUser = {
     active: boolean
     assignedDepartment: string | null
     assignedWindow: string | null
+    assignedTransactionManager?: string | null
 }
 
 type CreateUserPayload = {
@@ -69,9 +70,12 @@ type CreateUserPayload = {
     role?: UserRole
 
     /**
-     * For STAFF users these may be required by your business rules.
-     * For ADMIN users these should typically be omitted / null.
+     * STAFF assignment:
+     * - transactionManager is the top-level office (e.g. REGISTRAR)
+     * - departmentId must belong to that manager
+     * - windowId must belong to that department
      */
+    transactionManager?: string | null
     departmentId?: string | null
     windowId?: string | null
 }
@@ -80,6 +84,7 @@ type UpdateUserPayload = {
     name?: string
     active?: boolean
     role?: UserRole
+    transactionManager?: string | null
     departmentId?: string | null
     windowId?: string | null
     password?: string

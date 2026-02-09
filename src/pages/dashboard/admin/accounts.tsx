@@ -60,7 +60,10 @@ type AccountUser = {
     active: boolean
     assignedDepartment: string | null
     assignedWindow: string | null
+    assignedTransactionManager?: string | null
 }
+
+const DEFAULT_MANAGERS = ["REGISTRAR", "LIBRARY", "ADMIN_BUILDING"] as const
 
 function userId(u: AccountUser) {
     return u._id ?? u.id ?? ""
@@ -68,6 +71,24 @@ function userId(u: AccountUser) {
 
 function isEnabledFlag(value: boolean | undefined) {
     return value !== false
+}
+
+function normalizeManagerKey(value: unknown, fallback = "REGISTRAR") {
+    const v = String(value ?? "")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "_")
+    return v || fallback
+}
+
+function prettyManager(value?: string) {
+    const v = String(value || "").trim()
+    if (!v) return "REGISTRAR"
+    return v
+        .toLowerCase()
+        .split("_")
+        .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s))
+        .join(" ")
 }
 
 function roleBadge(role: AccountRole) {
@@ -126,6 +147,7 @@ export default function AdminAccountsPage() {
     const [cDepartmentId, setCDepartmentId] = React.useState<string>("")
     const [cWindowId, setCWindowId] = React.useState<string>("")
     const [cRole, setCRole] = React.useState<AccountRole>("STAFF")
+    const [cTransactionManager, setCTransactionManager] = React.useState<string>("REGISTRAR")
 
     // edit form
     const [eName, setEName] = React.useState("")
@@ -133,6 +155,7 @@ export default function AdminAccountsPage() {
     const [eActive, setEActive] = React.useState(true)
     const [eDepartmentId, setEDepartmentId] = React.useState<string>("")
     const [eWindowId, setEWindowId] = React.useState<string>("")
+    const [eTransactionManager, setETransactionManager] = React.useState<string>("REGISTRAR")
 
     // reset password form
     const [newPassword, setNewPassword] = React.useState("")
@@ -151,11 +174,43 @@ export default function AdminAccountsPage() {
 
     const enabledDepartments = React.useMemo(() => departments.filter((d) => isEnabledFlag(d.enabled)), [departments])
 
+    const managerOptions = React.useMemo(() => {
+        const set = new Set<string>(DEFAULT_MANAGERS)
+        for (const d of enabledDepartments) {
+            set.add(normalizeManagerKey(d.transactionManager || "REGISTRAR"))
+        }
+        for (const u of users) {
+            const m = String(u.assignedTransactionManager ?? "").trim()
+            if (m) set.add(normalizeManagerKey(m))
+        }
+        return Array.from(set).sort((a, b) => a.localeCompare(b))
+    }, [enabledDepartments, users])
+
     const enabledWindows = React.useMemo(() => windows.filter((w) => isEnabledFlag(w.enabled)), [windows])
 
     const windowsForDept = React.useCallback(
         (departmentId: string) => enabledWindows.filter((w) => w.department === departmentId),
         [enabledWindows],
+    )
+
+    const inferManagerFromDepartment = React.useCallback(
+        (departmentId?: string | null) => {
+            const id = String(departmentId ?? "").trim()
+            if (!id) return "REGISTRAR"
+            const dept = deptById.get(id)
+            return normalizeManagerKey(dept?.transactionManager || "REGISTRAR", "REGISTRAR")
+        },
+        [deptById],
+    )
+
+    const departmentsForManager = React.useCallback(
+        (manager: string) => {
+            const key = normalizeManagerKey(manager, "REGISTRAR")
+            return enabledDepartments.filter(
+                (d) => normalizeManagerKey(d.transactionManager || "REGISTRAR", "REGISTRAR") === key,
+            )
+        },
+        [enabledDepartments],
     )
 
     const fetchAll = React.useCallback(async () => {
@@ -217,6 +272,12 @@ export default function AdminAccountsPage() {
         setEDepartmentId(u.assignedDepartment ?? "")
         setEWindowId(u.assignedWindow ?? "")
 
+        const manager = normalizeManagerKey(
+            u.assignedTransactionManager || inferManagerFromDepartment(u.assignedDepartment) || "REGISTRAR",
+            "REGISTRAR",
+        )
+        setETransactionManager(manager)
+
         setEditOpen(true)
     }
 
@@ -238,6 +299,7 @@ export default function AdminAccountsPage() {
         setCDepartmentId("")
         setCWindowId("")
         setCRole("STAFF")
+        setCTransactionManager("REGISTRAR")
     }
 
     async function handleCreate() {
@@ -249,25 +311,43 @@ export default function AdminAccountsPage() {
         if (!email) return toast.error("Email is required.")
         if (!password) return toast.error("Password is required.")
 
+        const payload: any = {
+            name,
+            email,
+            password,
+            role: cRole,
+        }
+
         if (cRole === "STAFF") {
+            const manager = normalizeManagerKey(
+                cTransactionManager || inferManagerFromDepartment(cDepartmentId) || "REGISTRAR",
+                "REGISTRAR",
+            )
+
             if (!cDepartmentId) return toast.error("Department is required for STAFF.")
             if (!cWindowId) return toast.error("Window is required for STAFF.")
+
+            const dept = deptById.get(cDepartmentId)
+            if (!dept) return toast.error("Selected department does not exist.")
+
+            const deptManager = normalizeManagerKey(dept.transactionManager || "REGISTRAR", "REGISTRAR")
+            if (deptManager !== manager) {
+                return toast.error(
+                    `Selected department belongs to ${prettyManager(deptManager)}. Please pick a matching manager.`,
+                )
+            }
+
+            payload.departmentId = cDepartmentId
+            payload.windowId = cWindowId
+            payload.transactionManager = manager
+        } else {
+            payload.departmentId = null
+            payload.windowId = null
+            payload.transactionManager = null
         }
 
         setSaving(true)
         try {
-            const payload: any = {
-                name,
-                email,
-                password,
-                role: cRole,
-            }
-
-            if (cRole === "STAFF") {
-                payload.departmentId = cDepartmentId
-                payload.windowId = cWindowId
-            }
-
             await adminApi.createStaff(payload)
             toast.success("Account created.")
             setCreateOpen(false)
@@ -296,11 +376,30 @@ export default function AdminAccountsPage() {
         }
 
         if (eRole === "STAFF") {
+            const manager = normalizeManagerKey(
+                eTransactionManager || inferManagerFromDepartment(eDepartmentId) || "REGISTRAR",
+                "REGISTRAR",
+            )
+
+            if (eDepartmentId) {
+                const dept = deptById.get(eDepartmentId)
+                if (!dept) return toast.error("Selected department does not exist.")
+
+                const deptManager = normalizeManagerKey(dept.transactionManager || "REGISTRAR", "REGISTRAR")
+                if (deptManager !== manager) {
+                    return toast.error(
+                        `Selected department belongs to ${prettyManager(deptManager)}. Please pick a matching manager.`,
+                    )
+                }
+            }
+
             payload.departmentId = eDepartmentId || null
             payload.windowId = eWindowId || null
+            payload.transactionManager = manager
         } else {
             payload.departmentId = null
             payload.windowId = null
+            payload.transactionManager = null
         }
 
         setSaving(true)
@@ -377,7 +476,6 @@ export default function AdminAccountsPage() {
 
     return (
         <DashboardLayout title="Accounts" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
-            {/* ✅ Responsiveness fix: define grid columns + allow shrink */}
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 <Card className="min-w-0">
                     <CardHeader className="gap-2">
@@ -385,12 +483,11 @@ export default function AdminAccountsPage() {
                             <div className="min-w-0">
                                 <CardTitle>Account Management</CardTitle>
                                 <CardDescription>
-                                    Create users, update roles, reset passwords, assign departments/windows, and disable
-                                    or delete accounts.
+                                    Create users, update roles, reset passwords, assign manager-aligned departments/windows,
+                                    and disable or delete accounts.
                                 </CardDescription>
                             </div>
 
-                            {/* ✅ XS stack buttons; desktop unchanged */}
                             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                 <Button
                                     variant="outline"
@@ -467,7 +564,6 @@ export default function AdminAccountsPage() {
                                         <Skeleton className="h-10 w-full" />
                                     </div>
                                 ) : (
-                                    // ✅ Prevent page overflow if table becomes wider than viewport
                                     <div className="rounded-lg border overflow-x-auto">
                                         <Table>
                                             <TableHeader>
@@ -475,6 +571,7 @@ export default function AdminAccountsPage() {
                                                     <TableHead>Name</TableHead>
                                                     <TableHead className="hidden md:table-cell">Email</TableHead>
                                                     <TableHead>Role</TableHead>
+                                                    <TableHead className="hidden xl:table-cell">Manager</TableHead>
                                                     <TableHead className="hidden lg:table-cell">Department</TableHead>
                                                     <TableHead className="hidden lg:table-cell">Window</TableHead>
                                                     <TableHead className="text-right">Status</TableHead>
@@ -497,6 +594,16 @@ export default function AdminAccountsPage() {
                                                             ? winById.get(u.assignedWindow)!.name
                                                             : "—"
 
+                                                    const managerKey =
+                                                        role === "STAFF"
+                                                            ? normalizeManagerKey(
+                                                                u.assignedTransactionManager ||
+                                                                inferManagerFromDepartment(u.assignedDepartment) ||
+                                                                "REGISTRAR",
+                                                                "REGISTRAR",
+                                                            )
+                                                            : ""
+
                                                     return (
                                                         <TableRow key={id}>
                                                             <TableCell className="font-medium">
@@ -505,6 +612,11 @@ export default function AdminAccountsPage() {
                                                                     <span className="truncate text-xs text-muted-foreground md:hidden">
                                                                         {u.email}
                                                                     </span>
+                                                                    {role === "STAFF" ? (
+                                                                        <span className="truncate text-xs text-muted-foreground xl:hidden">
+                                                                            {prettyManager(managerKey)}
+                                                                        </span>
+                                                                    ) : null}
                                                                 </div>
                                                             </TableCell>
 
@@ -513,6 +625,14 @@ export default function AdminAccountsPage() {
                                                             </TableCell>
 
                                                             <TableCell>{roleBadge(role)}</TableCell>
+
+                                                            <TableCell className="hidden xl:table-cell">
+                                                                {role === "STAFF" ? (
+                                                                    <Badge variant="outline">{prettyManager(managerKey)}</Badge>
+                                                                ) : (
+                                                                    <span className="text-muted-foreground">—</span>
+                                                                )}
+                                                            </TableCell>
 
                                                             <TableCell className="hidden lg:table-cell">
                                                                 <span className="text-muted-foreground">{deptName}</span>
@@ -575,7 +695,7 @@ export default function AdminAccountsPage() {
 
                                                 {filtered.length === 0 ? (
                                                     <TableRow>
-                                                        <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
+                                                        <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
                                                             No accounts match your filters.
                                                         </TableCell>
                                                     </TableRow>
@@ -590,7 +710,7 @@ export default function AdminAccountsPage() {
                 </Card>
             </div>
 
-            {/* Create dialog (mobile: shorter + scroll; desktop unchanged) */}
+            {/* Create dialog */}
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
                 <DialogContent className="sm:max-w-lg flex max-h-[85vh] flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
                     <DialogHeader>
@@ -634,7 +754,19 @@ export default function AdminAccountsPage() {
 
                         <div className="grid gap-2">
                             <Label>Role</Label>
-                            <Select value={cRole} onValueChange={(v) => setCRole(v as AccountRole)}>
+                            <Select
+                                value={cRole}
+                                onValueChange={(v) => {
+                                    const next = v as AccountRole
+                                    setCRole(next)
+                                    if (next === "ADMIN") {
+                                        setCDepartmentId("")
+                                        setCWindowId("")
+                                    } else if (!cTransactionManager) {
+                                        setCTransactionManager("REGISTRAR")
+                                    }
+                                }}
+                            >
                                 <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select role" />
                                 </SelectTrigger>
@@ -646,6 +778,41 @@ export default function AdminAccountsPage() {
                         </div>
 
                         <div className="grid gap-2">
+                            <Label>Transaction manager</Label>
+                            <Select
+                                value={cTransactionManager}
+                                onValueChange={(v) => {
+                                    const nextManager = normalizeManagerKey(v, "REGISTRAR")
+                                    setCTransactionManager(nextManager)
+
+                                    if (cDepartmentId) {
+                                        const dept = deptById.get(cDepartmentId)
+                                        const deptManager = normalizeManagerKey(dept?.transactionManager || "REGISTRAR", "REGISTRAR")
+                                        if (deptManager !== nextManager) {
+                                            setCDepartmentId("")
+                                            setCWindowId("")
+                                        }
+                                    }
+                                }}
+                                disabled={cRole === "ADMIN"}
+                            >
+                                <SelectTrigger className="w-full min-w-0">
+                                    <SelectValue placeholder="Select manager" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {managerOptions.map((m) => (
+                                        <SelectItem key={`c-manager-${m}`} value={m}>
+                                            {prettyManager(m)}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Departments are limited to the selected manager.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
                             <Label>Department</Label>
                             <Select
                                 value={cDepartmentId || "none"}
@@ -653,6 +820,12 @@ export default function AdminAccountsPage() {
                                     const next = v === "none" ? "" : v
                                     setCDepartmentId(next)
                                     setCWindowId("")
+
+                                    if (next) {
+                                        const dept = deptById.get(next)
+                                        const deptManager = normalizeManagerKey(dept?.transactionManager || "REGISTRAR", "REGISTRAR")
+                                        setCTransactionManager(deptManager)
+                                    }
                                 }}
                                 disabled={cRole === "ADMIN"}
                             >
@@ -661,7 +834,7 @@ export default function AdminAccountsPage() {
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">Unassigned</SelectItem>
-                                    {enabledDepartments.map((d) => (
+                                    {departmentsForManager(cTransactionManager).map((d) => (
                                         <SelectItem key={d._id} value={d._id}>
                                             {d.name}
                                         </SelectItem>
@@ -696,7 +869,6 @@ export default function AdminAccountsPage() {
                         </div>
                     </div>
 
-                    {/* ✅ FIX: no "w-full + mr-2" overflow on mobile */}
                     <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
                         <Button
                             type="button"
@@ -743,7 +915,19 @@ export default function AdminAccountsPage() {
 
                         <div className="grid gap-2">
                             <Label>Role</Label>
-                            <Select value={eRole} onValueChange={(v) => setERole(v as AccountRole)}>
+                            <Select
+                                value={eRole}
+                                onValueChange={(v) => {
+                                    const next = v as AccountRole
+                                    setERole(next)
+                                    if (next === "ADMIN") {
+                                        setEDepartmentId("")
+                                        setEWindowId("")
+                                    } else if (!eTransactionManager) {
+                                        setETransactionManager("REGISTRAR")
+                                    }
+                                }}
+                            >
                                 <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select role" />
                                 </SelectTrigger>
@@ -763,6 +947,41 @@ export default function AdminAccountsPage() {
                         </div>
 
                         <div className="grid gap-2">
+                            <Label>Transaction manager</Label>
+                            <Select
+                                value={eTransactionManager}
+                                onValueChange={(v) => {
+                                    const nextManager = normalizeManagerKey(v, "REGISTRAR")
+                                    setETransactionManager(nextManager)
+
+                                    if (eDepartmentId) {
+                                        const dept = deptById.get(eDepartmentId)
+                                        const deptManager = normalizeManagerKey(dept?.transactionManager || "REGISTRAR", "REGISTRAR")
+                                        if (deptManager !== nextManager) {
+                                            setEDepartmentId("")
+                                            setEWindowId("")
+                                        }
+                                    }
+                                }}
+                                disabled={eRole === "ADMIN"}
+                            >
+                                <SelectTrigger className="w-full min-w-0">
+                                    <SelectValue placeholder="Select manager" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {managerOptions.map((m) => (
+                                        <SelectItem key={`e-manager-${m}`} value={m}>
+                                            {prettyManager(m)}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Departments are limited to the selected manager.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
                             <Label>Department</Label>
                             <Select
                                 value={eDepartmentId || "none"}
@@ -770,6 +989,12 @@ export default function AdminAccountsPage() {
                                     const next = v === "none" ? "" : v
                                     setEDepartmentId(next)
                                     setEWindowId("")
+
+                                    if (next) {
+                                        const dept = deptById.get(next)
+                                        const deptManager = normalizeManagerKey(dept?.transactionManager || "REGISTRAR", "REGISTRAR")
+                                        setETransactionManager(deptManager)
+                                    }
                                 }}
                                 disabled={eRole === "ADMIN"}
                             >
@@ -778,7 +1003,7 @@ export default function AdminAccountsPage() {
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="none">Unassigned</SelectItem>
-                                    {enabledDepartments.map((d) => (
+                                    {departmentsForManager(eTransactionManager).map((d) => (
                                         <SelectItem key={d._id} value={d._id}>
                                             {d.name}
                                         </SelectItem>
