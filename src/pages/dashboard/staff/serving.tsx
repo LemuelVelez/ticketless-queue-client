@@ -74,11 +74,9 @@ export default function StaffServingPage() {
 
     const [autoRefresh, setAutoRefresh] = React.useState(true)
 
-    // ✅ Presentation mode (full screen overlay + bigger number)
+    // Presentation mode
     const [presentation, setPresentation] = React.useState(false)
     const presentationRequestedRef = React.useRef(false)
-
-    // ✅ Auto-present once if URL has ?present=1
     const autoPresentDoneRef = React.useRef(false)
 
     const assignedOk = Boolean(departmentId && windowInfo?.id)
@@ -130,10 +128,6 @@ export default function StaffServingPage() {
 
         try {
             const synth = window.speechSynthesis
-
-            // ✅ DO NOT cancel. This allows repeated clicks to queue multiple announcements.
-            // synth.cancel()
-
             try {
                 synth.resume()
             } catch {
@@ -215,21 +209,16 @@ export default function StaffServingPage() {
 
     async function enterPresentation() {
         setPresentation(true)
-
-        // Try to enter browser fullscreen (optional)
         try {
             presentationRequestedRef.current = true
             await document.documentElement.requestFullscreen()
         } catch {
-            // If blocked (permissions), still keep overlay presentation mode
             presentationRequestedRef.current = false
         }
     }
 
     async function exitPresentation() {
         setPresentation(false)
-
-        // Exit fullscreen if we are in it
         try {
             if (document.fullscreenElement) {
                 await document.exitFullscreen()
@@ -252,7 +241,7 @@ export default function StaffServingPage() {
         })()
     }, [refresh])
 
-    // ✅ Auto-enter Presentation Mode when opening /staff/now-serving?present=1
+    // Auto-enter Presentation Mode when opening /staff/now-serving?present=1
     React.useEffect(() => {
         if (autoPresentDoneRef.current) return
 
@@ -272,12 +261,10 @@ export default function StaffServingPage() {
         return () => window.clearInterval(t)
     }, [autoRefresh, refresh])
 
-    // Keep presentation state in sync if user presses ESC to exit fullscreen
     React.useEffect(() => {
         const onFsChange = () => {
             const isFs = typeof document !== "undefined" && !!document.fullscreenElement
             if (presentation && presentationRequestedRef.current && !isFs) {
-                // user exited fullscreen -> leave presentation mode too
                 presentationRequestedRef.current = false
                 setPresentation(false)
             }
@@ -291,15 +278,9 @@ export default function StaffServingPage() {
         setBusy(true)
         try {
             const res = await staffApi.callNext()
-
-            // show immediately (then refresh to sync)
             setCurrent(res.ticket)
-
             toast.success(`Called #${res.ticket.queueNumber}`)
-
-            // ✅ Voice announcement on each click
             announceCall(res.ticket.queueNumber)
-
             await refresh()
         } catch (e: any) {
             toast.error(e?.message ?? "No waiting tickets.")
@@ -340,14 +321,11 @@ export default function StaffServingPage() {
         }
     }
 
-    // ✅ Presentation overlay (no sidebar padding)
+    // Presentation overlay (distinct "billboard" style)
     if (presentation) {
-        const bigNumberClass = "text-7xl sm:text-8xl md:text-9xl font-semibold tracking-tight leading-none"
-
         return (
             <div className="fixed inset-0 z-50 bg-background">
                 <div className="flex h-full w-full flex-col">
-                    {/* Top bar */}
                     <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
@@ -359,12 +337,12 @@ export default function StaffServingPage() {
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
                             <div className="mt-2 text-sm text-muted-foreground">
-                                Auto refresh: {autoRefresh ? "On" : "Off"} • Updates every 5s
+                                Live board • Auto refresh {autoRefresh ? "On" : "Off"} (every 5s)
                             </div>
                         </div>
 
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 rounded-md border px-3 py-2">
                                 <Switch
                                     id="autoRefreshPm"
                                     checked={autoRefresh}
@@ -376,7 +354,7 @@ export default function StaffServingPage() {
                                 </Label>
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 rounded-md border px-3 py-2">
                                 <Switch
                                     id="voiceEnabledPm"
                                     checked={voiceEnabled}
@@ -388,21 +366,12 @@ export default function StaffServingPage() {
                                 </Label>
                             </div>
 
-                            <Button
-                                variant="outline"
-                                onClick={() => void refresh()}
-                                disabled={loading || busy}
-                                className="gap-2"
-                            >
+                            <Button variant="outline" onClick={() => void refresh()} disabled={loading || busy} className="gap-2">
                                 <RefreshCw className="h-4 w-4" />
                                 Refresh
                             </Button>
 
-                            <Button
-                                onClick={() => void onCallNext()}
-                                disabled={loading || busy || !assignedOk}
-                                className="gap-2"
-                            >
+                            <Button onClick={() => void onCallNext()} disabled={loading || busy || !assignedOk} className="gap-2">
                                 <Megaphone className="h-4 w-4" />
                                 Call next
                             </Button>
@@ -430,23 +399,21 @@ export default function StaffServingPage() {
                         </div>
                     </div>
 
-                    {/* Main content */}
-                    <div className="flex min-h-0 flex-1 flex-col gap-6 p-4 lg:flex-row lg:p-8">
-                        {/* Current */}
-                        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border bg-muted p-6">
+                    <div className="flex min-h-0 flex-1 flex-col gap-6 p-4 lg:p-8">
+                        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border bg-muted p-6 lg:p-10">
                             <div className="flex items-center justify-between">
-                                <div className="text-sm text-muted-foreground">NOW SERVING</div>
+                                <div className="text-sm tracking-wide text-muted-foreground">NOW SERVING</div>
                                 {current ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
                             </div>
 
-                            <div className="mt-4 flex flex-1 flex-col justify-center">
+                            <div className="mt-6 flex flex-1 flex-col items-center justify-center text-center">
                                 {current ? (
                                     <>
-                                        <div className={bigNumberClass}>#{current.queueNumber}</div>
-                                        <div className="mt-4 text-lg text-muted-foreground">
-                                            Student ID: {current.studentId ?? "—"}
+                                        <div className="text-[clamp(5rem,20vw,14rem)] font-semibold leading-none tracking-tight">
+                                            #{current.queueNumber}
                                         </div>
-                                        <div className="mt-1 text-sm text-muted-foreground">
+                                        <div className="mt-5 text-xl text-muted-foreground">Student ID: {current.studentId ?? "—"}</div>
+                                        <div className="mt-2 text-base text-muted-foreground">
                                             Called at: {fmtTime((current as any).calledAt)}
                                         </div>
                                         <div className="mt-1 text-sm text-muted-foreground">
@@ -454,9 +421,7 @@ export default function StaffServingPage() {
                                         </div>
                                     </>
                                 ) : (
-                                    <div className="text-center text-lg text-muted-foreground">
-                                        No ticket called for your window.
-                                    </div>
+                                    <div className="text-2xl text-muted-foreground">No ticket called for your window.</div>
                                 )}
                             </div>
 
@@ -486,38 +451,31 @@ export default function StaffServingPage() {
                             </div>
                         </div>
 
-                        {/* Up next */}
-                        <div className="w-full max-w-none rounded-2xl border p-6 lg:w-105">
-                            <div className="flex items-center justify-between">
-                                <div className="text-sm font-medium">UP NEXT</div>
-                                <Badge variant="secondary">{upNext.length}</Badge>
-                            </div>
-
-                            <div className="mt-4 grid gap-3">
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-base">Up next ticker</CardTitle>
+                                <CardDescription>Waiting tickets preview for announcement order.</CardDescription>
+                            </CardHeader>
+                            <CardContent>
                                 {upNext.length === 0 ? (
-                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                        No WAITING tickets.
-                                    </div>
+                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">No WAITING tickets.</div>
                                 ) : (
-                                    upNext.map((t) => (
-                                        <div key={t._id} className="flex items-center justify-between rounded-xl border p-4">
-                                            <div className="text-3xl font-semibold">#{t.queueNumber}</div>
-                                            <div className="text-right text-xs text-muted-foreground">
-                                                <div>Student: {t.studentId ?? "—"}</div>
-                                                <div>Waiting: {fmtTime((t as any).waitingSince)}</div>
-                                            </div>
-                                        </div>
-                                    ))
+                                    <div className="flex flex-wrap gap-2">
+                                        {upNext.map((t, idx) => (
+                                            <Badge key={t._id} variant={idx === 0 ? "default" : "secondary"} className="px-3 py-1 text-sm">
+                                                #{t.queueNumber}
+                                            </Badge>
+                                        ))}
+                                    </div>
                                 )}
-                            </div>
-                        </div>
+                            </CardContent>
+                        </Card>
                     </div>
                 </div>
             </div>
         )
     }
 
-    // ✅ Normal dashboard layout
     return (
         <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
@@ -527,10 +485,10 @@ export default function StaffServingPage() {
                             <div className="min-w-0">
                                 <CardTitle className="flex items-center gap-2">
                                     <TicketIcon className="h-5 w-5" />
-                                    Now Serving
+                                    Now Serving Board
                                 </CardTitle>
                                 <CardDescription>
-                                    Display view for your window — open with <b>?present=1</b> to auto-enter Presentation Mode.
+                                    Dedicated operator board for live calling. Use <strong>?present=1</strong> to auto-open presentation mode.
                                 </CardDescription>
                             </div>
 
@@ -584,7 +542,7 @@ export default function StaffServingPage() {
 
                         <Separator />
 
-                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex flex-wrap items-center gap-2 text-sm">
                                 <Badge variant="secondary">Dept: {departmentId ?? "—"}</Badge>
                                 <Badge variant="secondary">
@@ -594,8 +552,8 @@ export default function StaffServingPage() {
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-6">
-                                <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <div className="flex items-center gap-2 rounded-md border px-3 py-2">
                                     <Switch
                                         id="autoRefresh"
                                         checked={autoRefresh}
@@ -607,7 +565,7 @@ export default function StaffServingPage() {
                                     </Label>
                                 </div>
 
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 rounded-md border px-3 py-2">
                                     <Switch
                                         id="voiceEnabled"
                                         checked={voiceEnabled}
@@ -625,16 +583,16 @@ export default function StaffServingPage() {
                     <CardContent className="min-w-0">
                         {loading ? (
                             <div className="space-y-3">
-                                <Skeleton className="h-48 w-full" />
-                                <Skeleton className="h-40 w-full" />
+                                <Skeleton className="h-60 w-full" />
+                                <Skeleton className="h-36 w-full" />
                             </div>
                         ) : (
                             <div className="grid gap-6 lg:grid-cols-12">
-                                {/* Current */}
-                                <Card className="lg:col-span-7">
+                                {/* Main billboard */}
+                                <Card className="lg:col-span-8">
                                     <CardHeader>
-                                        <CardTitle>Current ticket</CardTitle>
-                                        <CardDescription>Showing the latest ticket called to your window.</CardDescription>
+                                        <CardTitle>Active ticket billboard</CardTitle>
+                                        <CardDescription>This panel is optimized for quick staff operation.</CardDescription>
                                     </CardHeader>
 
                                     <CardContent className="space-y-4">
@@ -642,12 +600,14 @@ export default function StaffServingPage() {
                                             <>
                                                 <div className="rounded-2xl border bg-muted p-6">
                                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                                        <div className="min-w-0">
-                                                            <div className="text-sm text-muted-foreground">NOW SERVING</div>
-                                                            <div className="mt-1 text-6xl font-semibold tracking-tight">
+                                                        <div>
+                                                            <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                                                Now serving
+                                                            </div>
+                                                            <div className="mt-2 text-7xl font-semibold tracking-tight">
                                                                 #{current.queueNumber}
                                                             </div>
-                                                            <div className="mt-2 text-sm text-muted-foreground">
+                                                            <div className="mt-3 text-sm text-muted-foreground">
                                                                 Student ID: {current.studentId ?? "—"}
                                                             </div>
                                                             <div className="text-sm text-muted-foreground">
@@ -695,11 +655,11 @@ export default function StaffServingPage() {
                                     </CardContent>
                                 </Card>
 
-                                {/* Up next */}
-                                <Card className="lg:col-span-5">
+                                {/* Operator side rail */}
+                                <Card className="lg:col-span-4">
                                     <CardHeader>
-                                        <CardTitle>Up next</CardTitle>
-                                        <CardDescription>Next waiting tickets (oldest first).</CardDescription>
+                                        <CardTitle>Operator rail</CardTitle>
+                                        <CardDescription>Quick view of next tickets in line.</CardDescription>
                                     </CardHeader>
 
                                     <CardContent>
@@ -709,12 +669,12 @@ export default function StaffServingPage() {
                                             </div>
                                         ) : (
                                             <div className="grid gap-3">
-                                                {upNext.map((t) => (
+                                                {upNext.map((t, idx) => (
                                                     <div key={t._id} className="flex items-center justify-between rounded-xl border p-4">
                                                         <div className="text-2xl font-semibold">#{t.queueNumber}</div>
                                                         <div className="text-right text-xs text-muted-foreground">
-                                                            <div>Student: {t.studentId ?? "—"}</div>
-                                                            <div>Waiting: {fmtTime((t as any).waitingSince)}</div>
+                                                            <div>{idx === 0 ? "Next to call" : "Waiting"}</div>
+                                                            <div>{fmtTime((t as any).waitingSince)}</div>
                                                         </div>
                                                     </div>
                                                 ))}

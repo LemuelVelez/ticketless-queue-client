@@ -1,4 +1,3 @@
- 
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
@@ -134,6 +133,12 @@ function getWindowDepartmentIds(win?: ServiceWindow | null): string[] {
 
 function departmentLabelList(ids: string[], deptById: Map<string, Department>) {
     return ids.map((id) => deptById.get(id)?.name || id)
+}
+
+function getDepartmentManagerById(departmentId: string, deptById: Map<string, Department>) {
+    const dep = deptById.get(departmentId)
+    const manager = normalizeManagerKey(dep?.transactionManager || "", "")
+    return manager || null
 }
 
 type DepartmentMultiSelectProps = {
@@ -571,34 +576,51 @@ export default function AdminWindowsPage() {
         const windowDepartmentIds = getWindowDepartmentIds(assignTargetWin)
         if (windowDepartmentIds.length === 0) return toast.error("Window must have at least one department.")
 
+        /**
+         * IMPORTANT FIX:
+         * Do NOT manually unassign all currently attached staff before assigning.
+         * Backend already enforces one STAFF per window and clears previous assignments.
+         * Manual loop was causing assignment failures in some data states.
+         */
+        const currentlyAssignedHere = (staffAssignedByWindow.get(assignTargetWin._id) ?? []).filter(
+            (s) => getStaffId(s) && getStaffId(s) !== aStaffId
+        )
+
+        // Keep picked staff departments only if they match target window manager, then merge with window departments.
+        const windowManagers = uniqueStringIds(
+            windowDepartmentIds
+                .map((depId) => getDepartmentManagerById(depId, deptById))
+                .filter((m): m is string => Boolean(m))
+        )
+
+        if (windowManagers.length > 1) {
+            return toast.error("Window departments are inconsistent (different transaction managers).")
+        }
+
+        const targetManager = windowManagers[0] ?? null
+
+        const pickedDepartmentIds = getStaffDepartmentIds(picked)
+        const compatiblePickedDepartmentIds = targetManager
+            ? pickedDepartmentIds.filter((depId) => getDepartmentManagerById(depId, deptById) === targetManager)
+            : pickedDepartmentIds
+
+        const nextDepartmentIds = uniqueStringIds([
+            ...compatiblePickedDepartmentIds,
+            ...windowDepartmentIds,
+        ])
+
+        if (nextDepartmentIds.length === 0) {
+            return toast.error("Unable to resolve department assignment for selected staff.")
+        }
+
         setSaving(true)
         try {
             const movedFromWindowId = picked.assignedWindow || null
 
-            // Keep one staff on this window.
-            const currentlyAssignedHere = (staffAssignedByWindow.get(assignTargetWin._id) ?? []).filter(
-                (s) => getStaffId(s) && getStaffId(s) !== aStaffId
-            )
-
-            for (const staff of currentlyAssignedHere) {
-                const sid = getStaffId(staff)
-                if (!sid) continue
-                const keepDepartments = getStaffDepartmentIds(staff)
-                await adminApi.updateStaff(sid, {
-                    departmentIds: keepDepartments.length > 0 ? keepDepartments : windowDepartmentIds,
-                    windowId: null,
-                })
-            }
-
-            // Keep existing staff departments + include all departments bound to this window.
-            const nextDepartmentIds = uniqueStringIds([
-                ...getStaffDepartmentIds(picked),
-                ...windowDepartmentIds,
-            ])
-
             await adminApi.updateStaff(aStaffId, {
                 departmentIds: nextDepartmentIds,
                 windowId: assignTargetWin._id,
+                ...(targetManager ? { transactionManager: targetManager } : {}),
             })
 
             const movedText =

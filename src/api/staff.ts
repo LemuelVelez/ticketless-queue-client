@@ -5,7 +5,9 @@ export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
 
 export type ServiceWindow = {
     _id: string
-    department: string
+    id?: string
+    department?: string | null
+    departmentIds?: string[]
     name: string
     number: number
     enabled?: boolean
@@ -39,10 +41,26 @@ export type Ticket = {
     [key: string]: any
 }
 
+export type DepartmentAssignment = {
+    id: string
+    name?: string
+    code?: string | null
+    transactionManager?: string | null
+    enabled?: boolean
+}
+
 export type MyAssignmentResponse = {
     departmentId: string | null
+    departmentName?: string | null
+    assignedTransactionManager?: string | null
+
+    assignedDepartmentIds?: string[]
+    assignedDepartments?: DepartmentAssignment[]
+
     window: ServiceWindow | null
+
     handledDepartmentIds?: string[]
+    handledDepartments?: DepartmentAssignment[]
 }
 
 export type TicketResponse = { ticket: Ticket }
@@ -86,6 +104,118 @@ function toQuery(params?: Record<string, string | number | boolean | undefined |
     }
     const s = qs.toString()
     return s ? `?${s}` : ""
+}
+
+function toIdString(value: unknown): string {
+    if (value === null || value === undefined) return ""
+    if (typeof value === "string") return value.trim()
+
+    if (typeof value === "object") {
+        const maybeId = (value as any)?._id ?? (value as any)?.id
+        if (maybeId) return toIdString(maybeId)
+    }
+
+    return String(value).trim()
+}
+
+function uniqueIds(values: unknown[]) {
+    const seen = new Set<string>()
+    const out: string[] = []
+
+    for (const value of values) {
+        const id = toIdString(value)
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        out.push(id)
+    }
+
+    return out
+}
+
+function normalizeWindowPayload(windowRaw: any): ServiceWindow | null {
+    if (!windowRaw) return null
+
+    const id = toIdString(windowRaw?._id ?? windowRaw?.id)
+    if (!id) return null
+
+    const numberRaw =
+        typeof windowRaw?.number === "number" ? Number(windowRaw.number) : Number(windowRaw?.number ?? NaN)
+
+    const department = toIdString(windowRaw?.department)
+    const departmentIds = Array.isArray(windowRaw?.departmentIds)
+        ? uniqueIds(windowRaw.departmentIds)
+        : department
+            ? [department]
+            : undefined
+
+    return {
+        _id: id,
+        id,
+        department: department || null,
+        departmentIds,
+        name:
+            typeof windowRaw?.name === "string" && windowRaw.name.trim()
+                ? String(windowRaw.name)
+                : "Window",
+        number: Number.isFinite(numberRaw) ? numberRaw : 0,
+        enabled: windowRaw?.enabled !== false,
+        createdAt: typeof windowRaw?.createdAt === "string" ? windowRaw.createdAt : undefined,
+        updatedAt: typeof windowRaw?.updatedAt === "string" ? windowRaw.updatedAt : undefined,
+    }
+}
+
+function normalizeDepartmentList(raw: any): DepartmentAssignment[] | undefined {
+    if (!Array.isArray(raw)) return undefined
+
+    return raw
+        .map((d: any) => {
+            const id = toIdString(d?.id ?? d?._id)
+            if (!id) return null
+            return {
+                id,
+                name: typeof d?.name === "string" ? d.name : undefined,
+                code: typeof d?.code === "string" ? d.code : null,
+                transactionManager:
+                    typeof d?.transactionManager === "string" ? d.transactionManager : null,
+                enabled: d?.enabled !== false,
+            } satisfies DepartmentAssignment
+        })
+        .filter(Boolean) as DepartmentAssignment[]
+}
+
+function normalizeMyAssignmentPayload(payload: any): MyAssignmentResponse {
+    const normalizedAssignedDepartments = normalizeDepartmentList(payload?.assignedDepartments)
+    const normalizedHandledDepartments = normalizeDepartmentList(payload?.handledDepartments)
+
+    const assignedDepartmentIds = uniqueIds([
+        ...(Array.isArray(payload?.assignedDepartmentIds) ? payload.assignedDepartmentIds : []),
+        ...(normalizedAssignedDepartments ?? []).map((d) => d.id),
+    ])
+
+    const handledDepartmentIds = uniqueIds([
+        ...(Array.isArray(payload?.handledDepartmentIds) ? payload.handledDepartmentIds : []),
+        ...(normalizedHandledDepartments ?? []).map((d) => d.id),
+    ])
+
+    const explicitDepartmentId = toIdString(payload?.departmentId)
+    const departmentId = explicitDepartmentId || assignedDepartmentIds[0] || handledDepartmentIds[0] || null
+
+    return {
+        ...(payload || {}),
+        departmentId,
+        assignedDepartmentIds,
+        assignedDepartments: normalizedAssignedDepartments,
+        handledDepartmentIds,
+        handledDepartments: normalizedHandledDepartments,
+        window: normalizeWindowPayload(payload?.window),
+    }
+}
+
+function unwrapApiData<T>(value: T | { data: T }): T {
+    if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
+        return (value as { data: T }).data
+    }
+    return value as T
 }
 
 /** =========================
@@ -142,7 +272,10 @@ export type ReportsTimeseriesResponse = {
 }
 
 export const staffApi = {
-    myAssignment: () => api.get<MyAssignmentResponse>("/staff/me/assignment"),
+    myAssignment: () =>
+        api
+            .get<MyAssignmentResponse | { data: MyAssignmentResponse }>("/staff/me/assignment")
+            .then((res) => normalizeMyAssignmentPayload(unwrapApiData(res))),
 
     // ✅ Dedicated backend snapshot for staff presentation/monitor pages
     getDisplaySnapshot: () => api.get<StaffDisplaySnapshotResponse>("/staff/display/snapshot"),

@@ -65,6 +65,35 @@ function isSpeechSupported() {
     )
 }
 
+function EmptyStateCard({ message }: { message: string }) {
+    return (
+        <Card className="border-dashed">
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">{message}</CardContent>
+        </Card>
+    )
+}
+
+function TableShell({ children }: { children: React.ReactNode }) {
+    return (
+        <Card className="overflow-hidden">
+            <CardContent className="p-0">
+                <div className="overflow-x-auto">{children}</div>
+            </CardContent>
+        </Card>
+    )
+}
+
+function QueueStatCard({ label, value }: { label: string; value: number }) {
+    return (
+        <Card>
+            <CardContent className="flex items-center justify-between py-3">
+                <span className="text-sm text-muted-foreground">{label}</span>
+                <span className="text-lg font-semibold tabular-nums">{value}</span>
+            </CardContent>
+        </Card>
+    )
+}
+
 export default function StaffQueuePage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -82,6 +111,7 @@ export default function StaffQueuePage() {
     const [busy, setBusy] = React.useState(false)
 
     const [departmentId, setDepartmentId] = React.useState<string | null>(null)
+    const [departmentNames, setDepartmentNames] = React.useState<string[]>([])
     const [windowInfo, setWindowInfo] = React.useState<{ id: string; name: string; number: number } | null>(null)
 
     const [current, setCurrent] = React.useState<TicketType | null>(null)
@@ -94,6 +124,11 @@ export default function StaffQueuePage() {
     const [historyMine, setHistoryMine] = React.useState(false)
 
     const assignedOk = Boolean(departmentId && windowInfo?.id)
+
+    const departmentDisplay = React.useMemo(() => {
+        if (departmentNames.length) return departmentNames.join(", ")
+        return departmentId ?? "—"
+    }, [departmentId, departmentNames])
 
     // -------- Voice announcement (Web Speech API) --------
     const [voiceEnabled, setVoiceEnabled] = React.useState(true)
@@ -143,10 +178,6 @@ export default function StaffQueuePage() {
         try {
             const synth = window.speechSynthesis
 
-            // ✅ DO NOT cancel. This allows repeated clicks to queue multiple announcements.
-            // synth.cancel()
-
-            // Some browsers pause synthesis if tab changes
             try {
                 synth.resume()
             } catch {
@@ -207,10 +238,28 @@ export default function StaffQueuePage() {
         setLoading(true)
         try {
             const a = await staffApi.myAssignment()
-            setDepartmentId(a.departmentId ?? null)
+
+            const names = (a.assignedDepartments?.length ? a.assignedDepartments : a.handledDepartments ?? [])
+                .map((d) => String(d?.name ?? "").trim())
+                .filter(Boolean)
+
+            setDepartmentNames(names)
+
+            const firstAssignedDepartmentId: string | null = Array.isArray(a.assignedDepartmentIds)
+                ? a.assignedDepartmentIds[0] ?? null
+                : null
+
+            const firstHandledDepartmentId: string | null = Array.isArray(a.handledDepartmentIds)
+                ? a.handledDepartmentIds[0] ?? null
+                : null
+
+            const resolvedDepartmentId: string | null =
+                a.departmentId ?? firstAssignedDepartmentId ?? firstHandledDepartmentId ?? null
+
+            setDepartmentId(resolvedDepartmentId)
             setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
 
-            if (!a.departmentId || !a.window?._id) {
+            if (!resolvedDepartmentId || !a.window?._id) {
                 setCurrent(null)
                 setWaiting([])
                 setHold([])
@@ -251,7 +300,6 @@ export default function StaffQueuePage() {
             setCurrent(res.ticket)
             toast.success(`Called #${res.ticket.queueNumber}`)
 
-            // ✅ Voice announcement on each click
             announceCall(res.ticket.queueNumber)
 
             await refreshAll()
@@ -312,371 +360,376 @@ export default function StaffQueuePage() {
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 <Card className="min-w-0">
                     <CardHeader className="gap-2">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div className="min-w-0">
-                                <CardTitle className="flex items-center gap-2">
-                                    <Ticket className="h-5 w-5" />
-                                    Staff Queue
-                                </CardTitle>
-                                <CardDescription>Call next ticket, mark served, and manage HOLD/OUT tickets.</CardDescription>
-                            </div>
-
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                <Button
-                                    variant="outline"
-                                    onClick={() => void refreshAll()}
-                                    disabled={loading || busy}
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <RefreshCw className="h-4 w-4" />
-                                    Refresh
-                                </Button>
-
-                                <Button
-                                    onClick={() => void onCallNext()}
-                                    disabled={loading || busy || !assignedOk}
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <Megaphone className="h-4 w-4" />
-                                    Call next
-                                </Button>
-
-                                <Button
-                                    variant="outline"
-                                    onClick={() => onRecallVoice()}
-                                    disabled={
-                                        loading ||
-                                        busy ||
-                                        !assignedOk ||
-                                        !voiceEnabled ||
-                                        !voiceSupported ||
-                                        (!current?.queueNumber && !lastAnnouncedRef.current)
-                                    }
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <Volume2 className="h-4 w-4" />
-                                    Recall voice
-                                </Button>
-
-                                <div className="flex items-center gap-2 sm:pl-2">
-                                    <Switch
-                                        id="voiceEnabled"
-                                        checked={voiceEnabled}
-                                        onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
-                                        disabled={busy || !voiceSupported}
-                                    />
-                                    <Label htmlFor="voiceEnabled" className="text-sm">
-                                        Voice
-                                    </Label>
-                                </div>
-                            </div>
-                        </div>
-
-                        <Separator />
-
-                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                            <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <Badge variant="secondary">Dept: {departmentId ?? "—"}</Badge>
-                                <Badge variant="secondary">
-                                    Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
-                                </Badge>
-                                {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
-                                {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <Badge variant="secondary">Waiting: {waiting.length}</Badge>
-                                <Badge variant="secondary">Hold: {hold.length}</Badge>
-                                <Badge variant="secondary">Out: {out.length}</Badge>
-                                <Badge variant="secondary">History: {history.length}</Badge>
-                            </div>
-                        </div>
+                        <CardTitle className="flex items-center gap-2">
+                            <Ticket className="h-5 w-5" />
+                            Staff Queue Control Center
+                        </CardTitle>
+                        <CardDescription>
+                            Manage waiting line operations: call next, resolve current ticket, and process HOLD/OUT/History.
+                        </CardDescription>
                     </CardHeader>
 
                     <CardContent className="min-w-0">
                         {loading ? (
                             <div className="space-y-3">
-                                <Skeleton className="h-24 w-full" />
-                                <Skeleton className="h-40 w-full" />
+                                <Skeleton className="h-28 w-full" />
+                                <Skeleton className="h-56 w-full" />
+                                <Skeleton className="h-56 w-full" />
                             </div>
                         ) : (
-                            <div className="grid gap-6 lg:grid-cols-12">
-                                {/* Current Ticket */}
-                                <Card className="lg:col-span-5">
-                                    <CardHeader>
-                                        <CardTitle>Current called</CardTitle>
-                                        <CardDescription>Last ticket called for your window.</CardDescription>
-                                    </CardHeader>
+                            <div className="space-y-6">
+                                {/* Command + Snapshot row */}
+                                <div className="grid gap-4 xl:grid-cols-12">
+                                    <Card className="xl:col-span-8">
+                                        <CardHeader>
+                                            <CardTitle className="text-base">Queue Commands</CardTitle>
+                                            <CardDescription>Primary actions for your assigned window.</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="space-y-4">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <Badge variant="secondary" className="max-w-full whitespace-normal break-words">
+                                                    Departments: {departmentDisplay}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
+                                                </Badge>
+                                                {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                                                {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
+                                            </div>
 
-                                    <CardContent className="space-y-4">
-                                        {current ? (
-                                            <>
-                                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="flex h-16 w-16 items-center justify-center rounded-xl border bg-muted text-2xl font-semibold">
-                                                            {current.queueNumber}
-                                                        </div>
-                                                        <div className="min-w-0">
-                                                            <div className="flex items-center gap-2">
-                                                                <div className="truncate text-sm font-medium">
-                                                                    Ticket #{current.queueNumber}
+                                            <Separator />
+
+                                            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => void refreshAll()}
+                                                    disabled={loading || busy}
+                                                    className="w-full gap-2 sm:w-auto"
+                                                >
+                                                    <RefreshCw className="h-4 w-4" />
+                                                    Refresh data
+                                                </Button>
+
+                                                <Button
+                                                    onClick={() => void onCallNext()}
+                                                    disabled={loading || busy || !assignedOk}
+                                                    className="w-full gap-2 sm:w-auto"
+                                                >
+                                                    <Megaphone className="h-4 w-4" />
+                                                    Call next
+                                                </Button>
+
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => onRecallVoice()}
+                                                    disabled={
+                                                        loading ||
+                                                        busy ||
+                                                        !assignedOk ||
+                                                        !voiceEnabled ||
+                                                        !voiceSupported ||
+                                                        (!current?.queueNumber && !lastAnnouncedRef.current)
+                                                    }
+                                                    className="w-full gap-2 sm:w-auto"
+                                                >
+                                                    <Volume2 className="h-4 w-4" />
+                                                    Recall voice
+                                                </Button>
+
+                                                <div className="ml-0 flex items-center gap-2 rounded-md border px-3 py-2 sm:ml-auto">
+                                                    <Switch
+                                                        id="voiceEnabled"
+                                                        checked={voiceEnabled}
+                                                        onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
+                                                        disabled={busy || !voiceSupported}
+                                                    />
+                                                    <Label htmlFor="voiceEnabled" className="text-sm">
+                                                        Voice enabled
+                                                    </Label>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card className="xl:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle className="text-base">Queue Snapshot</CardTitle>
+                                            <CardDescription>Live counters for today.</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="grid grid-cols-2 gap-3">
+                                            <QueueStatCard label="Waiting" value={waiting.length} />
+                                            <QueueStatCard label="Hold" value={hold.length} />
+                                            <QueueStatCard label="Out" value={out.length} />
+                                            <QueueStatCard label="History" value={history.length} />
+                                        </CardContent>
+                                    </Card>
+                                </div>
+
+                                {/* Main queue work area */}
+                                <div className="grid gap-6 lg:grid-cols-12">
+                                    {/* Current Ticket */}
+                                    <Card className="lg:col-span-4">
+                                        <CardHeader>
+                                            <CardTitle>Current called</CardTitle>
+                                            <CardDescription>Ticket currently assigned to your window.</CardDescription>
+                                        </CardHeader>
+
+                                        <CardContent className="space-y-4">
+                                            {current ? (
+                                                <>
+                                                    <div className="rounded-xl border bg-muted/40 p-4">
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                                                                    Active ticket
                                                                 </div>
-                                                                {statusBadge(current.status)}
+                                                                <div className="mt-1 text-4xl font-semibold tracking-tight">
+                                                                    #{current.queueNumber}
+                                                                </div>
+                                                                <div className="mt-2 text-sm text-muted-foreground">
+                                                                    Student ID: {current.studentId ?? "—"}
+                                                                </div>
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    Called at: {fmtTime((current as any).calledAt)}
+                                                                </div>
                                                             </div>
-                                                            <div className="truncate text-xs text-muted-foreground">
-                                                                Student ID: {current.studentId ?? "—"}
-                                                            </div>
-                                                            <div className="truncate text-xs text-muted-foreground">
-                                                                Called at: {fmtTime((current as any).calledAt)}
-                                                            </div>
+                                                            {statusBadge(current.status)}
+                                                        </div>
+
+                                                        <div className="mt-3 text-xs text-muted-foreground">
+                                                            Hold attempts: {current.holdAttempts ?? 0}
                                                         </div>
                                                     </div>
 
-                                                    <div className="text-xs text-muted-foreground">
-                                                        Hold attempts: {current.holdAttempts ?? 0}
+                                                    <div className="grid gap-2">
+                                                        <Button
+                                                            type="button"
+                                                            variant="secondary"
+                                                            onClick={() => void onHoldNoShow()}
+                                                            disabled={busy}
+                                                            className="w-full gap-2"
+                                                        >
+                                                            <PauseCircle className="h-4 w-4" />
+                                                            Hold / No-show
+                                                        </Button>
+
+                                                        <Button
+                                                            type="button"
+                                                            onClick={() => void onServed()}
+                                                            disabled={busy}
+                                                            className="w-full gap-2"
+                                                        >
+                                                            <CheckCircle2 className="h-4 w-4" />
+                                                            Mark served
+                                                        </Button>
                                                     </div>
+                                                </>
+                                            ) : (
+                                                <EmptyStateCard message="No ticket is currently called for your window." />
+                                            )}
+                                        </CardContent>
+                                    </Card>
+
+                                    {/* Waiting List */}
+                                    <Card className="lg:col-span-8">
+                                        <CardHeader>
+                                            <CardTitle className="flex items-center gap-2">
+                                                <ListOrdered className="h-5 w-5" />
+                                                Waiting Line
+                                            </CardTitle>
+                                            <CardDescription>Oldest tickets appear first and should be prioritized.</CardDescription>
+                                        </CardHeader>
+
+                                        <CardContent>
+                                            {waiting.length === 0 ? (
+                                                <EmptyStateCard message="No WAITING tickets." />
+                                            ) : (
+                                                <TableShell>
+                                                    <Table>
+                                                        <TableHeader>
+                                                            <TableRow>
+                                                                <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead>Student ID</TableHead>
+                                                                <TableHead className="hidden md:table-cell">Waiting since</TableHead>
+                                                            </TableRow>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {waiting.map((t, idx) => (
+                                                                <TableRow key={t._id} className={idx === 0 ? "bg-muted/50" : ""}>
+                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
+                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                    <TableCell className="hidden md:table-cell text-muted-foreground">
+                                                                        {fmtTime((t as any).waitingSince)}
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            ))}
+                                                        </TableBody>
+                                                    </Table>
+                                                </TableShell>
+                                            )}
+                                        </CardContent>
+                                    </Card>
+
+                                    {/* Hold List */}
+                                    <Card className="lg:col-span-6">
+                                        <CardHeader>
+                                            <CardTitle className="flex items-center gap-2">
+                                                <PauseOctagon className="h-5 w-5" />
+                                                HOLD Queue
+                                            </CardTitle>
+                                            <CardDescription>Return tickets to WAITING when they are ready.</CardDescription>
+                                        </CardHeader>
+
+                                        <CardContent>
+                                            {hold.length === 0 ? (
+                                                <EmptyStateCard message="No HOLD tickets." />
+                                            ) : (
+                                                <TableShell>
+                                                    <Table>
+                                                        <TableHeader>
+                                                            <TableRow>
+                                                                <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead>Student ID</TableHead>
+                                                                <TableHead className="w-28">Attempts</TableHead>
+                                                                <TableHead className="hidden md:table-cell">Updated</TableHead>
+                                                                <TableHead className="w-32 text-right">Action</TableHead>
+                                                            </TableRow>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {hold.map((t) => (
+                                                                <TableRow key={t._id}>
+                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
+                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                    <TableCell>{t.holdAttempts ?? 0}</TableCell>
+                                                                    <TableCell className="hidden md:table-cell text-muted-foreground">
+                                                                        {fmtTime((t as any).updatedAt)}
+                                                                    </TableCell>
+                                                                    <TableCell className="text-right">
+                                                                        <Button
+                                                                            type="button"
+                                                                            variant="outline"
+                                                                            size="sm"
+                                                                            className="gap-2"
+                                                                            disabled={busy}
+                                                                            onClick={() => void onReturnFromHold(t._id)}
+                                                                        >
+                                                                            <Undo2 className="h-4 w-4" />
+                                                                            Return
+                                                                        </Button>
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            ))}
+                                                        </TableBody>
+                                                    </Table>
+                                                </TableShell>
+                                            )}
+                                        </CardContent>
+                                    </Card>
+
+                                    {/* OUT List */}
+                                    <Card className="lg:col-span-6">
+                                        <CardHeader>
+                                            <CardTitle className="flex items-center gap-2">
+                                                <XCircle className="h-5 w-5" />
+                                                OUT Queue
+                                            </CardTitle>
+                                            <CardDescription>Tickets that reached maximum HOLD attempts.</CardDescription>
+                                        </CardHeader>
+
+                                        <CardContent>
+                                            {out.length === 0 ? (
+                                                <EmptyStateCard message="No OUT tickets." />
+                                            ) : (
+                                                <TableShell>
+                                                    <Table>
+                                                        <TableHeader>
+                                                            <TableRow>
+                                                                <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead>Student ID</TableHead>
+                                                                <TableHead className="w-28">Attempts</TableHead>
+                                                                <TableHead className="hidden md:table-cell">Out at</TableHead>
+                                                            </TableRow>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {out.map((t) => (
+                                                                <TableRow key={t._id}>
+                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
+                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                    <TableCell>{t.holdAttempts ?? 0}</TableCell>
+                                                                    <TableCell className="hidden md:table-cell text-muted-foreground">
+                                                                        {fmtTime((t as any).outAt)}
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            ))}
+                                                        </TableBody>
+                                                    </Table>
+                                                </TableShell>
+                                            )}
+                                        </CardContent>
+                                    </Card>
+
+                                    {/* History */}
+                                    <Card className="lg:col-span-12">
+                                        <CardHeader className="gap-2">
+                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                <div>
+                                                    <CardTitle className="flex items-center gap-2">
+                                                        <History className="h-5 w-5" />
+                                                        Ticket History
+                                                    </CardTitle>
+                                                    <CardDescription>Recent CALLED / SERVED / OUT tickets for today.</CardDescription>
                                                 </div>
 
-                                                <Separator />
-
-                                                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                                    <Button
-                                                        type="button"
-                                                        variant="secondary"
-                                                        onClick={() => void onHoldNoShow()}
-                                                        disabled={busy}
-                                                        className="w-full gap-2 sm:w-auto"
-                                                    >
-                                                        <PauseCircle className="h-4 w-4" />
-                                                        Hold / No-show
-                                                    </Button>
-
-                                                    <Button
-                                                        type="button"
-                                                        onClick={() => void onServed()}
-                                                        disabled={busy}
-                                                        className="w-full gap-2 sm:w-auto"
-                                                    >
-                                                        <CheckCircle2 className="h-4 w-4" />
-                                                        Mark served
-                                                    </Button>
+                                                <div className="flex items-center gap-2 rounded-md border px-3 py-2">
+                                                    <Switch
+                                                        id="historyMine"
+                                                        checked={historyMine}
+                                                        onCheckedChange={(v) => setHistoryMine(Boolean(v))}
+                                                        disabled={!assignedOk || busy}
+                                                    />
+                                                    <Label htmlFor="historyMine" className="text-sm">
+                                                        Mine only
+                                                    </Label>
                                                 </div>
-                                            </>
-                                        ) : (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                                No ticket is currently called for your window.
                                             </div>
-                                        )}
-                                    </CardContent>
-                                </Card>
+                                        </CardHeader>
 
-                                {/* Waiting List */}
-                                <Card className="lg:col-span-7">
-                                    <CardHeader>
-                                        <CardTitle className="flex items-center gap-2">
-                                            <ListOrdered className="h-5 w-5" />
-                                            Waiting
-                                        </CardTitle>
-                                        <CardDescription>Oldest tickets are served first.</CardDescription>
-                                    </CardHeader>
-
-                                    <CardContent>
-                                        {waiting.length === 0 ? (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                                No WAITING tickets.
-                                            </div>
-                                        ) : (
-                                            <div className="rounded-lg border overflow-x-auto">
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow>
-                                                            <TableHead className="w-24">Queue</TableHead>
-                                                            <TableHead>Student ID</TableHead>
-                                                            <TableHead className="hidden md:table-cell">Waiting since</TableHead>
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                        {waiting.map((t, idx) => (
-                                                            <TableRow key={t._id} className={idx === 0 ? "bg-muted/50" : ""}>
-                                                                <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
-                                                                <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                    {fmtTime((t as any).waitingSince)}
-                                                                </TableCell>
+                                        <CardContent>
+                                            {history.length === 0 ? (
+                                                <EmptyStateCard message="No history yet." />
+                                            ) : (
+                                                <TableShell>
+                                                    <Table>
+                                                        <TableHeader>
+                                                            <TableRow>
+                                                                <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead className="w-28">Status</TableHead>
+                                                                <TableHead className="w-28">Window</TableHead>
+                                                                <TableHead>Student ID</TableHead>
+                                                                <TableHead className="hidden md:table-cell">When</TableHead>
                                                             </TableRow>
-                                                        ))}
-                                                    </TableBody>
-                                                </Table>
-                                            </div>
-                                        )}
-                                    </CardContent>
-                                </Card>
-
-                                {/* Hold List */}
-                                <Card className="lg:col-span-6">
-                                    <CardHeader>
-                                        <CardTitle className="flex items-center gap-2">
-                                            <PauseOctagon className="h-5 w-5" />
-                                            Hold
-                                        </CardTitle>
-                                        <CardDescription>Return a HOLD ticket back to WAITING.</CardDescription>
-                                    </CardHeader>
-
-                                    <CardContent>
-                                        {hold.length === 0 ? (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                                No HOLD tickets.
-                                            </div>
-                                        ) : (
-                                            <div className="rounded-lg border overflow-x-auto">
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow>
-                                                            <TableHead className="w-24">Queue</TableHead>
-                                                            <TableHead>Student ID</TableHead>
-                                                            <TableHead className="w-28">Attempts</TableHead>
-                                                            <TableHead className="hidden md:table-cell">Updated</TableHead>
-                                                            <TableHead className="w-32 text-right">Action</TableHead>
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                        {hold.map((t) => (
-                                                            <TableRow key={t._id}>
-                                                                <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
-                                                                <TableCell>{t.holdAttempts ?? 0}</TableCell>
-                                                                <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                    {fmtTime((t as any).updatedAt)}
-                                                                </TableCell>
-                                                                <TableCell className="text-right">
-                                                                    <Button
-                                                                        type="button"
-                                                                        variant="outline"
-                                                                        size="sm"
-                                                                        className="gap-2"
-                                                                        disabled={busy}
-                                                                        onClick={() => void onReturnFromHold(t._id)}
-                                                                    >
-                                                                        <Undo2 className="h-4 w-4" />
-                                                                        Return
-                                                                    </Button>
-                                                                </TableCell>
-                                                            </TableRow>
-                                                        ))}
-                                                    </TableBody>
-                                                </Table>
-                                            </div>
-                                        )}
-                                    </CardContent>
-                                </Card>
-
-                                {/* OUT List */}
-                                <Card className="lg:col-span-6">
-                                    <CardHeader>
-                                        <CardTitle className="flex items-center gap-2">
-                                            <XCircle className="h-5 w-5" />
-                                            Out
-                                        </CardTitle>
-                                        <CardDescription>Tickets that reached max hold attempts.</CardDescription>
-                                    </CardHeader>
-
-                                    <CardContent>
-                                        {out.length === 0 ? (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                                No OUT tickets.
-                                            </div>
-                                        ) : (
-                                            <div className="rounded-lg border overflow-x-auto">
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow>
-                                                            <TableHead className="w-24">Queue</TableHead>
-                                                            <TableHead>Student ID</TableHead>
-                                                            <TableHead className="w-28">Attempts</TableHead>
-                                                            <TableHead className="hidden md:table-cell">Out at</TableHead>
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                        {out.map((t) => (
-                                                            <TableRow key={t._id}>
-                                                                <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
-                                                                <TableCell>{t.holdAttempts ?? 0}</TableCell>
-                                                                <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                    {fmtTime((t as any).outAt)}
-                                                                </TableCell>
-                                                            </TableRow>
-                                                        ))}
-                                                    </TableBody>
-                                                </Table>
-                                            </div>
-                                        )}
-                                    </CardContent>
-                                </Card>
-
-                                {/* History */}
-                                <Card className="lg:col-span-12">
-                                    <CardHeader className="gap-2">
-                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                            <div>
-                                                <CardTitle className="flex items-center gap-2">
-                                                    <History className="h-5 w-5" />
-                                                    History
-                                                </CardTitle>
-                                                <CardDescription>Recent CALLED / SERVED / OUT tickets (today).</CardDescription>
-                                            </div>
-
-                                            <div className="flex items-center gap-2">
-                                                <Switch
-                                                    id="historyMine"
-                                                    checked={historyMine}
-                                                    onCheckedChange={(v) => setHistoryMine(Boolean(v))}
-                                                    disabled={!assignedOk || busy}
-                                                />
-                                                <Label htmlFor="historyMine" className="text-sm">
-                                                    Mine only
-                                                </Label>
-                                            </div>
-                                        </div>
-                                    </CardHeader>
-
-                                    <CardContent>
-                                        {history.length === 0 ? (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                                No history yet.
-                                            </div>
-                                        ) : (
-                                            <div className="rounded-lg border overflow-x-auto">
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow>
-                                                            <TableHead className="w-24">Queue</TableHead>
-                                                            <TableHead className="w-28">Status</TableHead>
-                                                            <TableHead className="w-28">Window</TableHead>
-                                                            <TableHead>Student ID</TableHead>
-                                                            <TableHead className="hidden md:table-cell">When</TableHead>
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                        {history.map((t) => (
-                                                            <TableRow key={t._id}>
-                                                                <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                <TableCell>{statusBadge(t.status)}</TableCell>
-                                                                <TableCell className="text-muted-foreground">
-                                                                    {t.windowNumber ? `#${t.windowNumber}` : "—"}
-                                                                </TableCell>
-                                                                <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
-                                                                <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                    {historyWhen(t)}
-                                                                </TableCell>
-                                                            </TableRow>
-                                                        ))}
-                                                    </TableBody>
-                                                </Table>
-                                            </div>
-                                        )}
-                                    </CardContent>
-                                </Card>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {history.map((t) => (
+                                                                <TableRow key={t._id}>
+                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
+                                                                    <TableCell>{statusBadge(t.status)}</TableCell>
+                                                                    <TableCell className="text-muted-foreground">
+                                                                        {t.windowNumber ? `#${t.windowNumber}` : "—"}
+                                                                    </TableCell>
+                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                    <TableCell className="hidden md:table-cell text-muted-foreground">
+                                                                        {historyWhen(t)}
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            ))}
+                                                        </TableBody>
+                                                    </Table>
+                                                </TableShell>
+                                            )}
+                                        </CardContent>
+                                    </Card>
+                                </div>
                             </div>
                         )}
                     </CardContent>
