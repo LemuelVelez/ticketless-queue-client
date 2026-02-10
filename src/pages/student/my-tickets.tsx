@@ -13,12 +13,8 @@ import { api } from "@/lib/http"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 type DepartmentDisplayResponse = {
     dateKey: string
@@ -88,12 +84,10 @@ export default function StudentMyTicketsPage() {
 
     const [ticket, setTicket] = React.useState<TicketType | null>(null)
     const [busy, setBusy] = React.useState(false)
-    const [autoRefresh, setAutoRefresh] = React.useState(false)
 
     // Public display preview state (department display)
     const [displayLoading, setDisplayLoading] = React.useState(false)
     const [displayDateKey, setDisplayDateKey] = React.useState<string>("")
-    const [displayDepartmentName, setDisplayDepartmentName] = React.useState<string>("—")
     const [displayNowServing, setDisplayNowServing] = React.useState<DepartmentDisplayResponse["nowServing"]>(null)
     const [displayUpNext, setDisplayUpNext] = React.useState<DepartmentDisplayResponse["upNext"]>([])
 
@@ -121,37 +115,49 @@ export default function StudentMyTicketsPage() {
         }
     }, [preDeptId])
 
-    const findActive = React.useCallback(async () => {
-        const sid = studentId.trim()
-        if (!departmentId) return toast.error("Please select a department.")
-        if (!sid) return toast.error("Please enter your Student ID.")
+    const findActive = React.useCallback(
+        async (opts?: { silent?: boolean }) => {
+            const sid = studentId.trim()
+            const silent = Boolean(opts?.silent)
 
-        setBusy(true)
-        try {
-            const res = await studentApi.findActiveByStudent({
-                departmentId,
-                studentId: sid,
-            })
-
-            setTicket(res.ticket ?? null)
-
-            if (res.ticket) {
-                toast.success("Active ticket found.")
-            } else {
-                toast.message("No active ticket found for today.")
+            if (!departmentId || !sid) {
+                if (!silent) {
+                    toast.error("Unable to refresh ticket. Missing required ticket context.")
+                }
+                return
             }
-        } catch (e: any) {
-            toast.error(e?.message ?? "Failed to find active ticket.")
-        } finally {
-            setBusy(false)
-        }
-    }, [departmentId, studentId])
+
+            setBusy(true)
+            try {
+                const res = await studentApi.findActiveByStudent({
+                    departmentId,
+                    studentId: sid,
+                })
+
+                setTicket(res.ticket ?? null)
+
+                if (!silent) {
+                    if (res.ticket) {
+                        toast.success("Ticket refreshed.")
+                    } else {
+                        toast.message("No active ticket found for today.")
+                    }
+                }
+            } catch (e: any) {
+                if (!silent) {
+                    toast.error(e?.message ?? "Failed to refresh ticket.")
+                }
+            } finally {
+                setBusy(false)
+            }
+        },
+        [departmentId, studentId],
+    )
 
     const loadDepartmentDisplay = React.useCallback(
         async (opts?: { silent?: boolean }) => {
             if (!departmentId) {
                 setDisplayDateKey("")
-                setDisplayDepartmentName("—")
                 setDisplayNowServing(null)
                 setDisplayUpNext([])
                 return
@@ -166,9 +172,6 @@ export default function StudentMyTicketsPage() {
                 })
 
                 setDisplayDateKey(pickNonEmptyString(res?.dateKey))
-                setDisplayDepartmentName(
-                    pickNonEmptyString(res?.department?.name) || selectedDept?.name || "—",
-                )
                 setDisplayNowServing(res?.nowServing ?? null)
                 setDisplayUpNext(Array.isArray(res?.upNext) ? res.upNext : [])
             } catch (e: any) {
@@ -179,7 +182,7 @@ export default function StudentMyTicketsPage() {
                 if (!silent) setDisplayLoading(false)
             }
         },
-        [departmentId, selectedDept?.name],
+        [departmentId],
     )
 
     const loadTicketById = React.useCallback(async () => {
@@ -217,26 +220,10 @@ export default function StudentMyTicketsPage() {
     }, [loadDepartmentDisplay])
 
     React.useEffect(() => {
-        if (!autoRefresh) return
+        if (ticketId) return
         if (!departmentId || !studentId.trim()) return
-
-        const t = window.setInterval(() => {
-            void findActive()
-        }, 7000)
-
-        return () => window.clearInterval(t)
-    }, [autoRefresh, departmentId, studentId, findActive])
-
-    React.useEffect(() => {
-        if (!autoRefresh) return
-        if (!departmentId) return
-
-        const t = window.setInterval(() => {
-            void loadDepartmentDisplay({ silent: true })
-        }, 7000)
-
-        return () => window.clearInterval(t)
-    }, [autoRefresh, departmentId, loadDepartmentDisplay])
+        void findActive({ silent: true })
+    }, [ticketId, departmentId, studentId, findActive])
 
     const ticketDeptName = React.useMemo(() => {
         if (!ticket) return "—"
@@ -262,85 +249,11 @@ export default function StudentMyTicketsPage() {
                         My Tickets
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Find your current active queue ticket for today.
+                        View your queue status and the live department queue board preview.
                     </p>
                 </div>
 
                 <div className="grid gap-6">
-                    <Card className="min-w-0">
-                        <CardHeader>
-                            <CardTitle>Find Active Ticket</CardTitle>
-                            <CardDescription>Choose your department and Student ID.</CardDescription>
-                        </CardHeader>
-
-                        <CardContent className="space-y-5">
-                            {loadingDepts ? (
-                                <div className="space-y-3">
-                                    <Skeleton className="h-10 w-full" />
-                                    <Skeleton className="h-10 w-full" />
-                                </div>
-                            ) : (
-                                <>
-                                    <div className="grid gap-4 sm:grid-cols-2">
-                                        <div className="min-w-0 space-y-2">
-                                            <Label>Department</Label>
-                                            <Select value={departmentId} onValueChange={setDepartmentId} disabled={busy || !departments.length}>
-                                                <SelectTrigger className="w-full min-w-0">
-                                                    <SelectValue placeholder="Select department" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    {departments.map((d) => (
-                                                        <SelectItem key={d._id} value={d._id}>
-                                                            {d.name}
-                                                            {d.code ? ` (${d.code})` : ""}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-
-                                        <div className="min-w-0 space-y-2">
-                                            <Label htmlFor="studentId">Student ID</Label>
-                                            <Input
-                                                id="studentId"
-                                                value={studentId}
-                                                onChange={(e) => setStudentId(e.target.value)}
-                                                placeholder="e.g. TC-20-A-00001"
-                                                autoComplete="off"
-                                                inputMode="text"
-                                                disabled={busy}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <Switch
-                                                id="autoRefresh"
-                                                checked={autoRefresh}
-                                                onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
-                                                disabled={busy || displayLoading}
-                                            />
-                                            <Label htmlFor="autoRefresh" className="text-sm">
-                                                Auto refresh every 7s
-                                            </Label>
-                                        </div>
-
-                                        <div className="flex gap-2">
-                                            <Button variant="outline" onClick={() => void findActive()} disabled={busy}>
-                                                {busy ? "Please wait…" : "Find Ticket"}
-                                            </Button>
-                                            <Button onClick={() => void findActive()} disabled={busy} className="gap-2">
-                                                <RefreshCw className="h-4 w-4" />
-                                                Refresh
-                                            </Button>
-                                        </div>
-                                    </div>
-                                </>
-                            )}
-                        </CardContent>
-                    </Card>
-
                     <Card className="min-w-0">
                         <CardHeader>
                             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -358,7 +271,7 @@ export default function StudentMyTicketsPage() {
                                     <Button
                                         variant="outline"
                                         onClick={() => void loadDepartmentDisplay()}
-                                        disabled={displayLoading || !departmentId}
+                                        disabled={displayLoading || !departmentId || loadingDepts}
                                         className="w-full gap-2 sm:w-auto"
                                     >
                                         <RefreshCw className="h-4 w-4" />
@@ -369,108 +282,114 @@ export default function StudentMyTicketsPage() {
                         </CardHeader>
 
                         <CardContent className="space-y-4">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="secondary">
-                                    Department: {selectedDept?.name || displayDepartmentName || "Not selected"}
-                                </Badge>
-                                <Badge variant="outline">
-                                    Student ID: {studentId.trim() || "Not set"}
-                                </Badge>
-                                <Badge variant="outline">Date: {displayDateKey || "—"}</Badge>
-                            </div>
-
-                            <Button asChild className="w-full gap-2 sm:w-auto">
-                                <Link to={joinUrl}>
-                                    <PlusCircle className="h-4 w-4" />
-                                    Join Queue
-                                </Link>
-                            </Button>
-
-                            <Separator />
-
-                            {!departmentId ? (
-                                <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                    Select a department to view the queue display preview.
-                                </div>
-                            ) : displayLoading ? (
+                            {loadingDepts ? (
                                 <div className="space-y-3">
+                                    <Skeleton className="h-8 w-44" />
+                                    <Skeleton className="h-10 w-36" />
+                                    <Skeleton className="h-1 w-full" />
                                     <Skeleton className="h-20 w-full" />
                                     <Skeleton className="h-64 w-full" />
                                 </div>
                             ) : (
-                                <Card className="overflow-hidden">
-                                    <CardHeader>
-                                        <CardTitle>Public Queue Board Preview</CardTitle>
-                                        <CardDescription>
-                                            This mirrors the participant-facing queue board: now serving and up next.
-                                        </CardDescription>
-                                    </CardHeader>
+                                <>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Badge variant="outline">Date: {displayDateKey || "—"}</Badge>
+                                    </div>
 
-                                    <CardContent>
-                                        <div className="grid gap-6 lg:grid-cols-12">
-                                            {/* Now serving */}
-                                            <div className="lg:col-span-7">
-                                                <div className="rounded-2xl border bg-muted p-6">
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="text-sm uppercase tracking-widest text-muted-foreground">
-                                                            Now serving
-                                                        </div>
-                                                        {displayNowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
-                                                    </div>
+                                    <Button asChild className="w-full gap-2 sm:w-auto">
+                                        <Link to={joinUrl}>
+                                            <PlusCircle className="h-4 w-4" />
+                                            Join Queue
+                                        </Link>
+                                    </Button>
 
-                                                    <div className="mt-4">
-                                                        {displayNowServing ? (
-                                                            <>
-                                                                <div className="text-[clamp(4rem,12vw,9rem)] font-semibold leading-none tracking-tight">
-                                                                    #{displayNowServing.queueNumber}
-                                                                </div>
-                                                                <div className="mt-4 text-sm text-muted-foreground">
-                                                                    Window: {displayNowServing.windowNumber ? `#${displayNowServing.windowNumber}` : "—"}
-                                                                </div>
-                                                                <div className="text-sm text-muted-foreground">
-                                                                    Called at: {fmtTime(displayNowServing.calledAt)}
-                                                                </div>
-                                                            </>
-                                                        ) : (
-                                                            <div className="rounded-lg border bg-background p-6 text-sm text-muted-foreground">
-                                                                No ticket is currently being called.
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
+                                    <Separator />
 
-                                            {/* Up next */}
-                                            <div className="lg:col-span-5">
-                                                <div className="rounded-2xl border p-6">
-                                                    <div className="mb-4 flex items-center justify-between">
-                                                        <div className="text-sm uppercase tracking-widest text-muted-foreground">
-                                                            Up next
-                                                        </div>
-                                                        <Badge variant="secondary">{displayUpNext.length}</Badge>
-                                                    </div>
-
-                                                    {displayUpNext.length === 0 ? (
-                                                        <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                            No waiting tickets.
-                                                        </div>
-                                                    ) : (
-                                                        <div className="grid gap-3">
-                                                            {displayUpNext.slice(0, 8).map((t, idx) => (
-                                                                <div key={t.id} className="flex items-center justify-between rounded-xl border p-4">
-                                                                    <div className="text-2xl font-semibold">#{t.queueNumber}</div>
-                                                                    <Badge variant={idx === 0 ? "default" : "secondary"}>
-                                                                        {idx === 0 ? "Next" : "Waiting"}
-                                                                    </Badge>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
+                                    {!departmentId ? (
+                                        <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                            No department available to preview.
                                         </div>
-                                    </CardContent>
-                                </Card>
+                                    ) : displayLoading ? (
+                                        <div className="space-y-3">
+                                            <Skeleton className="h-20 w-full" />
+                                            <Skeleton className="h-64 w-full" />
+                                        </div>
+                                    ) : (
+                                        <Card className="overflow-hidden">
+                                            <CardHeader>
+                                                <CardTitle>Public Queue Board Preview</CardTitle>
+                                                <CardDescription>
+                                                    This mirrors the participant-facing queue board: now serving and up next.
+                                                </CardDescription>
+                                            </CardHeader>
+
+                                            <CardContent>
+                                                <div className="grid gap-6 lg:grid-cols-12">
+                                                    {/* Now serving */}
+                                                    <div className="lg:col-span-7">
+                                                        <div className="rounded-2xl border bg-muted p-6">
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">
+                                                                    Now serving
+                                                                </div>
+                                                                {displayNowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
+                                                            </div>
+
+                                                            <div className="mt-4">
+                                                                {displayNowServing ? (
+                                                                    <>
+                                                                        <div className="text-[clamp(4rem,12vw,9rem)] font-semibold leading-none tracking-tight">
+                                                                            #{displayNowServing.queueNumber}
+                                                                        </div>
+                                                                        <div className="mt-4 text-sm text-muted-foreground">
+                                                                            Window: {displayNowServing.windowNumber ? `#${displayNowServing.windowNumber}` : "—"}
+                                                                        </div>
+                                                                        <div className="text-sm text-muted-foreground">
+                                                                            Called at: {fmtTime(displayNowServing.calledAt)}
+                                                                        </div>
+                                                                    </>
+                                                                ) : (
+                                                                    <div className="rounded-lg border bg-background p-6 text-sm text-muted-foreground">
+                                                                        No ticket is currently being called.
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Up next */}
+                                                    <div className="lg:col-span-5">
+                                                        <div className="rounded-2xl border p-6">
+                                                            <div className="mb-4 flex items-center justify-between">
+                                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">
+                                                                    Up next
+                                                                </div>
+                                                                <Badge variant="secondary">{displayUpNext.length}</Badge>
+                                                            </div>
+
+                                                            {displayUpNext.length === 0 ? (
+                                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                                                    No waiting tickets.
+                                                                </div>
+                                                            ) : (
+                                                                <div className="grid gap-3">
+                                                                    {displayUpNext.slice(0, 8).map((t, idx) => (
+                                                                        <div key={t.id} className="flex items-center justify-between rounded-xl border p-4">
+                                                                            <div className="text-2xl font-semibold">#{t.queueNumber}</div>
+                                                                            <Badge variant={idx === 0 ? "default" : "secondary"}>
+                                                                                {idx === 0 ? "Next" : "Waiting"}
+                                                                            </Badge>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </CardContent>
+                                        </Card>
+                                    )}
+                                </>
                             )}
                         </CardContent>
                     </Card>
@@ -478,8 +397,22 @@ export default function StudentMyTicketsPage() {
                     {ticket ? (
                         <Card className="min-w-0">
                             <CardHeader>
-                                <CardTitle>Active Ticket</CardTitle>
-                                <CardDescription>Current ticket details for today.</CardDescription>
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="min-w-0">
+                                        <CardTitle>Active Ticket</CardTitle>
+                                        <CardDescription>Current ticket details for today.</CardDescription>
+                                    </div>
+
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => void findActive()}
+                                        disabled={busy || !departmentId || !studentId.trim()}
+                                        className="w-full gap-2 sm:w-auto"
+                                    >
+                                        <RefreshCw className="h-4 w-4" />
+                                        Refresh Ticket
+                                    </Button>
+                                </div>
                             </CardHeader>
 
                             <CardContent className="space-y-4">
@@ -513,9 +446,28 @@ export default function StudentMyTicketsPage() {
                         </Card>
                     ) : (
                         <Card>
-                            <CardContent className="pt-6">
+                            <CardHeader>
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="min-w-0">
+                                        <CardTitle>Active Ticket</CardTitle>
+                                        <CardDescription>Your active ticket will appear here once available.</CardDescription>
+                                    </div>
+
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => void findActive()}
+                                        disabled={busy || !departmentId || !studentId.trim()}
+                                        className="w-full gap-2 sm:w-auto"
+                                    >
+                                        <RefreshCw className="h-4 w-4" />
+                                        Refresh Ticket
+                                    </Button>
+                                </div>
+                            </CardHeader>
+
+                            <CardContent>
                                 <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                    No active ticket loaded yet. Use <span className="font-semibold">Find Ticket</span> above.
+                                    No active ticket loaded yet.
                                 </div>
                             </CardContent>
                         </Card>

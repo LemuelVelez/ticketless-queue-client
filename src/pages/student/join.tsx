@@ -31,19 +31,62 @@ function normalizeTransactionKey(value: unknown) {
     return raw.replace(/[_\s]+/g, "-")
 }
 
-function normalizeAvailableTransactions(list: ParticipantTransaction[]) {
+/**
+ * Accept multiple backend shapes:
+ * - { key, label }
+ * - { transactionKey, transactionLabel }
+ * - { code/name/title/purpose }
+ */
+function readTransactionKey(tx: any) {
+    const candidates = [
+        tx?.key,
+        tx?.transactionKey,
+        tx?.transaction_key,
+        tx?.code,
+        tx?.id,
+    ]
+
+    for (const c of candidates) {
+        const v = pickNonEmptyString(c)
+        if (v) return v
+    }
+    return ""
+}
+
+function readTransactionLabel(tx: any, fallbackKey: string) {
+    const candidates = [
+        tx?.label,
+        tx?.transactionLabel,
+        tx?.transaction_label,
+        tx?.name,
+        tx?.title,
+        tx?.purpose,
+    ]
+
+    for (const c of candidates) {
+        const v = pickNonEmptyString(c)
+        if (v) return v
+    }
+
+    return fallbackKey || "Unnamed transaction"
+}
+
+function normalizeAvailableTransactions(list: Array<ParticipantTransaction | Record<string, unknown>>) {
     const out: ParticipantTransaction[] = []
     const seen = new Set<string>()
 
-    for (const tx of list) {
-        const rawKey = pickNonEmptyString(tx?.key)
+    for (const raw of list) {
+        const tx = (raw ?? {}) as Record<string, unknown>
+        const rawKey = readTransactionKey(tx)
         const normalized = normalizeTransactionKey(rawKey)
+
         if (!rawKey || !normalized || seen.has(normalized)) continue
         seen.add(normalized)
 
         out.push({
-            ...tx,
+            ...(tx as any),
             key: rawKey,
+            label: readTransactionLabel(tx, rawKey),
         })
     }
 
@@ -57,7 +100,7 @@ function mapSelectionToAvailableKeys(
     const normalizedToExact = new Map<string, string>()
 
     for (const tx of availableTransactions) {
-        const rawKey = pickNonEmptyString(tx?.key)
+        const rawKey = readTransactionKey(tx)
         const normalized = normalizeTransactionKey(rawKey)
         if (!rawKey || !normalized || normalizedToExact.has(normalized)) continue
         normalizedToExact.set(normalized, rawKey)
@@ -130,6 +173,8 @@ export default function StudentJoinPage() {
 
     const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
     const [departmentId, setDepartmentId] = React.useState<string>("")
+    const [didManuallySelectDepartment, setDidManuallySelectDepartment] = React.useState(false)
+
     const [studentId, setStudentId] = React.useState<string>(preStudentId)
     const [phone, setPhone] = React.useState<string>("")
 
@@ -146,11 +191,6 @@ export default function StudentJoinPage() {
         () => departments.find((d) => d._id === departmentId) || null,
         [departments, departmentId],
     )
-
-    const publicDisplayUrl = React.useMemo(() => {
-        if (!departmentId) return ""
-        return `/display?departmentId=${encodeURIComponent(departmentId)}`
-    }, [departmentId])
 
     const myTicketsUrl = React.useMemo(() => {
         const q = new URLSearchParams()
@@ -169,6 +209,11 @@ export default function StudentJoinPage() {
         () => new Set(selectedForSubmit),
         [selectedForSubmit],
     )
+
+    const handleDepartmentChange = React.useCallback((value: string) => {
+        setDidManuallySelectDepartment(true)
+        setDepartmentId(value)
+    }, [])
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -195,9 +240,7 @@ export default function StudentJoinPage() {
                 })
 
                 const p = (res.participant ?? null) as any
-                const tx = normalizeAvailableTransactions(
-                    (res.availableTransactions ?? []).filter((x) => pickNonEmptyString(x?.key)),
-                )
+                const tx = normalizeAvailableTransactions((res.availableTransactions ?? []) as any[])
 
                 setParticipant(p)
                 setAvailableTransactions(tx)
@@ -238,7 +281,10 @@ export default function StudentJoinPage() {
             const deptIdFromTicket =
                 typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
 
-            if (deptIdFromTicket) setDepartmentId(deptIdFromTicket)
+            if (deptIdFromTicket) {
+                setDidManuallySelectDepartment(true)
+                setDepartmentId(deptIdFromTicket)
+            }
             if ((res.ticket as any)?.studentId) setStudentId(String((res.ticket as any).studentId))
             if ((res.ticket as any)?.phone) setPhone(String((res.ticket as any).phone))
 
@@ -265,13 +311,20 @@ export default function StudentJoinPage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-            if (has(prev)) return prev
+            // respect explicit query first
             if (has(preDeptId)) return preDeptId
+
+            // if user explicitly changed department, keep it as long as valid
+            if (didManuallySelectDepartment && has(prev)) return prev
+
+            // prefer participant's own department once session is known
             if (has(sessionDepartmentId)) return sessionDepartmentId
 
+            // otherwise keep previous valid or fallback to first
+            if (has(prev)) return prev
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId])
+    }, [departments, preDeptId, sessionDepartmentId, didManuallySelectDepartment])
 
     React.useEffect(() => {
         void loadTicketById()
@@ -413,7 +466,10 @@ export default function StudentJoinPage() {
                                 {loadingSession ? (
                                     <Skeleton className="h-5 w-40" />
                                 ) : participant ? (
-                                    <Badge variant="secondary">Profile synced</Badge>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Badge variant="secondary">Profile synced</Badge>
+                                        <Badge variant="outline">{availableTransactions.length} purpose(s) loaded</Badge>
+                                    </div>
                                 ) : (
                                     <Badge variant="outline">Guest mode</Badge>
                                 )}
@@ -432,7 +488,11 @@ export default function StudentJoinPage() {
                                     <div className="grid gap-4 sm:grid-cols-3">
                                         <div className="space-y-2 min-w-0">
                                             <Label>Department</Label>
-                                            <Select value={departmentId} onValueChange={setDepartmentId} disabled={busy || !departments.length}>
+                                            <Select
+                                                value={departmentId}
+                                                onValueChange={handleDepartmentChange}
+                                                disabled={busy || !departments.length}
+                                            >
                                                 <SelectTrigger className="w-full min-w-0">
                                                     <SelectValue placeholder="Select department" />
                                                 </SelectTrigger>
@@ -494,7 +554,7 @@ export default function StudentJoinPage() {
                                             availableTransactions.length ? (
                                                 <div className="grid gap-2 sm:grid-cols-2">
                                                     {availableTransactions.map((tx) => {
-                                                        const txKey = pickNonEmptyString(tx?.key)
+                                                        const txKey = readTransactionKey(tx)
                                                         if (!txKey) return null
 
                                                         const active = selectedTransactionSet.has(txKey)
@@ -515,14 +575,14 @@ export default function StudentJoinPage() {
                                                                 }
                                                                 disabled={busy}
                                                             >
-                                                                {tx.label}
+                                                                {readTransactionLabel(tx, txKey)}
                                                             </Button>
                                                         )
                                                     })}
                                                 </div>
                                             ) : (
                                                 <div className="text-sm text-muted-foreground">
-                                                    No transaction options are available for your account.
+                                                    No transaction options are available for your account in this department.
                                                 </div>
                                             )
                                         ) : (
@@ -591,11 +651,7 @@ export default function StudentJoinPage() {
                                     </div>
                                 </div>
 
-                                <div className="grid gap-2 sm:grid-cols-2">
-                                    <Button asChild variant="outline" className="w-full" disabled={!departmentId}>
-                                        <Link to={publicDisplayUrl}>Open Public Display</Link>
-                                    </Button>
-
+                                <div className="grid gap-2">
                                     <Button asChild variant="secondary" className="w-full">
                                         <Link to={myTicketsUrl}>Go to My Tickets</Link>
                                     </Button>

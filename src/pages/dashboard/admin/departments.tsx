@@ -73,6 +73,18 @@ type DefaultRegistrarTransaction = {
     sortOrder: number
 }
 
+type PurposeBulkDraft = {
+    id: string
+    category: string
+    key: string
+    label: string
+    scopes: TransactionScope[]
+    applyToAllDepartments: boolean
+    departmentIds: string[]
+    enabled: boolean
+    sortOrder: number
+}
+
 const DEFAULT_REGISTRAR_TRANSACTIONS: DefaultRegistrarTransaction[] = [
     // Internal
     { key: "correction-grade-entry", label: "Correction of Grade Entry", scopes: ["INTERNAL"], sortOrder: 1 },
@@ -267,6 +279,11 @@ export default function AdminDepartmentsPage() {
     const [editPurposeOpen, setEditPurposeOpen] = React.useState(false)
     const [deletePurposeOpen, setDeletePurposeOpen] = React.useState(false)
 
+    // dialog - bulk edit purposes
+    const [editAllPurposesOpen, setEditAllPurposesOpen] = React.useState(false)
+    const [editAllPurposeQ, setEditAllPurposeQ] = React.useState("")
+    const [editAllPurposeDrafts, setEditAllPurposeDrafts] = React.useState<PurposeBulkDraft[]>([])
+
     // selected
     const [selectedDept, setSelectedDept] = React.useState<Department | null>(null)
     const [selectedPurpose, setSelectedPurpose] = React.useState<TransactionPurpose | null>(null)
@@ -412,6 +429,101 @@ export default function AdminDepartmentsPage() {
         setCPurposeSortOrder(1000)
     }
 
+    function resetEditAllPurposesForm() {
+        setEditAllPurposeQ("")
+        setEditAllPurposeDrafts([])
+    }
+
+    function toPurposeDraft(p: TransactionPurpose): PurposeBulkDraft {
+        const scopes = uniqueScopes(p.scopes || [])
+        return {
+            id: p.id,
+            category: normalizeManagerKey(p.category || DEFAULT_MANAGER),
+            key: p.key ?? "",
+            label: p.label ?? "",
+            scopes: scopes.length ? scopes : ["INTERNAL", "EXTERNAL"],
+            applyToAllDepartments: (p.departmentIds || []).length === 0,
+            departmentIds: [...(p.departmentIds || [])],
+            enabled: isEnabledFlag(p.enabled),
+            sortOrder: Number.isFinite(Number(p.sortOrder)) ? Number(p.sortOrder) : 1000,
+        }
+    }
+
+    function openEditAllPurposesDialog() {
+        const drafts = [...(purposes || [])]
+            .sort((a, b) => {
+                const ae = isEnabledFlag(a.enabled)
+                const be = isEnabledFlag(b.enabled)
+                if (ae !== be) return ae ? -1 : 1
+
+                const am = normalizeManagerKey(a.category || DEFAULT_MANAGER)
+                const bm = normalizeManagerKey(b.category || DEFAULT_MANAGER)
+                if (am !== bm) return am.localeCompare(bm)
+
+                const so = (a.sortOrder ?? 1000) - (b.sortOrder ?? 1000)
+                if (so !== 0) return so
+
+                return (a.label ?? "").localeCompare(b.label ?? "")
+            })
+            .map((p) => toPurposeDraft(p))
+
+        setEditAllPurposeQ("")
+        setEditAllPurposeDrafts(drafts)
+        setEditAllPurposesOpen(true)
+    }
+
+    function patchEditAllPurposeDraft(id: string, patch: Partial<PurposeBulkDraft>) {
+        setEditAllPurposeDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)))
+    }
+
+    function validatePurposeDraft(draft: PurposeBulkDraft): string | null {
+        const key = String(draft.key || "").trim()
+        const label = String(draft.label || "").trim()
+        const scopes = uniqueScopes(draft.scopes || [])
+        const sortOrder = Number(draft.sortOrder)
+        const departmentIds = draft.applyToAllDepartments ? [] : uniqueStringIds(draft.departmentIds || [])
+
+        if (!key) return "Purpose key is required."
+        if (!label) return "Purpose label is required."
+        if (!scopes.length) return "Select at least one scope."
+        if (!draft.applyToAllDepartments && departmentIds.length === 0) {
+            return "Select at least one department or apply to all."
+        }
+        if (!Number.isFinite(sortOrder)) return "Sort order must be a valid number."
+
+        return null
+    }
+
+    function toggleEditAllPurposeScope(id: string, scope: TransactionScope, checked: boolean) {
+        setEditAllPurposeDrafts((prev) =>
+            prev.map((draft) => {
+                if (draft.id !== id) return draft
+
+                if (checked) {
+                    if (draft.scopes.includes(scope)) return draft
+                    return { ...draft, scopes: [...draft.scopes, scope] }
+                }
+
+                return { ...draft, scopes: draft.scopes.filter((s) => s !== scope) }
+            })
+        )
+    }
+
+    function toggleEditAllPurposeDepartment(id: string, deptId: string, checked: boolean) {
+        setEditAllPurposeDrafts((prev) =>
+            prev.map((draft) => {
+                if (draft.id !== id) return draft
+
+                if (checked) {
+                    if (draft.departmentIds.includes(deptId)) return draft
+                    return { ...draft, departmentIds: [...draft.departmentIds, deptId] }
+                }
+
+                return { ...draft, departmentIds: draft.departmentIds.filter((d) => d !== deptId) }
+            })
+        )
+    }
+
     const deptRows = React.useMemo(() => {
         const q = deptQ.trim().toLowerCase()
 
@@ -489,6 +601,37 @@ export default function AdminDepartmentsPage() {
                 return (a.label ?? "").localeCompare(b.label ?? "")
             })
     }, [purposes, purposeQ, purposeStatusTab, purposeManagerFilter, purposeScopeFilter, purposeDeptFilter, deptById])
+
+    const editAllPurposeRows = React.useMemo(() => {
+        const q = editAllPurposeQ.trim().toLowerCase()
+
+        return [...editAllPurposeDrafts]
+            .filter((d) => {
+                if (!q) return true
+
+                const deptNames = (d.departmentIds || [])
+                    .map((id) => deptById.get(id)?.name || id)
+                    .join(" ")
+                    .toLowerCase()
+
+                const hay = `${d.label} ${d.key} ${d.category} ${deptNames}`.toLowerCase()
+                return hay.includes(q)
+            })
+            .sort((a, b) => {
+                const ae = isEnabledFlag(a.enabled)
+                const be = isEnabledFlag(b.enabled)
+                if (ae !== be) return ae ? -1 : 1
+
+                const am = normalizeManagerKey(a.category || DEFAULT_MANAGER)
+                const bm = normalizeManagerKey(b.category || DEFAULT_MANAGER)
+                if (am !== bm) return am.localeCompare(bm)
+
+                const so = (a.sortOrder ?? 1000) - (b.sortOrder ?? 1000)
+                if (so !== 0) return so
+
+                return (a.label ?? "").localeCompare(b.label ?? "")
+            })
+    }, [editAllPurposeDrafts, editAllPurposeQ, deptById])
 
     function openEditDept(d: Department) {
         setSelectedDept(d)
@@ -730,6 +873,67 @@ export default function AdminDepartmentsPage() {
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed to update transaction purpose."
             toast.error(msg)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    async function handleSaveAllPurposes() {
+        if (!editAllPurposeDrafts.length) {
+            toast.error("No transaction purposes to save.")
+            return
+        }
+
+        for (const draft of editAllPurposeDrafts) {
+            const error = validatePurposeDraft(draft)
+            if (error) {
+                const label = draft.label?.trim() || draft.key?.trim() || draft.id
+                toast.error(`"${label}": ${error}`)
+                return
+            }
+        }
+
+        setSaving(true)
+        try {
+            let saved = 0
+            let failed = 0
+            let firstError = ""
+
+            for (const draft of editAllPurposeDrafts) {
+                const scopes = uniqueScopes(draft.scopes || [])
+                const departmentIds = draft.applyToAllDepartments ? [] : uniqueStringIds(draft.departmentIds || [])
+
+                try {
+                    await adminApi.updateTransactionPurpose(draft.id, {
+                        category: normalizeManagerKey(draft.category, DEFAULT_MANAGER),
+                        key: String(draft.key || "").trim(),
+                        label: String(draft.label || "").trim(),
+                        scopes,
+                        enabled: Boolean(draft.enabled),
+                        sortOrder: Number(draft.sortOrder),
+                        applyToAllDepartments: draft.applyToAllDepartments,
+                        departmentIds,
+                    })
+                    saved += 1
+                } catch (e) {
+                    failed += 1
+                    if (!firstError) firstError = e instanceof Error ? e.message : "Unknown error"
+                }
+            }
+
+            if (failed === 0) {
+                toast.success(`Saved ${saved} transaction purpose${saved === 1 ? "" : "s"}.`)
+                setEditAllPurposesOpen(false)
+                resetEditAllPurposesForm()
+                await fetchAll()
+                return
+            }
+
+            toast.error(
+                saved > 0
+                    ? `Saved ${saved} transaction purpose${saved === 1 ? "" : "s"}, but ${failed} failed.${firstError ? ` First error: ${firstError}` : ""}`
+                    : `Failed to save transaction purposes.${firstError ? ` ${firstError}` : ""}`
+            )
         } finally {
             setSaving(false)
         }
@@ -1109,6 +1313,16 @@ export default function AdminDepartmentsPage() {
                                         >
                                             <Plus className="h-4 w-4" />
                                             New purpose
+                                        </Button>
+
+                                        <Button
+                                            variant="outline"
+                                            onClick={openEditAllPurposesDialog}
+                                            disabled={loading || saving || purposes.length === 0}
+                                            className="w-full gap-2 sm:w-auto"
+                                        >
+                                            <ClipboardList className="h-4 w-4" />
+                                            Edit all transactions
                                         </Button>
 
                                         <Button
@@ -1676,6 +1890,263 @@ export default function AdminDepartmentsPage() {
 
                         <Button type="button" onClick={() => void handleCreatePurpose()} disabled={saving} className="w-full sm:w-auto">
                             {saving ? "Creating…" : "Create"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Edit All Purposes */}
+            <Dialog
+                open={editAllPurposesOpen}
+                onOpenChange={(open) => {
+                    setEditAllPurposesOpen(open)
+                    if (!open) resetEditAllPurposesForm()
+                }}
+            >
+                <DialogContent className="sm:max-w-5xl">
+                    <DialogHeader>
+                        <DialogTitle>Edit all transaction purposes</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="grid gap-4">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <Input
+                                value={editAllPurposeQ}
+                                onChange={(e) => setEditAllPurposeQ(e.target.value)}
+                                placeholder="Search in bulk editor…"
+                                className="w-full md:w-96"
+                            />
+                            <Badge variant="secondary">
+                                {editAllPurposeRows.length} of {editAllPurposeDrafts.length}
+                            </Badge>
+                        </div>
+
+                        <div className="max-h-[62vh] space-y-3 overflow-y-auto pr-1">
+                            {editAllPurposeRows.length === 0 ? (
+                                <div className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+                                    No transaction purposes match your search.
+                                </div>
+                            ) : (
+                                editAllPurposeRows.map((draft) => {
+                                    const title = draft.label.trim() || draft.key.trim() || "Untitled purpose"
+                                    return (
+                                        <div key={draft.id} className="rounded-lg border p-4">
+                                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <p className="truncate text-sm font-medium">{title}</p>
+                                                    <p className="truncate text-xs text-muted-foreground">
+                                                        {draft.key || "no-key"} · id {draft.id}
+                                                    </p>
+                                                </div>
+                                                {statusBadge(draft.enabled)}
+                                            </div>
+
+                                            <div className="grid gap-4">
+                                                <div className="grid gap-2 md:grid-cols-2 md:gap-4">
+                                                    <div className="grid gap-2">
+                                                        <Label htmlFor={`ea-purpose-category-${draft.id}`}>Manager category</Label>
+                                                        <Input
+                                                            id={`ea-purpose-category-${draft.id}`}
+                                                            value={draft.category}
+                                                            onChange={(e) =>
+                                                                patchEditAllPurposeDraft(draft.id, { category: e.target.value })
+                                                            }
+                                                            placeholder="e.g., REGISTRAR"
+                                                        />
+                                                    </div>
+
+                                                    <div className="grid gap-2">
+                                                        <Label htmlFor={`ea-purpose-key-${draft.id}`}>Key</Label>
+                                                        <Input
+                                                            id={`ea-purpose-key-${draft.id}`}
+                                                            value={draft.key}
+                                                            onChange={(e) =>
+                                                                patchEditAllPurposeDraft(draft.id, { key: e.target.value })
+                                                            }
+                                                            placeholder="e.g., issuance-tor"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid gap-2">
+                                                    <Label htmlFor={`ea-purpose-label-${draft.id}`}>Label</Label>
+                                                    <Input
+                                                        id={`ea-purpose-label-${draft.id}`}
+                                                        value={draft.label}
+                                                        onChange={(e) =>
+                                                            patchEditAllPurposeDraft(draft.id, { label: e.target.value })
+                                                        }
+                                                    />
+                                                </div>
+
+                                                <div className="grid gap-2 md:grid-cols-2 md:gap-4">
+                                                    <div className="grid gap-2">
+                                                        <Label>Scopes</Label>
+                                                        <div className="flex flex-wrap gap-4 rounded-lg border p-3">
+                                                            <div className="flex items-center gap-2">
+                                                                <Checkbox
+                                                                    id={`ea-purpose-scope-internal-${draft.id}`}
+                                                                    checked={draft.scopes.includes("INTERNAL")}
+                                                                    onCheckedChange={(checked) =>
+                                                                        toggleEditAllPurposeScope(
+                                                                            draft.id,
+                                                                            "INTERNAL",
+                                                                            checked === true
+                                                                        )
+                                                                    }
+                                                                />
+                                                                <Label
+                                                                    htmlFor={`ea-purpose-scope-internal-${draft.id}`}
+                                                                    className="cursor-pointer text-sm font-normal"
+                                                                >
+                                                                    Internal
+                                                                </Label>
+                                                            </div>
+
+                                                            <div className="flex items-center gap-2">
+                                                                <Checkbox
+                                                                    id={`ea-purpose-scope-external-${draft.id}`}
+                                                                    checked={draft.scopes.includes("EXTERNAL")}
+                                                                    onCheckedChange={(checked) =>
+                                                                        toggleEditAllPurposeScope(
+                                                                            draft.id,
+                                                                            "EXTERNAL",
+                                                                            checked === true
+                                                                        )
+                                                                    }
+                                                                />
+                                                                <Label
+                                                                    htmlFor={`ea-purpose-scope-external-${draft.id}`}
+                                                                    className="cursor-pointer text-sm font-normal"
+                                                                >
+                                                                    External
+                                                                </Label>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid gap-2">
+                                                        <Label htmlFor={`ea-purpose-sort-order-${draft.id}`}>Sort order</Label>
+                                                        <Input
+                                                            id={`ea-purpose-sort-order-${draft.id}`}
+                                                            type="number"
+                                                            value={String(draft.sortOrder)}
+                                                            onChange={(e) =>
+                                                                patchEditAllPurposeDraft(draft.id, {
+                                                                    sortOrder: safeInt(e.target.value, 1000),
+                                                                })
+                                                            }
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center justify-between rounded-lg border p-3">
+                                                    <div className="grid gap-0.5">
+                                                        <div className="text-sm font-medium">Apply to all departments</div>
+                                                        <div className="text-xs text-muted-foreground">
+                                                            Turn off to bind this purpose to selected departments only.
+                                                        </div>
+                                                    </div>
+                                                    <Switch
+                                                        checked={draft.applyToAllDepartments}
+                                                        onCheckedChange={(checked) =>
+                                                            patchEditAllPurposeDraft(draft.id, {
+                                                                applyToAllDepartments: checked,
+                                                            })
+                                                        }
+                                                    />
+                                                </div>
+
+                                                {!draft.applyToAllDepartments ? (
+                                                    <div className="grid gap-2">
+                                                        <Label>Departments</Label>
+                                                        <div className="max-h-48 overflow-y-auto rounded-lg border p-2">
+                                                            {enabledDepartments.length === 0 ? (
+                                                                <p className="text-sm text-muted-foreground">
+                                                                    No enabled departments found.
+                                                                </p>
+                                                            ) : (
+                                                                <div className="grid gap-1">
+                                                                    {enabledDepartments.map((d) => {
+                                                                        const checkboxId = `ea-purpose-dept-${draft.id}-${d._id}`
+                                                                        return (
+                                                                            <div
+                                                                                key={checkboxId}
+                                                                                className="flex items-center gap-2 rounded px-2 py-1 hover:bg-muted/50"
+                                                                            >
+                                                                                <Checkbox
+                                                                                    id={checkboxId}
+                                                                                    checked={draft.departmentIds.includes(d._id)}
+                                                                                    onCheckedChange={(checked) =>
+                                                                                        toggleEditAllPurposeDepartment(
+                                                                                            draft.id,
+                                                                                            d._id,
+                                                                                            checked === true
+                                                                                        )
+                                                                                    }
+                                                                                />
+                                                                                <Label
+                                                                                    htmlFor={checkboxId}
+                                                                                    className="cursor-pointer text-sm font-normal"
+                                                                                >
+                                                                                    {d.name}
+                                                                                </Label>
+                                                                                <span className="text-xs text-muted-foreground">
+                                                                                    {d.code ? `(${d.code})` : ""}
+                                                                                </span>
+                                                                            </div>
+                                                                        )
+                                                                    })}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+
+                                                <div className="flex items-center justify-between rounded-lg border p-3">
+                                                    <div className="grid gap-0.5">
+                                                        <div className="text-sm font-medium">Enabled</div>
+                                                        <div className="text-xs text-muted-foreground">
+                                                            Disabled purposes are hidden from queue selection.
+                                                        </div>
+                                                    </div>
+                                                    <Switch
+                                                        checked={draft.enabled}
+                                                        onCheckedChange={(checked) =>
+                                                            patchEditAllPurposeDraft(draft.id, { enabled: checked })
+                                                        }
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )
+                                })
+                            )}
+                        </div>
+                    </div>
+
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                                setEditAllPurposesOpen(false)
+                                resetEditAllPurposesForm()
+                            }}
+                            disabled={saving}
+                            className="w-full sm:mr-2 sm:w-auto"
+                        >
+                            Cancel
+                        </Button>
+
+                        <Button
+                            type="button"
+                            onClick={() => void handleSaveAllPurposes()}
+                            disabled={saving || editAllPurposeDrafts.length === 0}
+                            className="w-full gap-2 sm:w-auto"
+                        >
+                            <Save className="h-4 w-4" />
+                            {saving ? "Saving changes…" : "Save all changes"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
