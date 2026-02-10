@@ -847,7 +847,7 @@ export default function StaffServingPage() {
                                     value={String(Math.max(3, panelCount))}
                                     onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}
                                 >
-                                    <SelectTrigger id="panelsBoard" className="h-8 w-[90px]">
+                                    <SelectTrigger id="panelsBoard" className="h-8 w-22.5">
                                         <SelectValue placeholder="Panels" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -900,14 +900,14 @@ export default function StaffServingPage() {
                             {panelRows.map((row, idx) => {
                                 if (!row) {
                                     return (
-                                        <Card key={`empty-${idx}`} className="min-h-[380px] border-dashed">
+                                        <Card key={`empty-${idx}`} className="min-h-95 border-dashed">
                                             <CardHeader className="pb-2">
                                                 <CardTitle className="text-base">Unassigned panel</CardTitle>
                                                 <CardDescription>
                                                     Add more active windows under this manager to fill this slot.
                                                 </CardDescription>
                                             </CardHeader>
-                                            <CardContent className="flex h-[250px] items-center justify-center text-sm text-muted-foreground">
+                                            <CardContent className="flex h-62.5 items-center justify-center text-sm text-muted-foreground">
                                                 No active window bound.
                                             </CardContent>
                                         </Card>
@@ -926,7 +926,7 @@ export default function StaffServingPage() {
                                     (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
 
                                 return (
-                                    <Card key={row.id || `window-${idx}`} className="min-h-[380px]">
+                                    <Card key={row.id || `window-${idx}`} className="min-h-95">
                                         <CardContent className="p-5">
                                             <div className="flex h-full flex-col">
                                                 <div className="text-center text-[clamp(1rem,2.2vw,1.5rem)] font-semibold">
@@ -1049,7 +1049,7 @@ export default function StaffServingPage() {
                                             Send SMS
                                         </Button>
                                     </DialogTrigger>
-                                    <DialogContent className="sm:max-w-[620px]">
+                                    <DialogContent className="sm:max-w-155">
                                         <DialogHeader>
                                             <DialogTitle>Send SMS notification</DialogTitle>
                                             <DialogDescription>
