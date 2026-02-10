@@ -1,18 +1,24 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as React from "react"
-import { useLocation } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { Activity, Home, PieChart as PieChartIcon, TrendingUp } from "lucide-react"
 import {
-    Area,
-    AreaChart,
+    ArrowRight,
+    BarChart3,
+    Home,
+    Monitor,
+    PieChart as PieChartIcon,
+    RefreshCw,
+    Ticket,
+} from "lucide-react"
+import {
     Bar,
-    BarChart,
+    BarChart as RechartsBarChart,
     CartesianGrid,
     Cell,
     Legend,
     Pie,
-    PieChart,
+    PieChart as RechartsPieChart,
     ResponsiveContainer,
     Tooltip,
     XAxis,
@@ -22,245 +28,750 @@ import {
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { studentApi, type HomeOverviewResponse } from "@/api/student"
+import { guestApi } from "@/api/guest"
+import { studentApi, type Department, type Ticket as TicketType } from "@/api/student"
+import { api } from "@/lib/http"
 
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 
-const STATUS_COLORS: Record<string, string> = {
-    WAITING: "var(--chart-1)",
-    CALLED: "var(--chart-2)",
-    HOLD: "var(--chart-3)",
-    SERVED: "var(--chart-4)",
-    OUT: "var(--chart-5)",
+type DepartmentDisplayResponse = {
+    dateKey: string
+    department: {
+        id: string
+        name: string
+    }
+    nowServing: {
+        id: string
+        queueNumber: number
+        windowNumber?: number | null
+        calledAt?: string | null
+    } | null
+    upNext: Array<{
+        id: string
+        queueNumber: number
+    }>
 }
 
-const PIE_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"]
+type SessionParticipant = {
+    firstName?: string
+    lastName?: string
+    studentId?: string
+    tcNumber?: string
+    mobileNumber?: string
+    phone?: string
+    departmentId?: string
+    type?: string
+}
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
 }
 
-function formatDateTime(input?: string) {
-    if (!input) return "—"
-    const d = new Date(input)
-    if (Number.isNaN(d.getTime())) return "—"
-    return d.toLocaleString()
+function getErrorMessage(error: unknown, fallback: string) {
+    if (
+        typeof error === "object" &&
+        error !== null &&
+        "message" in error &&
+        typeof (error as { message?: unknown }).message === "string"
+    ) {
+        return (error as { message: string }).message
+    }
+    return fallback
 }
 
-function formatNumber(v: number | undefined) {
-    return new Intl.NumberFormat().format(Number(v || 0))
+function statusBadgeVariant(status?: string) {
+    switch (status) {
+        case "WAITING":
+            return "outline"
+        case "CALLED":
+            return "default"
+        case "HOLD":
+            return "secondary"
+        case "SERVED":
+            return "default"
+        case "OUT":
+            return "secondary"
+        default:
+            return "secondary"
+    }
+}
+
+function fmtTime(v?: string | null) {
+    if (!v) return "—"
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return "—"
+    return d.toLocaleString()
 }
 
 export default function AlumniHomePage() {
     const location = useLocation()
 
     const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
+
     const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
+    const preReferenceId = React.useMemo(
+        () => pickNonEmptyString(qs.get("studentId") || qs.get("referenceId") || qs.get("tcNumber")),
+        [qs],
+    )
 
-    const [loading, setLoading] = React.useState(true)
-    const [overview, setOverview] = React.useState<HomeOverviewResponse | null>(null)
+    const [loadingDepts, setLoadingDepts] = React.useState(true)
+    const [loadingSession, setLoadingSession] = React.useState(true)
+    const [loadingDisplay, setLoadingDisplay] = React.useState(false)
+    const [loadingTicket, setLoadingTicket] = React.useState(false)
 
-    const loadOverview = React.useCallback(async () => {
-        setLoading(true)
+    const [departments, setDepartments] = React.useState<Department[]>([])
+    const [sessionDepartmentId, setSessionDepartmentId] = React.useState("")
+    const [departmentId, setDepartmentId] = React.useState("")
+    const [referenceId, setReferenceId] = React.useState(preReferenceId)
+
+    const [participant, setParticipant] = React.useState<SessionParticipant | null>(null)
+    const [ticket, setTicket] = React.useState<TicketType | null>(null)
+
+    const [displayDateKey, setDisplayDateKey] = React.useState("")
+    const [displayNowServing, setDisplayNowServing] =
+        React.useState<DepartmentDisplayResponse["nowServing"]>(null)
+    const [displayUpNext, setDisplayUpNext] = React.useState<DepartmentDisplayResponse["upNext"]>([])
+
+    const selectedDept = React.useMemo(
+        () => departments.find((d) => d._id === departmentId) || null,
+        [departments, departmentId],
+    )
+
+    const sessionDisplayName = React.useMemo(() => {
+        if (!participant) return ""
+        const full = [participant.firstName, participant.lastName]
+            .map(pickNonEmptyString)
+            .filter(Boolean)
+            .join(" ")
+        if (full) return full
+        return (
+            pickNonEmptyString(participant.tcNumber) ||
+            pickNonEmptyString(participant.studentId) ||
+            pickNonEmptyString(participant.mobileNumber) ||
+            pickNonEmptyString(participant.phone)
+        )
+    }, [participant])
+
+    const loadDepartments = React.useCallback(async () => {
+        setLoadingDepts(true)
         try {
-            const res = await studentApi.getHomeOverview({
-                participantType: "ALUMNI_VISITOR",
-                departmentId: preDeptId || undefined,
-                days: 7,
-            })
-            setOverview(res)
-        } catch (e: any) {
-            toast.error(e?.message ?? "Failed to load overview charts.")
-            setOverview(null)
+            const res = await studentApi.listDepartments()
+            setDepartments(res.departments ?? [])
+        } catch (error) {
+            toast.error(getErrorMessage(error, "Failed to load departments."))
+            setDepartments([])
+            setDepartmentId("")
         } finally {
-            setLoading(false)
+            setLoadingDepts(false)
         }
-    }, [preDeptId])
+    }, [])
+
+    const loadSession = React.useCallback(async () => {
+        setLoadingSession(true)
+        try {
+            const res = await guestApi.getSession()
+            const p = ((res as any)?.participant ?? null) as SessionParticipant | null
+
+            setParticipant(p)
+
+            const rid =
+                pickNonEmptyString(p?.tcNumber) ||
+                pickNonEmptyString(p?.studentId) ||
+                pickNonEmptyString(p?.mobileNumber) ||
+                pickNonEmptyString(p?.phone)
+            const dept = pickNonEmptyString(p?.departmentId)
+
+            if (rid) {
+                setReferenceId((prev) => prev || rid)
+            }
+            if (dept) {
+                setSessionDepartmentId(dept)
+            }
+        } catch {
+            // Guest mode is valid here.
+            setParticipant(null)
+        } finally {
+            setLoadingSession(false)
+        }
+    }, [])
+
+    const loadDepartmentDisplay = React.useCallback(
+        async (opts?: { silent?: boolean }) => {
+            if (!departmentId) {
+                setDisplayDateKey("")
+                setDisplayNowServing(null)
+                setDisplayUpNext([])
+                return
+            }
+
+            const silent = Boolean(opts?.silent)
+            if (!silent) setLoadingDisplay(true)
+
+            try {
+                const res = await api.get<DepartmentDisplayResponse>(`/display/${encodeURIComponent(departmentId)}`, {
+                    auth: false,
+                })
+
+                setDisplayDateKey(pickNonEmptyString(res?.dateKey))
+                setDisplayNowServing(res?.nowServing ?? null)
+                setDisplayUpNext(Array.isArray(res?.upNext) ? res.upNext : [])
+            } catch (error) {
+                if (!silent) {
+                    toast.error(getErrorMessage(error, "Failed to load department overview."))
+                }
+            } finally {
+                if (!silent) setLoadingDisplay(false)
+            }
+        },
+        [departmentId],
+    )
+
+    const findActiveTicket = React.useCallback(
+        async (opts?: { silent?: boolean }) => {
+            const rid = referenceId.trim()
+            const silent = Boolean(opts?.silent)
+
+            if (!departmentId || !rid) {
+                setTicket(null)
+                return
+            }
+
+            if (!silent) setLoadingTicket(true)
+
+            try {
+                const res = await studentApi.findActiveByStudent({
+                    departmentId,
+                    studentId: rid,
+                })
+                setTicket(res.ticket ?? null)
+            } catch (error) {
+                if (!silent) {
+                    toast.error(getErrorMessage(error, "Failed to load active ticket."))
+                }
+            } finally {
+                if (!silent) setLoadingTicket(false)
+            }
+        },
+        [departmentId, referenceId],
+    )
+
+    const refreshOverview = React.useCallback(async () => {
+        await Promise.all([loadDepartmentDisplay({ silent: false }), findActiveTicket({ silent: false })])
+        toast.success("Overview refreshed.")
+    }, [loadDepartmentDisplay, findActiveTicket])
 
     React.useEffect(() => {
-        void loadOverview()
-    }, [loadOverview])
+        void loadDepartments()
+        void loadSession()
+    }, [loadDepartments, loadSession])
 
-    const topDepartments = React.useMemo(() => {
-        return (overview?.departmentLoad ?? []).slice(0, 6)
-    }, [overview])
+    React.useEffect(() => {
+        if (!departments.length) return
+
+        setDepartmentId((prev) => {
+            const has = (id: string) => !!id && departments.some((d) => d._id === id)
+
+            // 1) explicit query param
+            if (has(preDeptId)) return preDeptId
+
+            // 2) session profile department
+            if (has(sessionDepartmentId)) return sessionDepartmentId
+
+            // 3) keep current valid
+            if (has(prev)) return prev
+
+            // 4) fallback first
+            return departments[0]?._id ?? ""
+        })
+    }, [departments, preDeptId, sessionDepartmentId])
+
+    React.useEffect(() => {
+        void loadDepartmentDisplay()
+    }, [loadDepartmentDisplay])
+
+    React.useEffect(() => {
+        void findActiveTicket({ silent: true })
+    }, [findActiveTicket])
+
+    const joinUrl = React.useMemo(() => {
+        const q = new URLSearchParams()
+        if (departmentId) q.set("departmentId", departmentId)
+        if (referenceId.trim()) {
+            q.set("studentId", referenceId.trim())
+            q.set("referenceId", referenceId.trim())
+            q.set("tcNumber", referenceId.trim())
+        }
+        const qStr = q.toString()
+        return `/alumni/join${qStr ? `?${qStr}` : ""}`
+    }, [departmentId, referenceId])
+
+    const myTicketsUrl = React.useMemo(() => {
+        const q = new URLSearchParams()
+        if (departmentId) q.set("departmentId", departmentId)
+        if (referenceId.trim()) {
+            q.set("studentId", referenceId.trim())
+            q.set("referenceId", referenceId.trim())
+            q.set("tcNumber", referenceId.trim())
+        }
+        const qStr = q.toString()
+        return `/alumni/my-tickets${qStr ? `?${qStr}` : ""}`
+    }, [departmentId, referenceId])
+
+    const waitingCount = displayUpNext.length
+    const nowServingCount = displayNowServing ? 1 : 0
+    const visibleCount = nowServingCount + waitingCount
+
+    const liveQueueBars = React.useMemo(
+        () => [
+            { label: "Now Serving", count: nowServingCount, fill: "hsl(var(--primary))" },
+            { label: "Up Next", count: waitingCount, fill: "hsl(var(--secondary))" },
+            { label: "Visible Queue", count: visibleCount, fill: "hsl(var(--accent))" },
+        ],
+        [nowServingCount, waitingCount, visibleCount],
+    )
+
+    const queueMixData = React.useMemo(
+        () => [
+            { name: "Called", value: nowServingCount, fill: "hsl(var(--primary))" },
+            { name: "Waiting", value: waitingCount, fill: "hsl(var(--secondary))" },
+        ],
+        [nowServingCount, waitingCount],
+    )
+
+    const hasQueueMix = queueMixData.some((item) => item.value > 0)
+
+    const myPreviewPosition = React.useMemo(() => {
+        if (!ticket) return null
+
+        if (
+            displayNowServing &&
+            (displayNowServing.id === ticket._id || displayNowServing.queueNumber === ticket.queueNumber)
+        ) {
+            return 0
+        }
+
+        const index = displayUpNext.findIndex(
+            (item) => item.id === ticket._id || item.queueNumber === ticket.queueNumber,
+        )
+
+        if (index >= 0) return index + 1
+        return null
+    }, [ticket, displayNowServing, displayUpNext])
 
     return (
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
 
-            <main className="mx-auto w-full px-4 py-10 space-y-6">
-                <div className="space-y-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="secondary" className="gap-2">
-                            <Home className="h-3.5 w-3.5" />
-                            Alumni
-                        </Badge>
-                        {overview?.scope?.departmentName ? <Badge variant="outline">{overview.scope.departmentName}</Badge> : null}
-                        <Badge variant="outline">Updated: {formatDateTime(overview?.generatedAt)}</Badge>
-                    </div>
-
-                    <h1 className="text-2xl font-semibold tracking-tight">Alumni Home Overview</h1>
-                    <p className="text-sm text-muted-foreground">
-                        Live queue analytics and service performance for today.
+            <main className="mx-auto w-full px-4 py-10">
+                <div className="mb-6">
+                    <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+                        <Home className="h-6 w-6" />
+                        Alumni Home
+                    </h1>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                        Overview for <span className="font-medium">Join Queue</span> and{" "}
+                        <span className="font-medium">My Tickets</span> with live queue insights for alumni and visitors.
                     </p>
                 </div>
 
-                {loading ? (
-                    <div className="space-y-4">
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                            <Skeleton className="h-28 w-full" />
-                            <Skeleton className="h-28 w-full" />
-                            <Skeleton className="h-28 w-full" />
-                            <Skeleton className="h-28 w-full" />
-                        </div>
-                        <Skeleton className="h-85 w-full" />
-                        <Skeleton className="h-85 w-full" />
-                    </div>
-                ) : !overview ? (
-                    <Card>
+                <div className="grid gap-6">
+                    <Card className="min-w-0">
                         <CardHeader>
-                            <CardTitle>Overview unavailable</CardTitle>
-                            <CardDescription>Could not load chart data right now. Please try refreshing the page.</CardDescription>
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                                <div className="min-w-0">
+                                    <CardTitle className="flex items-center gap-2">
+                                        <BarChart3 className="h-5 w-5" />
+                                        Overview Context
+                                    </CardTitle>
+                                    <CardDescription>
+                                        This context is shared by the quick links to Join Queue and My Tickets.
+                                    </CardDescription>
+                                </div>
+
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="w-full gap-2 lg:w-auto"
+                                    onClick={() => void refreshOverview()}
+                                    disabled={loadingDisplay || loadingTicket || loadingDepts}
+                                >
+                                    <RefreshCw className="h-4 w-4" />
+                                    Refresh Overview
+                                </Button>
+                            </div>
                         </CardHeader>
+
+                        <CardContent className="space-y-4">
+                            {loadingDepts ? (
+                                <div className="grid gap-3 lg:grid-cols-4">
+                                    <Skeleton className="h-10 w-full" />
+                                    <Skeleton className="h-10 w-full" />
+                                    <Skeleton className="h-10 w-full" />
+                                    <Skeleton className="h-10 w-full" />
+                                </div>
+                            ) : (
+                                <div className="grid gap-4 lg:grid-cols-4">
+                                    <div className="min-w-0 space-y-2">
+                                        <Label>Department</Label>
+                                        <Select value={departmentId} onValueChange={setDepartmentId} disabled={!departments.length}>
+                                            <SelectTrigger className="w-full min-w-0">
+                                                <SelectValue placeholder="Select department" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {departments.map((d) => (
+                                                    <SelectItem key={d._id} value={d._id}>
+                                                        {d.name}
+                                                        {d.code ? ` (${d.code})` : ""}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+
+                                    <div className="min-w-0 space-y-2">
+                                        <Label htmlFor="reference-id">Reference ID</Label>
+                                        <Input
+                                            id="reference-id"
+                                            value={referenceId}
+                                            onChange={(e) => setReferenceId(e.target.value)}
+                                            placeholder="Student ID / TC Number / Contact reference"
+                                            autoComplete="off"
+                                            inputMode="text"
+                                        />
+                                    </div>
+
+                                    <div className="min-w-0 space-y-2">
+                                        <Label>Session</Label>
+                                        <div className="flex h-10 items-center rounded-md border px-3">
+                                            {loadingSession ? (
+                                                <Skeleton className="h-4 w-24" />
+                                            ) : sessionDisplayName ? (
+                                                <span className="truncate text-sm">{sessionDisplayName}</span>
+                                            ) : (
+                                                <span className="text-sm text-muted-foreground">Guest session</span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="min-w-0 space-y-2">
+                                        <Label>Date Key</Label>
+                                        <div className="flex h-10 items-center rounded-md border px-3">
+                                            <span className="text-sm">{displayDateKey || "—"}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="flex flex-wrap items-center gap-2">
+                                {selectedDept ? <Badge variant="secondary">Department: {selectedDept.name}</Badge> : null}
+                                {ticket ? (
+                                    <Badge variant={statusBadgeVariant(ticket.status) as any}>Ticket: {ticket.status}</Badge>
+                                ) : null}
+                                {myPreviewPosition === 0 ? (
+                                    <Badge>Now being called</Badge>
+                                ) : myPreviewPosition ? (
+                                    <Badge variant="outline">Position in preview: #{myPreviewPosition}</Badge>
+                                ) : (
+                                    <Badge variant="outline">Position in preview: —</Badge>
+                                )}
+                            </div>
+                        </CardContent>
                     </Card>
-                ) : (
-                    <>
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                            <Card>
-                                <CardHeader className="pb-2">
-                                    <CardDescription>Active Tickets</CardDescription>
-                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.activeTickets)}</CardTitle>
-                                </CardHeader>
-                            </Card>
 
-                            <Card>
-                                <CardHeader className="pb-2">
-                                    <CardDescription>Total Today</CardDescription>
-                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.totalToday)}</CardTitle>
-                                </CardHeader>
-                            </Card>
-
-                            <Card>
-                                <CardHeader className="pb-2">
-                                    <CardDescription>Served Today</CardDescription>
-                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.servedToday)}</CardTitle>
-                                </CardHeader>
-                            </Card>
-
-                            <Card>
-                                <CardHeader className="pb-2">
-                                    <CardDescription>Enabled Departments</CardDescription>
-                                    <CardTitle className="text-2xl">{formatNumber(overview.highlights.enabledDepartments)}</CardTitle>
-                                </CardHeader>
-                            </Card>
-                        </div>
-
-                        <div className="grid gap-4 lg:grid-cols-2">
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="flex items-center gap-2">
-                                        <Activity className="h-4 w-4" />
-                                        Status Distribution
-                                    </CardTitle>
-                                    <CardDescription>Current ticket statuses for {overview.dateKey}</CardDescription>
-                                </CardHeader>
-                                <CardContent className="h-80">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={overview.statusDistribution}>
-                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                            <XAxis dataKey="status" />
-                                            <YAxis allowDecimals={false} />
-                                            <Tooltip />
-                                            <Bar dataKey="count" radius={[8, 8, 0, 0]}>
-                                                {overview.statusDistribution.map((row) => (
-                                                    <Cell
-                                                        key={row.status}
-                                                        fill={STATUS_COLORS[row.status] ?? "var(--chart-1)"}
-                                                    />
-                                                ))}
-                                            </Bar>
-                                        </BarChart>
-                                    </ResponsiveContainer>
-                                </CardContent>
-                            </Card>
-
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="flex items-center gap-2">
-                                        <PieChartIcon className="h-4 w-4" />
-                                        Department Load
-                                    </CardTitle>
-                                    <CardDescription>Top departments by total queue volume today</CardDescription>
-                                </CardHeader>
-                                <CardContent className="h-80">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <PieChart>
-                                            <Pie
-                                                data={topDepartments}
-                                                dataKey="total"
-                                                nameKey="name"
-                                                cx="50%"
-                                                cy="50%"
-                                                innerRadius={60}
-                                                outerRadius={95}
-                                                paddingAngle={2}
-                                            >
-                                                {topDepartments.map((row, idx) => (
-                                                    <Cell
-                                                        key={`${row.departmentId}-${idx}`}
-                                                        fill={PIE_COLORS[idx % PIE_COLORS.length]}
-                                                    />
-                                                ))}
-                                            </Pie>
-                                            <Tooltip />
-                                            <Legend />
-                                        </PieChart>
-                                    </ResponsiveContainer>
-                                </CardContent>
-                            </Card>
-                        </div>
-
-                        <Card>
+                    <div className="grid gap-6 lg:grid-cols-2">
+                        <Card className="min-w-0">
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2">
-                                    <TrendingUp className="h-4 w-4" />
-                                    7-Day Queue Trend
+                                    <ArrowRight className="h-5 w-5" />
+                                    Join Queue
                                 </CardTitle>
-                                <CardDescription>Total vs served tickets for the last 7 days</CardDescription>
+                                <CardDescription>
+                                    Start a queue transaction with your current department and reference context.
+                                </CardDescription>
                             </CardHeader>
-                            <CardContent className="h-85">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={overview.trend}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                        <XAxis dataKey="dateKey" tickFormatter={(v) => String(v).slice(5)} />
-                                        <YAxis allowDecimals={false} />
-                                        <Tooltip />
-                                        <Legend />
-                                        <Area
-                                            type="monotone"
-                                            dataKey="total"
-                                            stroke="var(--chart-1)"
-                                            fill="var(--chart-1)"
-                                            fillOpacity={0.15}
-                                            strokeWidth={2}
-                                        />
-                                        <Area
-                                            type="monotone"
-                                            dataKey="served"
-                                            stroke="var(--chart-2)"
-                                            fill="var(--chart-2)"
-                                            fillOpacity={0.12}
-                                            strokeWidth={2}
-                                        />
-                                    </AreaChart>
-                                </ResponsiveContainer>
+                            <CardContent className="space-y-4">
+                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                    Use this when you need a new ticket. Selected department and your reference ID are passed
+                                    automatically.
+                                </div>
+                                <Button asChild className="w-full">
+                                    <Link to={joinUrl}>Go to Join Queue</Link>
+                                </Button>
                             </CardContent>
                         </Card>
-                    </>
-                )}
+
+                        <Card className="min-w-0">
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    <Ticket className="h-5 w-5" />
+                                    My Tickets
+                                </CardTitle>
+                                <CardDescription>
+                                    Check your active ticket, live queue board preview, and refresh your current status.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                {ticket ? (
+                                    <div className="rounded-lg border p-4">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="text-sm text-muted-foreground">Queue Number</div>
+                                                <div className="text-3xl font-semibold tracking-tight">#{ticket.queueNumber}</div>
+                                            </div>
+                                            <div className="flex flex-col items-end gap-2">
+                                                <Badge variant={statusBadgeVariant(ticket.status) as any}>{ticket.status}</Badge>
+                                                <Badge variant="outline">{ticket.dateKey}</Badge>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                        No active ticket found for the current context.
+                                    </div>
+                                )}
+
+                                <Button asChild variant="secondary" className="w-full">
+                                    <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                </Button>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    <div className="grid gap-6 lg:grid-cols-2">
+                        <Card className="min-w-0">
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    <Monitor className="h-5 w-5" />
+                                    Live Queue Snapshot
+                                </CardTitle>
+                                <CardDescription>
+                                    Recharts bar view of now serving, up next, and visible queue count.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                {!departmentId ? (
+                                    <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                        Select a department to view queue insights.
+                                    </div>
+                                ) : loadingDisplay ? (
+                                    <Skeleton className="h-80 w-full" />
+                                ) : (
+                                    <div className="space-y-4">
+                                        <div className="h-80 w-full">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <RechartsBarChart
+                                                    data={liveQueueBars}
+                                                    margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
+                                                >
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                                                    <XAxis
+                                                        dataKey="label"
+                                                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                                                        axisLine={{ stroke: "hsl(var(--border))" }}
+                                                        tickLine={{ stroke: "hsl(var(--border))" }}
+                                                    />
+                                                    <YAxis
+                                                        allowDecimals={false}
+                                                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                                                        axisLine={{ stroke: "hsl(var(--border))" }}
+                                                        tickLine={{ stroke: "hsl(var(--border))" }}
+                                                    />
+                                                    <Tooltip
+                                                        formatter={(value: number | string | undefined) => [value ?? "—", "Count"]}
+                                                        contentStyle={{
+                                                            background: "hsl(var(--background))",
+                                                            border: "1px solid hsl(var(--border))",
+                                                            borderRadius: "0.75rem",
+                                                            color: "hsl(var(--foreground))",
+                                                        }}
+                                                        labelStyle={{ color: "hsl(var(--foreground))" }}
+                                                        cursor={{ fill: "hsl(var(--muted))" }}
+                                                    />
+                                                    <Bar dataKey="count" radius={[8, 8, 0, 0]}>
+                                                        {liveQueueBars.map((entry) => (
+                                                            <Cell key={entry.label} fill={entry.fill} />
+                                                        ))}
+                                                    </Bar>
+                                                </RechartsBarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <Badge variant="outline">
+                                                Now Serving: {displayNowServing ? `#${displayNowServing.queueNumber}` : "—"}
+                                            </Badge>
+                                            <Badge variant="outline">Up Next: {waitingCount}</Badge>
+                                            <Badge variant="secondary">Visible: {visibleCount}</Badge>
+                                        </div>
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+
+                        <Card className="min-w-0">
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    <PieChartIcon className="h-5 w-5" />
+                                    Queue Mix
+                                </CardTitle>
+                                <CardDescription>
+                                    Recharts donut view using your app CSS color tokens from <span className="font-mono">src/index.css</span>.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                {!departmentId ? (
+                                    <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                        Select a department to view queue distribution.
+                                    </div>
+                                ) : loadingDisplay ? (
+                                    <Skeleton className="h-80 w-full" />
+                                ) : !hasQueueMix ? (
+                                    <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                        No queue data available yet for this department.
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        <div className="h-80 w-full">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <RechartsPieChart>
+                                                    <Tooltip
+                                                        formatter={(value: number | string | undefined) => [value ?? "—", "Tickets"]}
+                                                        contentStyle={{
+                                                            background: "hsl(var(--background))",
+                                                            border: "1px solid hsl(var(--border))",
+                                                            borderRadius: "0.75rem",
+                                                            color: "hsl(var(--foreground))",
+                                                        }}
+                                                        labelStyle={{ color: "hsl(var(--foreground))" }}
+                                                    />
+                                                    <Legend verticalAlign="bottom" wrapperStyle={{ color: "hsl(var(--muted-foreground))" }} />
+                                                    <Pie
+                                                        data={queueMixData}
+                                                        dataKey="value"
+                                                        nameKey="name"
+                                                        innerRadius={72}
+                                                        outerRadius={108}
+                                                        paddingAngle={3}
+                                                    >
+                                                        {queueMixData.map((entry) => (
+                                                            <Cell key={entry.name} fill={entry.fill} />
+                                                        ))}
+                                                    </Pie>
+                                                </RechartsPieChart>
+                                            </ResponsiveContainer>
+                                        </div>
+
+                                        {myPreviewPosition === 0 ? (
+                                            <div className="rounded-lg border p-4 text-sm">Your ticket is currently being called.</div>
+                                        ) : myPreviewPosition ? (
+                                            <div className="rounded-lg border p-4 text-sm">
+                                                Your ticket appears at position{" "}
+                                                <span className="font-semibold">#{myPreviewPosition}</span> in the visible preview queue.
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                                Your ticket is not visible in the current board preview list.
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    <Card className="min-w-0">
+                        <CardHeader>
+                            <CardTitle>Queue Board Preview</CardTitle>
+                            <CardDescription>Quick glance from home: now serving and up next tickets.</CardDescription>
+                        </CardHeader>
+
+                        <CardContent>
+                            {!departmentId ? (
+                                <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                    Select a department to preview the queue board.
+                                </div>
+                            ) : loadingDisplay ? (
+                                <div className="space-y-3">
+                                    <Skeleton className="h-24 w-full" />
+                                    <Skeleton className="h-40 w-full" />
+                                </div>
+                            ) : (
+                                <div className="grid gap-4 lg:grid-cols-12">
+                                    <div className="lg:col-span-7">
+                                        <div className="rounded-2xl border bg-muted p-6">
+                                            <div className="flex items-center justify-between">
+                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">Now serving</div>
+                                                {displayNowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
+                                            </div>
+
+                                            <div className="mt-4">
+                                                {displayNowServing ? (
+                                                    <>
+                                                        <div className="text-[clamp(3rem,10vw,7rem)] font-semibold leading-none tracking-tight">
+                                                            #{displayNowServing.queueNumber}
+                                                        </div>
+                                                        <div className="mt-3 text-sm text-muted-foreground">
+                                                            Window: {displayNowServing.windowNumber ? `#${displayNowServing.windowNumber}` : "—"}
+                                                        </div>
+                                                        <div className="text-sm text-muted-foreground">
+                                                            Called at: {fmtTime(displayNowServing.calledAt)}
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
+                                                        No ticket is currently being called.
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="lg:col-span-5">
+                                        <div className="rounded-2xl border p-6">
+                                            <div className="mb-4 flex items-center justify-between">
+                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">Up next</div>
+                                                <Badge variant="secondary">{displayUpNext.length}</Badge>
+                                            </div>
+
+                                            {displayUpNext.length === 0 ? (
+                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">No waiting tickets.</div>
+                                            ) : (
+                                                <div className="grid gap-2">
+                                                    {displayUpNext.slice(0, 6).map((item, idx) => (
+                                                        <div key={item.id} className="flex items-center justify-between rounded-xl border p-3">
+                                                            <div className="text-xl font-semibold">#{item.queueNumber}</div>
+                                                            <Badge variant={idx === 0 ? "default" : "secondary"}>
+                                                                {idx === 0 ? "Next" : "Waiting"}
+                                                            </Badge>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <Separator className="my-6" />
+
+                            <div className="grid gap-2 sm:grid-cols-2">
+                                <Button asChild>
+                                    <Link to={joinUrl}>Open Join Queue</Link>
+                                </Button>
+                                <Button asChild variant="secondary">
+                                    <Link to={myTicketsUrl}>Open My Tickets</Link>
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
             </main>
 
             <Footer variant="student" />
