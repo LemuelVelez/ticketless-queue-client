@@ -52,28 +52,37 @@ function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
     return null
 }
 
+function isAuthOrResetPath(pathname: string) {
+    return (
+        pathname === "/login" ||
+        pathname === "/loading" ||
+        pathname === "/forgot-password" ||
+        pathname.startsWith("/reset-password")
+    )
+}
+
+function isParticipantPath(pathname: string) {
+    return pathname.startsWith("/student") || pathname.startsWith("/alumni")
+}
+
 /**
  * Prevent redirect loops / wrong-role redirects.
- * Example: a STAFF user trying to access /admin/* should NOT be redirected back there after login.
+ * Important: staff/admin should never be redirected to participant-only routes.
  */
 function canRedirectTo(pathname: string | undefined, role: "ADMIN" | "STAFF") {
     if (!pathname || typeof pathname !== "string") return false
 
     // Never redirect back to auth/loading routes
-    if (
-        pathname === "/login" ||
-        pathname === "/loading" ||
-        pathname === "/forgot-password" ||
-        pathname.startsWith("/reset-password")
-    ) {
-        return false
-    }
+    if (isAuthOrResetPath(pathname)) return false
+
+    // Staff/Admin should never be redirected to participant-only routes
+    if (isParticipantPath(pathname)) return false
 
     // Role-based protection
     if (pathname.startsWith("/admin")) return role === "ADMIN"
     if (pathname.startsWith("/staff")) return role === "STAFF"
 
-    // Public routes (e.g. /display) are OK
+    // Shared/public routes (e.g. /display, /home, /join) are OK
     return true
 }
 
@@ -81,14 +90,7 @@ function canRedirectParticipantTo(pathname: string | undefined, role: Participan
     if (!pathname || typeof pathname !== "string") return false
 
     // Never redirect back to auth/loading routes
-    if (
-        pathname === "/login" ||
-        pathname === "/loading" ||
-        pathname === "/forgot-password" ||
-        pathname.startsWith("/reset-password")
-    ) {
-        return false
-    }
+    if (isAuthOrResetPath(pathname)) return false
 
     // Participant cannot go to staff/admin routes
     if (pathname.startsWith("/admin") || pathname.startsWith("/staff")) return false
@@ -207,6 +209,10 @@ export default function LoginPage() {
 
         try {
             const res = await login(cleanEmail, password, rememberMe)
+
+            // Clear stale participant session to avoid mixed-role redirect behavior.
+            participantAuthStorage.clearToken()
+
             toast.success("Signed in successfully")
 
             const role = res.user.role
@@ -216,7 +222,7 @@ export default function LoginPage() {
             const state = location.state as LocationState | null
             const fromPath = state?.from?.pathname
 
-            // ✅ Only redirect back if it matches the user's role
+            // ✅ Only redirect back if it matches the user's role and allowed area
             if (canRedirectTo(fromPath, role)) {
                 navigate(fromPath!, { replace: true })
                 return

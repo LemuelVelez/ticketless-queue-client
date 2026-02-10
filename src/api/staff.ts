@@ -2,6 +2,7 @@
 import { api } from "@/lib/http"
 
 export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
+export type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 
 export type ServiceWindow = {
     _id: string
@@ -23,6 +24,79 @@ export type Ticket = {
 
     studentId: string
     phone?: string
+
+    /**
+     * Who joined the queue.
+     */
+    participantType?: TicketParticipantType
+    participantLabel?: string | null
+
+    /**
+     * Queue purpose / transaction context.
+     */
+    transactionCategory?: string
+    transactionKey?: string
+    transactionKeys?: string[]
+    transactionLabel?: string
+    transactionLabels?: string[]
+    selectedTransactionKeys?: string[]
+    selectedTransactionLabels?: string[]
+    purpose?: string
+    queuePurpose?: string | null
+
+    /**
+     * Optional richer payloads that may come from backend enrichers.
+     */
+    participant?: string
+    userType?: string
+    role?: string
+    participantTypeLabel?: string | null
+    selectedTransactions?: Array<{
+        key?: string
+        label?: string
+        name?: string
+        title?: string
+        [key: string]: any
+    }>
+    transactionSelections?: Array<{
+        ticket?: string
+        participantType?: TicketParticipantType | string
+        transactionKeys?: string[]
+        transactionLabels?: string[]
+        [key: string]: any
+    }>
+    transactions?: {
+        participantType?: TicketParticipantType | string
+        participantTypeLabel?: string | null
+        transactionKey?: string | null
+        transactionKeys?: string[]
+        transactionLabel?: string | null
+        transactionLabels?: string[]
+        labels?: string[]
+        [key: string]: any
+    } | null
+    selection?: {
+        transactionKeys?: string[]
+        transactionLabels?: string[]
+        [key: string]: any
+    } | null
+    join?: {
+        transactionKeys?: string[]
+        transactionLabels?: string[]
+        participantType?: string
+        [key: string]: any
+    } | null
+    meta?: {
+        purpose?: string
+        transactionKey?: string
+        transactionKeys?: string[]
+        transactionLabel?: string
+        transactionLabels?: string[]
+        participantType?: string
+        participantLabel?: string
+        transactions?: any
+        [key: string]: any
+    } | null
 
     status: TicketStatus
     holdAttempts: number

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as React from "react"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { User } from "lucide-react"
 
@@ -7,7 +8,7 @@ import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
 import { guestApi } from "@/api/guest"
-import { studentApi, type Department } from "@/api/student"
+import { studentApi, type Department, participantAuthStorage } from "@/api/student"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -81,6 +82,8 @@ function clearDraftStorage() {
 }
 
 export default function StudentProfilePage() {
+    const navigate = useNavigate()
+
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
@@ -214,13 +217,18 @@ export default function StudentProfilePage() {
         setBusyLogout(true)
         try {
             await guestApi.logout()
-            setHasSession(false)
-            setSessionExpiresAt("")
             toast.success("Logged out.")
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to logout.")
         } finally {
+            setHasSession(false)
+            setSessionExpiresAt("")
             setBusyLogout(false)
+
+            // Redirect immediately after token is cleared, no page refresh needed.
+            if (!participantAuthStorage.getToken()) {
+                navigate("/login", { replace: true })
+            }
         }
     }
 

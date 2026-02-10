@@ -42,6 +42,7 @@ import { RoleGuard } from "@/lib/roleguard"
 
 type ShortcutTarget = "home" | "join" | "my-tickets" | "profile"
 type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
+type ParticipantResolveState = ParticipantRole | null | "__CHECKING__"
 
 function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
   const value = String(raw ?? "").trim().toUpperCase()
@@ -104,25 +105,44 @@ function LoadingRedirect() {
 
 function ParticipantAreaGuard({ allow }: { allow: "student" | "alumni" }) {
   const location = useLocation()
-  const [checking, setChecking] = useState(true)
-  const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
+  const { user, loading: userLoading } = useSession()
+
+  const [participantRole, setParticipantRole] = useState<ParticipantResolveState>("__CHECKING__")
 
   useEffect(() => {
     let alive = true
 
-      ; (async () => {
-        const role = await resolveParticipantRole()
-        if (!alive) return
-        setParticipantRole(role)
-        setChecking(false)
-      })()
+    // If staff/admin session exists, do not treat this as "not logged in participant".
+    if (user) {
+      return () => {
+        alive = false
+      }
+    }
+
+    ; (async () => {
+      // Avoid synchronous setState in effect body
+      await Promise.resolve()
+      if (!alive) return
+      setParticipantRole("__CHECKING__")
+
+      const role = await resolveParticipantRole()
+      if (!alive) return
+      setParticipantRole(role)
+    })()
 
     return () => {
       alive = false
     }
-  }, [location.pathname])
+  }, [location.pathname, user])
 
-  if (checking) return <LoadingPage />
+  if (userLoading) return <LoadingPage />
+
+  // Redirect authenticated staff/admin away from participant-only pages
+  if (user) {
+    return <Navigate to={getShortcutPath(user.role, "home")} replace />
+  }
+
+  if (participantRole === "__CHECKING__") return <LoadingPage />
 
   if (!participantRole) {
     return <Navigate to="/login" replace state={{ from: { pathname: location.pathname } }} />

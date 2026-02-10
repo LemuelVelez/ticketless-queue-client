@@ -320,8 +320,8 @@ export const studentApi = {
         ),
 
     // Session
-    getSession: () =>
-        api.get<ParticipantSessionResponse>("/public/auth/session", {
+    getSession: (opts?: { departmentId?: string }) =>
+        api.get<ParticipantSessionResponse>(`/public/auth/session${toQuery(opts as any)}`, {
             auth: false,
             headers: participantAuthHeaders(),
         }),

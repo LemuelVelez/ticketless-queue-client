@@ -2,7 +2,7 @@
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { MoreHorizontal, Plus, RefreshCw, Shield, UserCog } from "lucide-react"
+import { MoreHorizontal, Plus, RefreshCw, Shield, User, UserCog, GraduationCap, Users } from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
@@ -26,689 +26,810 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 
 import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuLabel,
-    DropdownMenuSeparator,
-    DropdownMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-type AccountRole = "STAFF" | "ADMIN"
+type AccountRole = "STAFF" | "ADMIN" | "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
+type StaffAccountRole = "STAFF" | "ADMIN"
+type EditableRole = AccountRole
 
 type AccountUser = {
-    id?: string
-    _id?: string
-    name: string
-    email: string
-    role?: AccountRole
-    active: boolean
+  id?: string
+  _id?: string
+  name: string
+  email: string
+  role?: AccountRole | string
+  type?: string
+  active: boolean
+  readOnly?: boolean
 }
 
 type AccountRow = AccountUser & {
-    role: AccountRole
+  role: AccountRole
 }
 
+const ROLE_ORDER: AccountRole[] = ["ADMIN", "STAFF", "STUDENT", "ALUMNI_VISITOR", "GUEST"]
+
 function userId(u: AccountUser) {
-    return u._id ?? u.id ?? ""
+  return u._id ?? u.id ?? ""
+}
+
+function normalizeRole(role: unknown): AccountRole {
+  const r = String(role ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s/-]+/g, "_")
+
+  if (r === "ADMIN") return "ADMIN"
+  if (r === "STAFF") return "STAFF"
+  if (r === "STUDENT") return "STUDENT"
+  if (r === "ALUMNI_VISITOR" || r === "ALUMNI" || r === "VISITOR") return "ALUMNI_VISITOR"
+  if (r === "GUEST") return "GUEST"
+
+  return "GUEST"
+}
+
+function isStaffAccountRole(role: AccountRole): role is StaffAccountRole {
+  return role === "ADMIN" || role === "STAFF"
+}
+
+function getEditableRoleOptions(role: AccountRole): EditableRole[] {
+  if (isStaffAccountRole(role)) {
+    return ["STAFF", "ADMIN"]
+  }
+  return ["STUDENT", "ALUMNI_VISITOR", "GUEST"]
+}
+
+function isReadOnlyAccount(u: Pick<AccountUser, "readOnly"> | null | undefined) {
+  return Boolean(u?.readOnly)
+}
+
+function roleOptionLabel(role: EditableRole) {
+  return role === "ALUMNI_VISITOR" ? "ALUMNI/VISITOR" : role
 }
 
 function roleBadge(role: AccountRole) {
-    if (role === "ADMIN") {
-        return (
-            <Badge className="gap-1" variant="default">
-                <Shield className="h-4 w-4" />
-                ADMIN
-            </Badge>
-        )
-    }
+  if (role === "ADMIN") {
     return (
-        <Badge variant="secondary" className="gap-1">
-            <UserCog className="h-4 w-4" />
-            STAFF
-        </Badge>
+      <Badge className="gap-1" variant="default">
+        <Shield className="h-4 w-4" />
+        ADMIN
+      </Badge>
     )
+  }
+
+  if (role === "STAFF") {
+    return (
+      <Badge variant="secondary" className="gap-1">
+        <UserCog className="h-4 w-4" />
+        STAFF
+      </Badge>
+    )
+  }
+
+  if (role === "STUDENT") {
+    return (
+      <Badge variant="outline" className="gap-1">
+        <GraduationCap className="h-4 w-4" />
+        STUDENT
+      </Badge>
+    )
+  }
+
+  if (role === "ALUMNI_VISITOR") {
+    return (
+      <Badge variant="outline" className="gap-1">
+        <Users className="h-4 w-4" />
+        ALUMNI/VISITOR
+      </Badge>
+    )
+  }
+
+  return (
+    <Badge variant="outline" className="gap-1">
+      <User className="h-4 w-4" />
+      GUEST
+    </Badge>
+  )
 }
 
 export default function AdminAccountsPage() {
-    const location = useLocation()
-    const { user: sessionUser } = useSession()
+  const location = useLocation()
+  const { user: sessionUser } = useSession()
 
-    const dashboardUser: DashboardUser | undefined = React.useMemo(() => {
-        if (!sessionUser) return undefined
-        return {
-            name: sessionUser.name ?? "Admin",
-            email: sessionUser.email ?? "",
-        }
-    }, [sessionUser])
+  const dashboardUser: DashboardUser | undefined = React.useMemo(() => {
+    if (!sessionUser) return undefined
+    return {
+      name: sessionUser.name ?? "Admin",
+      email: sessionUser.email ?? "",
+    }
+  }, [sessionUser])
 
-    const [loading, setLoading] = React.useState(true)
-    const [saving, setSaving] = React.useState(false)
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
 
-    const [users, setUsers] = React.useState<AccountUser[]>([])
+  const [users, setUsers] = React.useState<AccountUser[]>([])
 
-    const [q, setQ] = React.useState("")
-    const [tab, setTab] = React.useState<"all" | "active" | "inactive">("all")
+  const [q, setQ] = React.useState("")
+  const [tab, setTab] = React.useState<"all" | "active" | "inactive">("all")
 
-    // dialogs
-    const [createOpen, setCreateOpen] = React.useState(false)
-    const [editOpen, setEditOpen] = React.useState(false)
-    const [resetOpen, setResetOpen] = React.useState(false)
-    const [deleteOpen, setDeleteOpen] = React.useState(false)
+  // dialogs
+  const [createOpen, setCreateOpen] = React.useState(false)
+  const [editOpen, setEditOpen] = React.useState(false)
+  const [resetOpen, setResetOpen] = React.useState(false)
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
 
-    // selected user
-    const [selected, setSelected] = React.useState<AccountUser | null>(null)
+  // selected user
+  const [selected, setSelected] = React.useState<AccountUser | null>(null)
 
-    // create form
-    const [cName, setCName] = React.useState("")
-    const [cEmail, setCEmail] = React.useState("")
-    const [cPassword, setCPassword] = React.useState("")
-    const [cRole, setCRole] = React.useState<AccountRole>("STAFF")
+  // create form
+  const [cName, setCName] = React.useState("")
+  const [cEmail, setCEmail] = React.useState("")
+  const [cPassword, setCPassword] = React.useState("")
+  const [cRole, setCRole] = React.useState<StaffAccountRole>("STAFF")
 
-    // edit form
-    const [eName, setEName] = React.useState("")
-    const [eRole, setERole] = React.useState<AccountRole>("STAFF")
-    const [eActive, setEActive] = React.useState(true)
+  // edit form
+  const [eName, setEName] = React.useState("")
+  const [eRole, setERole] = React.useState<EditableRole>("STAFF")
+  const [eActive, setEActive] = React.useState(true)
 
-    // reset password form
-    const [newPassword, setNewPassword] = React.useState("")
+  // reset credential form
+  const [newPassword, setNewPassword] = React.useState("")
 
-    const fetchAll = React.useCallback(async () => {
-        setLoading(true)
-        try {
-            const staffRes = await adminApi.listStaff()
-            setUsers((staffRes.staff ?? []) as any)
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to load accounts."
-            toast.error(msg)
-        } finally {
-            setLoading(false)
-        }
-    }, [])
+  const editRoleOptions = React.useMemo<EditableRole[]>(() => {
+    const sourceRole = selected ? normalizeRole(selected.role ?? selected.type) : eRole
+    return getEditableRoleOptions(sourceRole)
+  }, [selected, eRole])
 
-    React.useEffect(() => {
-        void fetchAll()
-    }, [fetchAll])
+  const fetchAll = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await adminApi.listStaff()
 
-    const rows = React.useMemo<AccountRow[]>(() => {
-        return (users ?? []).map((u) => {
-            const role = (u.role ?? "STAFF") as AccountRole
-            return {
-                ...u,
-                role,
-            }
-        })
-    }, [users])
+      // Backward + forward compatible payload handling:
+      // - { staff: [...] } (legacy)
+      // - { users: [...] } (optional newer shape)
+      const listRaw = Array.isArray((res as any)?.staff)
+        ? (res as any).staff
+        : Array.isArray((res as any)?.users)
+          ? (res as any).users
+          : []
 
-    const filtered = React.useMemo(() => {
-        const query = q.trim().toLowerCase()
+      const normalized = (listRaw as any[]).map((u) => ({
+        ...u,
+        name: typeof u?.name === "string" && u.name.trim() ? u.name : "—",
+        email: typeof u?.email === "string" ? u.email : "",
+        active: Boolean(u?.active),
+        role: normalizeRole(u?.role ?? u?.type),
+        readOnly: Boolean(u?.readOnly),
+      }))
 
-        return rows
-            .filter((u) => {
-                if (tab === "active" && !u.active) return false
-                if (tab === "inactive" && u.active) return false
+      setUsers(normalized as AccountUser[])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to load accounts."
+      toast.error(msg)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-                if (!query) return true
-                const hay = `${u.name} ${u.email}`.toLowerCase()
-                return hay.includes(query)
-            })
-            .sort((a, b) => (a.active === b.active ? a.name.localeCompare(b.name) : a.active ? -1 : 1))
-    }, [rows, q, tab])
+  React.useEffect(() => {
+    void fetchAll()
+  }, [fetchAll])
 
-    function openEdit(u: AccountRow) {
-        setSelected(u)
-        setEName(u.name ?? "")
-        setEActive(!!u.active)
-        setERole(u.role ?? "STAFF")
-        setEditOpen(true)
+  const rows = React.useMemo<AccountRow[]>(() => {
+    return (users ?? []).map((u) => {
+      const role = normalizeRole(u.role ?? u.type)
+      return {
+        ...u,
+        role,
+      }
+    })
+  }, [users])
+
+  const filtered = React.useMemo(() => {
+    const query = q.trim().toLowerCase()
+
+    return rows
+      .filter((u) => {
+        if (tab === "active" && !u.active) return false
+        if (tab === "inactive" && u.active) return false
+
+        if (!query) return true
+        const hay = `${u.name} ${u.email} ${u.role}`.toLowerCase()
+        return hay.includes(query)
+      })
+      .sort((a, b) => (a.active === b.active ? a.name.localeCompare(b.name) : a.active ? -1 : 1))
+  }, [rows, q, tab])
+
+  function openEdit(u: AccountRow) {
+    setSelected(u)
+    setEName(u.name ?? "")
+    setEActive(!!u.active)
+    setERole(u.role)
+    setEditOpen(true)
+  }
+
+  function openReset(u: AccountUser) {
+    if (isReadOnlyAccount(u)) {
+      toast.message("Credential reset is not available for this account type from this page.")
+      return
     }
 
-    function openReset(u: AccountUser) {
-        setSelected(u)
-        setNewPassword("")
-        setResetOpen(true)
+    setSelected(u)
+    setNewPassword("")
+    setResetOpen(true)
+  }
+
+  function openDelete(u: AccountUser) {
+    if (isReadOnlyAccount(u)) {
+      toast.message("Delete is not available for this account type from this page.")
+      return
     }
 
-    function openDelete(u: AccountUser) {
-        setSelected(u)
-        setDeleteOpen(true)
+    setSelected(u)
+    setDeleteOpen(true)
+  }
+
+  function resetCreateForm() {
+    setCName("")
+    setCEmail("")
+    setCPassword("")
+    setCRole("STAFF")
+  }
+
+  async function handleCreate() {
+    const name = cName.trim()
+    const email = cEmail.trim()
+    const password = cPassword
+
+    if (!name) return toast.error("Name is required.")
+    if (!email) return toast.error("Email is required.")
+    if (!password) return toast.error("Password is required.")
+
+    const payload: any = {
+      name,
+      email,
+      password,
+      role: cRole,
     }
 
-    function resetCreateForm() {
-        setCName("")
-        setCEmail("")
-        setCPassword("")
-        setCRole("STAFF")
+    setSaving(true)
+    try {
+      await adminApi.createStaff(payload)
+      toast.success("Account created.")
+      setCreateOpen(false)
+      resetCreateForm()
+      await fetchAll()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to create account."
+      toast.error(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleSaveEdit() {
+    if (!selected) return
+    const id = userId(selected)
+    if (!id) return toast.error("Invalid user id.")
+
+    const name = eName.trim()
+    if (!name) return toast.error("Name is required.")
+
+    const payload: Record<string, unknown> = {
+      name,
+      active: eActive,
+      role: eRole,
     }
 
-    async function handleCreate() {
-        const name = cName.trim()
-        const email = cEmail.trim()
-        const password = cPassword
+    setSaving(true)
+    try {
+      await adminApi.updateStaff(id, payload as any)
+      toast.success("Account updated.")
+      setEditOpen(false)
+      setSelected(null)
+      await fetchAll()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to update account."
+      toast.error(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
 
-        if (!name) return toast.error("Name is required.")
-        if (!email) return toast.error("Email is required.")
-        if (!password) return toast.error("Password is required.")
-
-        const payload: any = {
-            name,
-            email,
-            password,
-            role: cRole,
-        }
-
-        setSaving(true)
-        try {
-            await adminApi.createStaff(payload)
-            toast.success("Account created.")
-            setCreateOpen(false)
-            resetCreateForm()
-            await fetchAll()
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to create account."
-            toast.error(msg)
-        } finally {
-            setSaving(false)
-        }
+  async function handleResetPassword() {
+    if (!selected) return
+    if (isReadOnlyAccount(selected)) {
+      return toast.message("Credential reset is not available for this account type from this page.")
     }
 
-    async function handleSaveEdit() {
-        if (!selected) return
-        const id = userId(selected)
-        if (!id) return toast.error("Invalid user id.")
+    const id = userId(selected)
+    if (!id) return toast.error("Invalid user id.")
+    if (!newPassword) return toast.error("New credential is required.")
 
-        const name = eName.trim()
-        if (!name) return toast.error("Name is required.")
+    setSaving(true)
+    try {
+      await adminApi.updateStaff(id, { password: newPassword })
+      toast.success("Credential updated.")
+      setResetOpen(false)
+      setSelected(null)
+      setNewPassword("")
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to update credential."
+      toast.error(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
 
-        const payload: Record<string, unknown> = {
-            name,
-            active: eActive,
-            role: eRole,
-        }
-
-        setSaving(true)
-        try {
-            await adminApi.updateStaff(id, payload as any)
-            toast.success("Account updated.")
-            setEditOpen(false)
-            setSelected(null)
-            await fetchAll()
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to update account."
-            toast.error(msg)
-        } finally {
-            setSaving(false)
-        }
+  async function handleDeleteAccount() {
+    if (!selected) return
+    if (isReadOnlyAccount(selected)) {
+      return toast.message("Delete is not available for this account type from this page.")
     }
 
-    async function handleResetPassword() {
-        if (!selected) return
-        const id = userId(selected)
-        if (!id) return toast.error("Invalid user id.")
-        if (!newPassword) return toast.error("New password is required.")
+    const id = userId(selected)
+    if (!id) return toast.error("Invalid user id.")
 
-        setSaving(true)
-        try {
-            await adminApi.updateStaff(id, { password: newPassword })
-            toast.success("Password updated.")
-            setResetOpen(false)
-            setSelected(null)
-            setNewPassword("")
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to update password."
-            toast.error(msg)
-        } finally {
-            setSaving(false)
-        }
+    setSaving(true)
+    try {
+      const apiAny = api as any
+
+      if (typeof apiAny.delete === "function") {
+        await apiAny.delete(`/admin/staff/${id}`)
+      } else if (typeof apiAny.del === "function") {
+        await apiAny.del(`/admin/staff/${id}`)
+      } else {
+        await adminApi.updateStaff(id, { active: false })
+      }
+
+      toast.success("Account removed.")
+      setDeleteOpen(false)
+      setSelected(null)
+      await fetchAll()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to delete account."
+      toast.error(msg)
+    } finally {
+      setSaving(false)
     }
+  }
 
-    async function handleDeleteAccount() {
-        if (!selected) return
-        const id = userId(selected)
-        if (!id) return toast.error("Invalid user id.")
+  const stats = React.useMemo(() => {
+    const total = rows.length
+    const active = rows.filter((s) => s.active).length
+    const inactive = total - active
 
-        setSaving(true)
-        try {
-            const apiAny = api as any
+    const byRole = rows.reduce(
+      (acc, row) => {
+        acc[row.role] += 1
+        return acc
+      },
+      {
+        ADMIN: 0,
+        STAFF: 0,
+        STUDENT: 0,
+        ALUMNI_VISITOR: 0,
+        GUEST: 0,
+      } as Record<AccountRole, number>,
+    )
 
-            if (typeof apiAny.delete === "function") {
-                await apiAny.delete(`/admin/staff/${id}`)
-            } else if (typeof apiAny.del === "function") {
-                await apiAny.del(`/admin/staff/${id}`)
-            } else {
-                await adminApi.updateStaff(id, { active: false })
-            }
+    return { total, active, inactive, byRole }
+  }, [rows])
 
-            toast.success("Account removed.")
-            setDeleteOpen(false)
-            setSelected(null)
-            await fetchAll()
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to delete account."
-            toast.error(msg)
-        } finally {
-            setSaving(false)
-        }
-    }
+  return (
+    <DashboardLayout title="Accounts" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+      <div className="grid w-full min-w-0 grid-cols-1 gap-6">
+        <Card className="min-w-0">
+          <CardHeader className="gap-2">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="min-w-0">
+                <CardTitle>Account Management</CardTitle>
+                <CardDescription>
+                  Displaying all users (ADMIN, STAFF, STUDENT, ALUMNI/VISITOR, and GUEST).
+                </CardDescription>
+              </div>
 
-    const stats = React.useMemo(() => {
-        const total = rows.length
-        const active = rows.filter((s) => s.active).length
-        const inactive = total - active
-        return { total, active, inactive }
-    }, [rows])
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                <Button
+                  variant="outline"
+                  onClick={() => void fetchAll()}
+                  disabled={loading || saving}
+                  className="w-full gap-2 sm:w-auto"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh
+                </Button>
 
-    return (
-        <DashboardLayout title="Accounts" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
-            <div className="grid w-full min-w-0 grid-cols-1 gap-6">
-                <Card className="min-w-0">
-                    <CardHeader className="gap-2">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div className="min-w-0">
-                                <CardTitle>Account Management</CardTitle>
-                                <CardDescription>
-                                    Create users, update roles, reset passwords, and manage account access.
-                                </CardDescription>
-                            </div>
-
-                            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                                <Button
-                                    variant="outline"
-                                    onClick={() => void fetchAll()}
-                                    disabled={loading || saving}
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <RefreshCw className="h-4 w-4" />
-                                    Refresh
-                                </Button>
-
-                                <Button
-                                    onClick={() => {
-                                        resetCreateForm()
-                                        setCreateOpen(true)
-                                    }}
-                                    className="w-full gap-2 sm:w-auto"
-                                    disabled={saving}
-                                >
-                                    <Plus className="h-4 w-4" />
-                                    New user
-                                </Button>
-                            </div>
-                        </div>
-
-                        <Separator />
-
-                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
-                                <Input
-                                    value={q}
-                                    onChange={(e) => setQ(e.target.value)}
-                                    placeholder="Search name or email…"
-                                    className="w-full min-w-0 sm:w-80"
-                                />
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <Badge variant="secondary">Total: {stats.total}</Badge>
-                                <Badge variant="default">Active: {stats.active}</Badge>
-                                <Badge variant="secondary">Inactive: {stats.inactive}</Badge>
-                            </div>
-                        </div>
-                    </CardHeader>
-
-                    <CardContent className="min-w-0">
-                        <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
-                            <TabsList className="grid w-full grid-cols-3 md:w-90">
-                                <TabsTrigger value="all">All</TabsTrigger>
-                                <TabsTrigger value="active">Active</TabsTrigger>
-                                <TabsTrigger value="inactive">Inactive</TabsTrigger>
-                            </TabsList>
-
-                            <TabsContent value={tab} className="mt-4">
-                                {loading ? (
-                                    <div className="space-y-3">
-                                        <Skeleton className="h-10 w-full" />
-                                        <Skeleton className="h-10 w-full" />
-                                        <Skeleton className="h-10 w-full" />
-                                        <Skeleton className="h-10 w-full" />
-                                    </div>
-                                ) : (
-                                    <div className="overflow-x-auto rounded-lg border">
-                                        <Table>
-                                            <TableHeader>
-                                                <TableRow>
-                                                    <TableHead>Name</TableHead>
-                                                    <TableHead className="hidden md:table-cell">Email</TableHead>
-                                                    <TableHead>Role</TableHead>
-                                                    <TableHead className="text-right">Status</TableHead>
-                                                    <TableHead className="w-14" />
-                                                </TableRow>
-                                            </TableHeader>
-
-                                            <TableBody>
-                                                {filtered.map((u) => {
-                                                    const id = userId(u) || u.email
-                                                    const role = (u.role ?? "STAFF") as AccountRole
-
-                                                    return (
-                                                        <TableRow key={id}>
-                                                            <TableCell className="font-medium">
-                                                                <div className="flex min-w-0 flex-col">
-                                                                    <span className="truncate">{u.name}</span>
-                                                                    <span className="truncate text-xs text-muted-foreground md:hidden">
-                                                                        {u.email}
-                                                                    </span>
-                                                                </div>
-                                                            </TableCell>
-
-                                                            <TableCell className="hidden md:table-cell">
-                                                                <span className="text-muted-foreground">{u.email}</span>
-                                                            </TableCell>
-
-                                                            <TableCell>{roleBadge(role)}</TableCell>
-
-                                                            <TableCell className="text-right">
-                                                                <Badge variant={u.active ? "default" : "secondary"}>
-                                                                    {u.active ? "Active" : "Inactive"}
-                                                                </Badge>
-                                                            </TableCell>
-
-                                                            <TableCell className="text-right">
-                                                                <DropdownMenu>
-                                                                    <DropdownMenuTrigger asChild>
-                                                                        <Button variant="ghost" size="icon" aria-label="Row actions">
-                                                                            <MoreHorizontal className="h-4 w-4" />
-                                                                        </Button>
-                                                                    </DropdownMenuTrigger>
-
-                                                                    <DropdownMenuContent align="end" className="w-52">
-                                                                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                                                                        <DropdownMenuSeparator />
-
-                                                                        <DropdownMenuItem
-                                                                            onClick={() => openEdit(u)}
-                                                                            className="cursor-pointer"
-                                                                        >
-                                                                            Edit account
-                                                                        </DropdownMenuItem>
-
-                                                                        <DropdownMenuItem
-                                                                            onClick={() => openReset(u)}
-                                                                            className="cursor-pointer"
-                                                                        >
-                                                                            Reset password
-                                                                        </DropdownMenuItem>
-
-                                                                        <DropdownMenuSeparator />
-
-                                                                        <DropdownMenuItem
-                                                                            onClick={() => openDelete(u)}
-                                                                            className="cursor-pointer text-destructive focus:text-destructive"
-                                                                        >
-                                                                            Delete account
-                                                                        </DropdownMenuItem>
-                                                                    </DropdownMenuContent>
-                                                                </DropdownMenu>
-                                                            </TableCell>
-                                                        </TableRow>
-                                                    )
-                                                })}
-
-                                                {filtered.length === 0 ? (
-                                                    <TableRow>
-                                                        <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                                                            No accounts match your filters.
-                                                        </TableCell>
-                                                    </TableRow>
-                                                ) : null}
-                                            </TableBody>
-                                        </Table>
-                                    </div>
-                                )}
-                            </TabsContent>
-                        </Tabs>
-                    </CardContent>
-                </Card>
+                <Button
+                  onClick={() => {
+                    resetCreateForm()
+                    setCreateOpen(true)
+                  }}
+                  className="w-full gap-2 sm:w-auto"
+                  disabled={saving}
+                >
+                  <Plus className="h-4 w-4" />
+                  New user
+                </Button>
+              </div>
             </div>
 
-            {/* Create dialog */}
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-                <DialogContent className="sm:max-w-lg flex max-h-[85vh] flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
-                    <DialogHeader>
-                        <DialogTitle>Create new user</DialogTitle>
-                    </DialogHeader>
+            <Separator />
 
-                    <div className="grid flex-1 gap-4 overflow-y-auto pr-1 sm:overflow-visible sm:pr-0">
-                        <div className="grid gap-2">
-                            <Label htmlFor="c-name">Name</Label>
-                            <Input
-                                id="c-name"
-                                value={cName}
-                                onChange={(e) => setCName(e.target.value)}
-                                placeholder="Full name"
-                            />
-                        </div>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+                <Input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Search name, email, or role…"
+                  className="w-full min-w-0 sm:w-80"
+                />
+              </div>
 
-                        <div className="grid gap-2">
-                            <Label htmlFor="c-email">Email</Label>
-                            <Input
-                                id="c-email"
-                                value={cEmail}
-                                onChange={(e) => setCEmail(e.target.value)}
-                                placeholder="name@school.edu"
-                                type="email"
-                                autoComplete="email"
-                            />
-                        </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant="secondary">Total: {stats.total}</Badge>
+                <Badge variant="default">Active: {stats.active}</Badge>
+                <Badge variant="secondary">Inactive: {stats.inactive}</Badge>
+              </div>
+            </div>
 
-                        <div className="grid gap-2">
-                            <Label htmlFor="c-password">Temporary password</Label>
-                            <Input
-                                id="c-password"
-                                value={cPassword}
-                                onChange={(e) => setCPassword(e.target.value)}
-                                placeholder="Set an initial password"
-                                type="password"
-                                autoComplete="new-password"
-                            />
-                        </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {ROLE_ORDER.map((r) => (
+                <Badge key={r} variant="outline" className="gap-1">
+                  {r === "ALUMNI_VISITOR" ? "ALUMNI/VISITOR" : r}: {stats.byRole[r]}
+                </Badge>
+              ))}
+            </div>
+          </CardHeader>
 
-                        <div className="grid gap-2">
-                            <Label>Role</Label>
-                            <Select value={cRole} onValueChange={(v) => setCRole(v as AccountRole)}>
-                                <SelectTrigger className="w-full min-w-0">
-                                    <SelectValue placeholder="Select role" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="STAFF">STAFF</SelectItem>
-                                    <SelectItem value="ADMIN">ADMIN</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
+          <CardContent className="min-w-0">
+            <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
+              <TabsList className="grid w-full grid-cols-3 md:w-90">
+                <TabsTrigger value="all">All</TabsTrigger>
+                <TabsTrigger value="active">Active</TabsTrigger>
+                <TabsTrigger value="inactive">Inactive</TabsTrigger>
+              </TabsList>
 
-                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => {
-                                setCreateOpen(false)
-                                resetCreateForm()
-                            }}
-                            disabled={saving}
-                            className="w-full sm:w-auto sm:mr-2"
-                        >
-                            Cancel
-                        </Button>
+              <TabsContent value={tab} className="mt-4">
+                {loading ? (
+                  <div className="space-y-3">
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead className="hidden md:table-cell">Email</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                          <TableHead className="w-14" />
+                        </TableRow>
+                      </TableHeader>
 
-                        <Button
-                            type="button"
-                            onClick={() => void handleCreate()}
-                            disabled={saving}
-                            className="w-full sm:w-auto"
-                        >
-                            {saving ? "Creating…" : "Create user"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                      <TableBody>
+                        {filtered.map((u) => {
+                          const id = userId(u) || `${u.email}-${u.name}`
+                          const role = normalizeRole(u.role)
+                          const emailDisplay = u.email?.trim() ? u.email : "—"
+                          const readOnly = isReadOnlyAccount(u)
 
-            {/* Edit dialog */}
-            <Dialog open={editOpen} onOpenChange={setEditOpen}>
-                <DialogContent className="sm:max-w-lg">
-                    <DialogHeader>
-                        <DialogTitle>Edit account</DialogTitle>
-                    </DialogHeader>
+                          return (
+                            <TableRow key={id}>
+                              <TableCell className="font-medium">
+                                <div className="flex min-w-0 flex-col">
+                                  <span className="truncate">{u.name}</span>
+                                  <span className="truncate text-xs text-muted-foreground md:hidden">{emailDisplay}</span>
+                                </div>
+                              </TableCell>
 
-                    <div className="grid gap-4">
-                        <div className="grid gap-2">
-                            <Label htmlFor="e-name">Name</Label>
-                            <Input id="e-name" value={eName} onChange={(e) => setEName(e.target.value)} />
-                        </div>
+                              <TableCell className="hidden md:table-cell">
+                                <span className="text-muted-foreground">{emailDisplay}</span>
+                              </TableCell>
 
-                        <div className="grid gap-2">
-                            <Label>Email</Label>
-                            <Input value={selected?.email ?? ""} readOnly />
-                        </div>
+                              <TableCell>{roleBadge(role)}</TableCell>
 
-                        <div className="grid gap-2">
-                            <Label>Role</Label>
-                            <Select value={eRole} onValueChange={(v) => setERole(v as AccountRole)}>
-                                <SelectTrigger className="w-full min-w-0">
-                                    <SelectValue placeholder="Select role" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="STAFF">STAFF</SelectItem>
-                                    <SelectItem value="ADMIN">ADMIN</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
+                              <TableCell className="text-right">
+                                <Badge variant={u.active ? "default" : "secondary"}>{u.active ? "Active" : "Inactive"}</Badge>
+                              </TableCell>
 
-                        <div className="flex items-center justify-between rounded-lg border p-3">
-                            <div className="grid gap-0.5">
-                                <div className="text-sm font-medium">Active</div>
-                                <div className="text-xs text-muted-foreground">Disable to block login without deleting.</div>
-                            </div>
-                            <Switch checked={eActive} onCheckedChange={setEActive} />
-                        </div>
-                    </div>
+                              <TableCell className="text-right">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="icon" aria-label="Row actions">
+                                      <MoreHorizontal className="h-4 w-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
 
-                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => {
-                                setEditOpen(false)
-                                setSelected(null)
-                            }}
-                            disabled={saving}
-                            className="w-full sm:w-auto sm:mr-2"
-                        >
-                            Cancel
-                        </Button>
+                                  <DropdownMenuContent align="end" className="w-56">
+                                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
 
-                        <Button type="button" onClick={() => void handleSaveEdit()} disabled={saving} className="w-full sm:w-auto">
-                            {saving ? "Saving…" : "Save changes"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                                    <DropdownMenuItem onClick={() => openEdit(u)} className="cursor-pointer">
+                                      Edit role/account
+                                    </DropdownMenuItem>
 
-            {/* Reset password dialog */}
-            <Dialog open={resetOpen} onOpenChange={setResetOpen}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>Reset password</DialogTitle>
-                    </DialogHeader>
+                                    {readOnly ? (
+                                      <DropdownMenuItem disabled>Reset credential unavailable</DropdownMenuItem>
+                                    ) : (
+                                      <DropdownMenuItem onClick={() => openReset(u)} className="cursor-pointer">
+                                        Reset credential
+                                      </DropdownMenuItem>
+                                    )}
 
-                    <div className="grid gap-2">
-                        <Label htmlFor="new-password">New password</Label>
-                        <Input
-                            id="new-password"
-                            type="password"
-                            autoComplete="new-password"
-                            value={newPassword}
-                            onChange={(e) => setNewPassword(e.target.value)}
-                            placeholder="Enter a new password"
-                        />
-                    </div>
+                                    <DropdownMenuSeparator />
 
-                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => {
-                                setResetOpen(false)
-                                setSelected(null)
-                                setNewPassword("")
-                            }}
-                            disabled={saving}
-                            className="w-full sm:w-auto sm:mr-2"
-                        >
-                            Cancel
-                        </Button>
+                                    {readOnly ? (
+                                      <DropdownMenuItem disabled>Delete unavailable</DropdownMenuItem>
+                                    ) : (
+                                      <DropdownMenuItem
+                                        onClick={() => openDelete(u)}
+                                        className="cursor-pointer text-destructive focus:text-destructive"
+                                      >
+                                        Delete account
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
 
-                        <Button
-                            type="button"
-                            onClick={() => void handleResetPassword()}
-                            disabled={saving}
-                            className="w-full sm:w-auto"
-                        >
-                            {saving ? "Updating…" : "Update password"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                        {filtered.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+                              No accounts match your filters.
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+      </div>
 
-            {/* Delete confirm */}
-            <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Delete account?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            This will remove the user (or disable them if your client can’t send DELETE).
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
+      {/* Create dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-lg flex max-h-[85vh] flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
+          <DialogHeader>
+            <DialogTitle>Create new user</DialogTitle>
+          </DialogHeader>
 
-                    <AlertDialogFooter>
-                        <AlertDialogCancel
-                            disabled={saving}
-                            onClick={() => {
-                                setDeleteOpen(false)
-                                setSelected(null)
-                            }}
-                        >
-                            Cancel
-                        </AlertDialogCancel>
+          <div className="grid flex-1 gap-4 overflow-y-auto pr-1 sm:overflow-visible sm:pr-0">
+            <div className="grid gap-2">
+              <Label htmlFor="c-name">Name</Label>
+              <Input id="c-name" value={cName} onChange={(e) => setCName(e.target.value)} placeholder="Full name" />
+            </div>
 
-                        <AlertDialogAction
-                            disabled={saving}
-                            onClick={(e) => {
-                                e.preventDefault()
-                                void handleDeleteAccount()
-                            }}
-                            className="bg-destructive text-white hover:bg-destructive/90"
-                        >
-                            {saving ? "Deleting…" : "Delete"}
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-        </DashboardLayout>
-    )
+            <div className="grid gap-2">
+              <Label htmlFor="c-email">Email</Label>
+              <Input
+                id="c-email"
+                value={cEmail}
+                onChange={(e) => setCEmail(e.target.value)}
+                placeholder="name@school.edu"
+                type="email"
+                autoComplete="email"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="c-password">Temporary password</Label>
+              <Input
+                id="c-password"
+                value={cPassword}
+                onChange={(e) => setCPassword(e.target.value)}
+                placeholder="Set an initial password"
+                type="password"
+                autoComplete="new-password"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Role</Label>
+              <Select value={cRole} onValueChange={(v) => setCRole(v as StaffAccountRole)}>
+                <SelectTrigger className="w-full min-w-0">
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="STAFF">STAFF</SelectItem>
+                  <SelectItem value="ADMIN">ADMIN</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setCreateOpen(false)
+                resetCreateForm()
+              }}
+              disabled={saving}
+              className="w-full sm:w-auto sm:mr-2"
+            >
+              Cancel
+            </Button>
+
+            <Button type="button" onClick={() => void handleCreate()} disabled={saving} className="w-full sm:w-auto">
+              {saving ? "Creating…" : "Create user"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit account</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="e-name">Name</Label>
+              <Input id="e-name" value={eName} onChange={(e) => setEName(e.target.value)} />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Email</Label>
+              <Input value={selected?.email ?? ""} readOnly />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Role</Label>
+              <Select value={eRole} onValueChange={(v) => setERole(v as EditableRole)}>
+                <SelectTrigger className="w-full min-w-0">
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  {editRoleOptions.map((role) => (
+                    <SelectItem key={role} value={role}>
+                      {roleOptionLabel(role)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="grid gap-0.5">
+                <div className="text-sm font-medium">Active</div>
+                <div className="text-xs text-muted-foreground">Disable to block login without deleting.</div>
+              </div>
+              <Switch checked={eActive} onCheckedChange={setEActive} />
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setEditOpen(false)
+                setSelected(null)
+              }}
+              disabled={saving}
+              className="w-full sm:w-auto sm:mr-2"
+            >
+              Cancel
+            </Button>
+
+            <Button type="button" onClick={() => void handleSaveEdit()} disabled={saving} className="w-full sm:w-auto">
+              {saving ? "Saving…" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset credential dialog */}
+      <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset credential</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-2">
+            <Label htmlFor="new-password">New credential</Label>
+            <Input
+              id="new-password"
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Enter a new credential"
+            />
+          </div>
+
+          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setResetOpen(false)
+                setSelected(null)
+                setNewPassword("")
+              }}
+              disabled={saving}
+              className="w-full sm:w-auto sm:mr-2"
+            >
+              Cancel
+            </Button>
+
+            <Button type="button" onClick={() => void handleResetPassword()} disabled={saving} className="w-full sm:w-auto">
+              {saving ? "Updating…" : "Update credential"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm */}
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove the user (or disable them if your client can’t send DELETE).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={saving}
+              onClick={() => {
+                setDeleteOpen(false)
+                setSelected(null)
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+
+            <AlertDialogAction
+              disabled={saving}
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeleteAccount()
+              }}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              {saving ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </DashboardLayout>
+  )
 }

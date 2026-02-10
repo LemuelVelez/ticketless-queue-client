@@ -25,6 +25,69 @@ function normalizeMobile(value: string) {
     return value.replace(/[^\d+]/g, "").trim()
 }
 
+function normalizeTransactionKey(value: unknown) {
+    const raw = String(value ?? "").trim().toLowerCase()
+    if (!raw) return ""
+    return raw.replace(/[_\s]+/g, "-")
+}
+
+function normalizeAvailableTransactions(list: ParticipantTransaction[]) {
+    const out: ParticipantTransaction[] = []
+    const seen = new Set<string>()
+
+    for (const tx of list) {
+        const rawKey = pickNonEmptyString(tx?.key)
+        const normalized = normalizeTransactionKey(rawKey)
+        if (!rawKey || !normalized || seen.has(normalized)) continue
+        seen.add(normalized)
+
+        out.push({
+            ...tx,
+            key: rawKey,
+        })
+    }
+
+    return out
+}
+
+function mapSelectionToAvailableKeys(
+    keys: string[],
+    availableTransactions: ParticipantTransaction[],
+): string[] {
+    const normalizedToExact = new Map<string, string>()
+
+    for (const tx of availableTransactions) {
+        const rawKey = pickNonEmptyString(tx?.key)
+        const normalized = normalizeTransactionKey(rawKey)
+        if (!rawKey || !normalized || normalizedToExact.has(normalized)) continue
+        normalizedToExact.set(normalized, rawKey)
+    }
+
+    const out: string[] = []
+    const seen = new Set<string>()
+
+    for (const key of keys) {
+        const normalized = normalizeTransactionKey(key)
+        if (!normalized) continue
+
+        const exact = normalizedToExact.get(normalized)
+        if (!exact || seen.has(exact)) continue
+
+        seen.add(exact)
+        out.push(exact)
+    }
+
+    return out
+}
+
+function sameStringArray(a: string[], b: string[]) {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false
+    }
+    return true
+}
+
 function deptNameFromTicketDepartment(dept: any, fallback?: string) {
     if (!dept) return fallback ?? "—"
     if (typeof dept === "string") return fallback ?? "—"
@@ -77,6 +140,8 @@ export default function StudentJoinPage() {
     const [busy, setBusy] = React.useState(false)
     const [ticket, setTicket] = React.useState<Ticket | null>(null)
 
+    const isSessionFlow = Boolean(participant)
+
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
         [departments, departmentId],
@@ -92,8 +157,18 @@ export default function StudentJoinPage() {
         if (departmentId) q.set("departmentId", departmentId)
         if (studentId.trim()) q.set("studentId", studentId.trim())
         const qsStr = q.toString()
-        return `/queue/my-tickets${qsStr ? `?${qsStr}` : ""}`
+        return `/student/my-tickets${qsStr ? `?${qsStr}` : ""}`
     }, [departmentId, studentId])
+
+    const selectedForSubmit = React.useMemo(
+        () => mapSelectionToAvailableKeys(selectedTransactions, availableTransactions),
+        [selectedTransactions, availableTransactions],
+    )
+
+    const selectedTransactionSet = React.useMemo(
+        () => new Set(selectedForSubmit),
+        [selectedForSubmit],
+    )
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -109,33 +184,48 @@ export default function StudentJoinPage() {
         }
     }, [])
 
-    const loadSession = React.useCallback(async () => {
-        setLoadingSession(true)
-        try {
-            const res = await studentApi.getSession()
-            const p = (res.participant ?? null) as any
-            const tx = (res.availableTransactions ?? []).filter((x) => pickNonEmptyString(x?.key))
+    const loadSession = React.useCallback(
+        async (opts?: { departmentId?: string; silent?: boolean; preserveDepartment?: boolean }) => {
+            const silent = Boolean(opts?.silent)
 
-            setParticipant(p)
-            setAvailableTransactions(tx)
+            if (!silent) setLoadingSession(true)
+            try {
+                const res = await studentApi.getSession({
+                    departmentId: pickNonEmptyString(opts?.departmentId),
+                })
 
-            const sid = pickNonEmptyString(p?.tcNumber) || pickNonEmptyString(p?.studentId)
-            const mobile = pickNonEmptyString(p?.mobileNumber) || pickNonEmptyString(p?.phone)
-            const dept = pickNonEmptyString(p?.departmentId)
+                const p = (res.participant ?? null) as any
+                const tx = normalizeAvailableTransactions(
+                    (res.availableTransactions ?? []).filter((x) => pickNonEmptyString(x?.key)),
+                )
 
-            if (sid) setStudentId((prev) => prev || sid)
-            if (mobile) setPhone((prev) => prev || mobile)
-            if (dept) {
-                setSessionDepartmentId(dept)
-                setDepartmentId((prev) => prev || dept)
+                setParticipant(p)
+                setAvailableTransactions(tx)
+                setSelectedTransactions((prev) => mapSelectionToAvailableKeys(prev, tx))
+
+                const sid = pickNonEmptyString(p?.tcNumber) || pickNonEmptyString(p?.studentId)
+                const mobile = pickNonEmptyString(p?.mobileNumber) || pickNonEmptyString(p?.phone)
+                const dept = pickNonEmptyString(p?.departmentId)
+
+                if (sid) setStudentId((prev) => prev || sid)
+                if (mobile) setPhone((prev) => prev || mobile)
+
+                if (!opts?.preserveDepartment && dept) {
+                    setSessionDepartmentId(dept)
+                    setDepartmentId((prev) => prev || dept)
+                }
+            } catch {
+                if (!silent) {
+                    setParticipant(null)
+                    setAvailableTransactions([])
+                    setSelectedTransactions([])
+                }
+            } finally {
+                if (!silent) setLoadingSession(false)
             }
-        } catch {
-            setParticipant(null)
-            setAvailableTransactions([])
-        } finally {
-            setLoadingSession(false)
-        }
-    }, [])
+        },
+        [],
+    )
 
     const loadTicketById = React.useCallback(async () => {
         if (!ticketId) return
@@ -187,6 +277,28 @@ export default function StudentJoinPage() {
         void loadTicketById()
     }, [loadTicketById])
 
+    React.useEffect(() => {
+        if (loadingSession) return
+        if (!isSessionFlow) return
+        if (!departmentId) return
+
+        void loadSession({
+            departmentId,
+            silent: true,
+            preserveDepartment: true,
+        })
+    }, [loadingSession, isSessionFlow, departmentId, loadSession])
+
+    React.useEffect(() => {
+        if (!isSessionFlow) return
+        if (!availableTransactions.length) return
+
+        setSelectedTransactions((prev) => {
+            const normalized = mapSelectionToAvailableKeys(prev, availableTransactions)
+            return sameStringArray(prev, normalized) ? prev : normalized
+        })
+    }, [isSessionFlow, availableTransactions])
+
     async function onFindActive() {
         const sid = studentId.trim()
         if (!departmentId) return toast.error("Please select a department.")
@@ -217,12 +329,15 @@ export default function StudentJoinPage() {
         if (!sid) return toast.error("Student ID is required.")
         if (!ph) return toast.error("Phone number is required.")
 
-        const isSessionFlow = !!participant
         if (isSessionFlow && !availableTransactions.length) {
-            return toast.error("No queue purpose is available for this account.")
+            return toast.error("No queue purpose is available for this account and department.")
         }
-        if (isSessionFlow && !selectedTransactions.length) {
+        if (isSessionFlow && !selectedForSubmit.length) {
             return toast.error("Please select at least one queue purpose.")
+        }
+
+        if (isSessionFlow && !sameStringArray(selectedTransactions, selectedForSubmit)) {
+            setSelectedTransactions(selectedForSubmit)
         }
 
         setBusy(true)
@@ -233,7 +348,7 @@ export default function StudentJoinPage() {
                         departmentId,
                         studentId: sid,
                         phone: ph,
-                        transactionKeys: selectedTransactions,
+                        transactionKeys: selectedForSubmit,
                     }
                     : {
                         departmentId,
@@ -252,6 +367,18 @@ export default function StudentJoinPage() {
                 toast.message("You already have an active ticket for today.")
                 return
             }
+
+            const msg = String(e?.message ?? "")
+            if (msg.toLowerCase().includes("invalid transaction selection")) {
+                await loadSession({
+                    departmentId,
+                    silent: true,
+                    preserveDepartment: true,
+                })
+                toast.error("Selected queue purpose is not available for the chosen department. Please reselect and try again.")
+                return
+            }
+
             toast.error(e?.message ?? "Failed to join queue.")
         } finally {
             setBusy(false)
@@ -353,8 +480,8 @@ export default function StudentJoinPage() {
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between gap-2">
                                             <Label>Purpose of Queue (Transaction)</Label>
-                                            {selectedTransactions.length ? (
-                                                <Badge variant="secondary">{selectedTransactions.length} selected</Badge>
+                                            {selectedForSubmit.length ? (
+                                                <Badge variant="secondary">{selectedForSubmit.length} selected</Badge>
                                             ) : null}
                                         </div>
 
@@ -368,7 +495,9 @@ export default function StudentJoinPage() {
                                                 <div className="grid gap-2 sm:grid-cols-2">
                                                     {availableTransactions.map((tx) => {
                                                         const txKey = pickNonEmptyString(tx?.key)
-                                                        const active = selectedTransactions.includes(txKey)
+                                                        if (!txKey) return null
+
+                                                        const active = selectedTransactionSet.has(txKey)
 
                                                         return (
                                                             <Button
@@ -377,9 +506,14 @@ export default function StudentJoinPage() {
                                                                 variant={active ? "default" : "outline"}
                                                                 className="h-auto justify-start whitespace-normal text-left"
                                                                 onClick={() =>
-                                                                    setSelectedTransactions((prev) => toggleKey(prev, txKey))
+                                                                    setSelectedTransactions((prev) =>
+                                                                        toggleKey(
+                                                                            mapSelectionToAvailableKeys(prev, availableTransactions),
+                                                                            txKey,
+                                                                        ),
+                                                                    )
                                                                 }
-                                                                disabled={busy || !txKey}
+                                                                disabled={busy}
                                                             >
                                                                 {tx.label}
                                                             </Button>
@@ -410,8 +544,8 @@ export default function StudentJoinPage() {
                                                 !departmentId ||
                                                 !studentId.trim() ||
                                                 !normalizeMobile(phone) ||
-                                                (!!participant &&
-                                                    (!availableTransactions.length || !selectedTransactions.length))
+                                                (isSessionFlow &&
+                                                    (!availableTransactions.length || !selectedForSubmit.length))
                                             }
                                         >
                                             {busy ? "Please wait…" : "Join Queue"}

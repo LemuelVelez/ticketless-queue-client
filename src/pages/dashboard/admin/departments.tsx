@@ -11,6 +11,7 @@ import {
     FolderTree,
     ClipboardList,
     Trash2,
+    Save,
 } from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
@@ -64,6 +65,93 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 const DEFAULT_MANAGER = "REGISTRAR"
+
+type DefaultRegistrarTransaction = {
+    key: string
+    label: string
+    scopes: TransactionScope[]
+    sortOrder: number
+}
+
+const DEFAULT_REGISTRAR_TRANSACTIONS: DefaultRegistrarTransaction[] = [
+    // Internal
+    { key: "correction-grade-entry", label: "Correction of Grade Entry", scopes: ["INTERNAL"], sortOrder: 1 },
+    {
+        key: "correction-personal-record",
+        label: "Correction of Personal Record",
+        scopes: ["INTERNAL", "EXTERNAL"],
+        sortOrder: 2,
+    },
+    {
+        key: "enrollment-validation-enrollment",
+        label: "Enrollment / Validation of Enrollment",
+        scopes: ["INTERNAL"],
+        sortOrder: 3,
+    },
+    {
+        key: "followup-request-submission-evaluation-documents-application-graduation",
+        label: "Follow-up / Request / Submission / Evaluation of Documents / Application for Graduation",
+        scopes: ["INTERNAL"],
+        sortOrder: 4,
+    },
+    {
+        key: "issuance-certificates-forms-authentication",
+        label: "Issuance of Certificates / Forms / Authentication",
+        scopes: ["INTERNAL", "EXTERNAL"],
+        sortOrder: 5,
+    },
+    {
+        key: "issuance-transcript-of-records-tor",
+        label: "Issuance of Transcript of Records (TOR)",
+        scopes: ["INTERNAL", "EXTERNAL"],
+        sortOrder: 6,
+    },
+    {
+        key: "processing-faculty-clearance",
+        label: "Processing Faculty Clearance",
+        scopes: ["INTERNAL", "EXTERNAL"],
+        sortOrder: 7,
+    },
+    {
+        key: "processing-inc-ng-adding-changing-dropping-subjects",
+        label: "Processing of INC/NG; Adding, Changing, and Dropping of Subjects",
+        scopes: ["INTERNAL"],
+        sortOrder: 8,
+    },
+    {
+        key: "processing-student-clearance",
+        label: "Processing of Student Clearance",
+        scopes: ["INTERNAL", "EXTERNAL"],
+        sortOrder: 9,
+    },
+    {
+        key: "release-instructors-program",
+        label: "Release of Instructor’s Program",
+        scopes: ["INTERNAL"],
+        sortOrder: 10,
+    },
+    {
+        key: "responding-to-requests-for-institutional-data",
+        label: "Responding to Requests for Institutional Data",
+        scopes: ["INTERNAL", "EXTERNAL"],
+        sortOrder: 11,
+    },
+
+    // External-only
+    {
+        key: "issuance-cav",
+        label: "Issuance of Certification, Verification, and Authentication (CAV)",
+        scopes: ["EXTERNAL"],
+        sortOrder: 12,
+    },
+    { key: "issuance-diploma", label: "Issuance of Diploma", scopes: ["EXTERNAL"], sortOrder: 13 },
+    {
+        key: "issuance-form-137-honorable-dismissal",
+        label: "Issuance of Form 137 / Honorable Dismissal",
+        scopes: ["EXTERNAL"],
+        sortOrder: 14,
+    },
+]
 
 function isEnabledFlag(value: boolean | undefined) {
     return value !== false
@@ -665,6 +753,93 @@ export default function AdminDepartmentsPage() {
         }
     }
 
+    async function handleSaveDefaultRegistrarTransactions() {
+        const category = normalizeManagerKey(DEFAULT_MANAGER, DEFAULT_MANAGER)
+
+        setSaving(true)
+        try {
+            const existingRegistrar = (purposes || []).filter(
+                (p) => normalizeManagerKey(p.category || DEFAULT_MANAGER) === category
+            )
+
+            const byKey = new Map<string, TransactionPurpose>()
+            for (const p of existingRegistrar) {
+                const key = String(p.key || "").trim()
+                if (!key || byKey.has(key)) continue
+                byKey.set(key, p)
+            }
+
+            let created = 0
+            let updated = 0
+            let unchanged = 0
+
+            for (const tx of DEFAULT_REGISTRAR_TRANSACTIONS) {
+                const existing = byKey.get(tx.key)
+                const nextScopes = uniqueScopes(tx.scopes)
+
+                if (!existing) {
+                    await adminApi.createTransactionPurpose({
+                        category,
+                        key: tx.key,
+                        label: tx.label,
+                        scopes: nextScopes,
+                        enabled: true,
+                        sortOrder: tx.sortOrder,
+                        applyToAllDepartments: true,
+                        departmentIds: [],
+                    })
+                    created += 1
+                    continue
+                }
+
+                const existingScopes = uniqueScopes(existing.scopes || [])
+                const sameScopes =
+                    existingScopes.length === nextScopes.length &&
+                    nextScopes.every((scope) => existingScopes.includes(scope))
+
+                const sameCategory = normalizeManagerKey(existing.category || DEFAULT_MANAGER) === category
+                const sameLabel = String(existing.label || "").trim() === tx.label
+                const sameSortOrder = Number(existing.sortOrder ?? 1000) === tx.sortOrder
+                const sameEnabled = isEnabledFlag(existing.enabled)
+                const sameGlobalBinding = (existing.departmentIds || []).length === 0
+
+                if (
+                    sameCategory &&
+                    sameLabel &&
+                    sameScopes &&
+                    sameSortOrder &&
+                    sameEnabled &&
+                    sameGlobalBinding
+                ) {
+                    unchanged += 1
+                    continue
+                }
+
+                await adminApi.updateTransactionPurpose(existing.id, {
+                    category,
+                    key: tx.key,
+                    label: tx.label,
+                    scopes: nextScopes,
+                    enabled: true,
+                    sortOrder: tx.sortOrder,
+                    applyToAllDepartments: true,
+                    departmentIds: [],
+                })
+                updated += 1
+            }
+
+            toast.success(
+                `Registrar defaults saved. Created: ${created}, Updated: ${updated}, Unchanged: ${unchanged}.`
+            )
+            await fetchAll()
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to save registrar default transactions."
+            toast.error(msg)
+        } finally {
+            setSaving(false)
+        }
+    }
+
     const stats = React.useMemo(() => {
         const deptTotal = departments.length
         const deptEnabled = departments.filter((d) => isEnabledFlag(d.enabled)).length
@@ -934,6 +1109,16 @@ export default function AdminDepartmentsPage() {
                                         >
                                             <Plus className="h-4 w-4" />
                                             New purpose
+                                        </Button>
+
+                                        <Button
+                                            variant="secondary"
+                                            onClick={() => void handleSaveDefaultRegistrarTransactions()}
+                                            disabled={loading || saving}
+                                            className="w-full gap-2 sm:w-auto"
+                                        >
+                                            <Save className="h-4 w-4" />
+                                            Save registrar defaults
                                         </Button>
 
                                         <Button asChild variant="secondary" className="w-full gap-2 sm:w-auto">

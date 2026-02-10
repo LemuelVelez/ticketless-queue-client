@@ -49,6 +49,186 @@ function statusBadge(status?: string) {
     return <Badge variant="secondary">{s || "—"}</Badge>
 }
 
+function humanizeTransactionKey(value?: string | null) {
+    const s = String(value ?? "").trim()
+    if (!s) return ""
+    return s
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase()
+        .replace(/\b\w/g, (m) => m.toUpperCase())
+}
+
+function normalizeParticipantTypeKey(value?: string | null) {
+    const raw = String(value ?? "").trim()
+    if (!raw) return ""
+
+    const normalized = raw.toUpperCase().replace(/[\s/-]+/g, "_")
+
+    if (normalized === "STUDENT") return "STUDENT"
+    if (normalized === "GUEST") return "GUEST"
+    if (
+        normalized === "ALUMNI_VISITOR" ||
+        normalized === "ALUMNI" ||
+        normalized === "VISITOR"
+    ) {
+        return "ALUMNI_VISITOR"
+    }
+
+    return normalized
+}
+
+function extractStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    return value
+        .map((v) => String(v ?? "").trim())
+        .filter(Boolean)
+}
+
+function firstNonEmptyText(candidates: unknown[]) {
+    for (const candidate of candidates) {
+        const text = String(candidate ?? "").trim()
+        if (text) return text
+    }
+    return ""
+}
+
+function participantText(value?: string | null) {
+    const s = normalizeParticipantTypeKey(value)
+    if (!s) return "—"
+    if (s === "STUDENT") return "Student"
+    if (s === "ALUMNI_VISITOR") return "Alumni / Visitor"
+    if (s === "GUEST") return "Guest"
+    return humanizeTransactionKey(s) || s
+}
+
+function participantBadge(value?: string | null) {
+    const s = normalizeParticipantTypeKey(value)
+
+    if (!s) return <Badge variant="secondary">—</Badge>
+    if (s === "STUDENT") return <Badge>Student</Badge>
+    if (s === "ALUMNI_VISITOR") return <Badge variant="secondary">Alumni / Visitor</Badge>
+    if (s === "GUEST") return <Badge variant="outline">Guest</Badge>
+
+    return <Badge variant="outline">{participantText(s)}</Badge>
+}
+
+function participantFromTicket(ticket?: TicketType | null) {
+    if (!ticket) return ""
+
+    const t = ticket as any
+    const explicit = firstNonEmptyText([
+        t.participantType,
+        t.participantLabel,
+        t.participant,
+        t.userType,
+        t.role,
+        t.meta?.participantType,
+        t.meta?.participantLabel,
+        t.transactions?.participantType,
+        t.transactions?.participantLabel,
+    ])
+
+    if (explicit) return explicit
+
+    // Practical fallback: tc/student-style IDs are typically student records.
+    const sid = String(ticket.studentId ?? "").trim()
+    if (/^TC[-_A-Z0-9]/i.test(sid)) return "STUDENT"
+
+    return ""
+}
+
+function ticketPurpose(ticket?: TicketType | null) {
+    if (!ticket) return "—"
+
+    const t = ticket as any
+
+    // 1) Array label candidates (highest fidelity)
+    const arrayLabelCandidates = [
+        t.transactionLabels,
+        t.selectedTransactionLabels,
+        t.meta?.transactionLabels,
+        t.transactions?.transactionLabels,
+        t.transactions?.labels,
+        t.selection?.transactionLabels,
+        t.join?.transactionLabels,
+    ]
+
+    for (const candidate of arrayLabelCandidates) {
+        const labels = extractStringArray(candidate)
+        if (labels.length) return labels.join(" • ")
+    }
+
+    // 2) Array-of-object candidates
+    const objectArrayCandidates = [
+        t.selectedTransactions,
+        t.transactionSelections,
+        t.transactions?.items,
+        t.transactions?.selected,
+    ]
+
+    for (const candidate of objectArrayCandidates) {
+        if (!Array.isArray(candidate)) continue
+
+        const labels = candidate
+            .map((item: any) =>
+                String(
+                    item?.label ??
+                    item?.name ??
+                    item?.title ??
+                    item?.transactionLabel ??
+                    "",
+                ).trim(),
+            )
+            .filter(Boolean)
+
+        if (labels.length) return labels.join(" • ")
+    }
+
+    // 3) Direct string candidates
+    const direct = firstNonEmptyText([
+        ticket.queuePurpose,
+        ticket.purpose,
+        ticket.transactionLabel,
+        t.transaction?.label,
+        t.transactionName,
+        t.transactionTitle,
+        t.meta?.purpose,
+        t.meta?.transactionLabel,
+        t.transactionCategory,
+        t.meta?.transactionCategory,
+    ])
+
+    if (direct) return direct
+
+    // 4) Key arrays -> humanized labels
+    const keyArrayCandidates = [
+        t.transactionKeys,
+        t.selectedTransactionKeys,
+        t.meta?.transactionKeys,
+        t.transactions?.transactionKeys,
+        t.selection?.transactionKeys,
+    ]
+
+    for (const candidate of keyArrayCandidates) {
+        const keys = extractStringArray(candidate).map((k) => humanizeTransactionKey(k)).filter(Boolean)
+        if (keys.length) return keys.join(" • ")
+    }
+
+    // 5) Single key fallback
+    const key = firstNonEmptyText([
+        ticket.transactionKey,
+        t.transaction?.key,
+        t.meta?.transactionKey,
+        t.transactionCode,
+    ])
+
+    if (key) return humanizeTransactionKey(key)
+
+    return "—"
+}
+
 function historyWhen(t: TicketType) {
     const s = String(t.status || "").toUpperCase()
     if (s === "SERVED") return fmtTime((t as any).servedAt)
@@ -365,7 +545,7 @@ export default function StaffQueuePage() {
                             Staff Queue Control Center
                         </CardTitle>
                         <CardDescription>
-                            Manage waiting line operations: call next, resolve current ticket, and process HOLD/OUT/History.
+                            Manage waiting line operations and clearly view who is in queue and their transaction purpose.
                         </CardDescription>
                     </CardHeader>
 
@@ -492,6 +672,16 @@ export default function StaffQueuePage() {
                                                                 <div className="text-sm text-muted-foreground">
                                                                     Called at: {fmtTime((current as any).calledAt)}
                                                                 </div>
+
+                                                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                                                    {participantBadge(participantFromTicket(current))}
+                                                                    <Badge
+                                                                        variant="outline"
+                                                                        className="max-w-full whitespace-normal break-words"
+                                                                    >
+                                                                        Purpose: {ticketPurpose(current)}
+                                                                    </Badge>
+                                                                </div>
                                                             </div>
                                                             {statusBadge(current.status)}
                                                         </div>
@@ -549,16 +739,24 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead className="w-40">Participant</TableHead>
                                                                 <TableHead>Student ID</TableHead>
-                                                                <TableHead className="hidden md:table-cell">Waiting since</TableHead>
+                                                                <TableHead className="min-w-[220px]">Purpose / Transaction</TableHead>
+                                                                <TableHead className="hidden xl:table-cell">Waiting since</TableHead>
                                                             </TableRow>
                                                         </TableHeader>
                                                         <TableBody>
                                                             {waiting.map((t, idx) => (
                                                                 <TableRow key={t._id} className={idx === 0 ? "bg-muted/50" : ""}>
                                                                     <TableCell className="font-medium">#{t.queueNumber}</TableCell>
+                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
                                                                     <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
-                                                                    <TableCell className="hidden md:table-cell text-muted-foreground">
+                                                                    <TableCell className="text-muted-foreground">
+                                                                        <span className="block max-w-[28rem] whitespace-normal break-words">
+                                                                            {ticketPurpose(t)}
+                                                                        </span>
+                                                                    </TableCell>
+                                                                    <TableCell className="hidden xl:table-cell text-muted-foreground">
                                                                         {fmtTime((t as any).waitingSince)}
                                                                     </TableCell>
                                                                 </TableRow>
@@ -589,7 +787,9 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead className="w-40">Participant</TableHead>
                                                                 <TableHead>Student ID</TableHead>
+                                                                <TableHead className="min-w-[180px]">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Updated</TableHead>
                                                                 <TableHead className="w-32 text-right">Action</TableHead>
@@ -599,7 +799,13 @@ export default function StaffQueuePage() {
                                                             {hold.map((t) => (
                                                                 <TableRow key={t._id}>
                                                                     <TableCell className="font-medium">#{t.queueNumber}</TableCell>
+                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
                                                                     <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                    <TableCell className="text-muted-foreground">
+                                                                        <span className="block max-w-[24rem] whitespace-normal break-words">
+                                                                            {ticketPurpose(t)}
+                                                                        </span>
+                                                                    </TableCell>
                                                                     <TableCell>{t.holdAttempts ?? 0}</TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
                                                                         {fmtTime((t as any).updatedAt)}
@@ -645,7 +851,9 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead className="w-40">Participant</TableHead>
                                                                 <TableHead>Student ID</TableHead>
+                                                                <TableHead className="min-w-[180px]">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Out at</TableHead>
                                                             </TableRow>
@@ -654,7 +862,13 @@ export default function StaffQueuePage() {
                                                             {out.map((t) => (
                                                                 <TableRow key={t._id}>
                                                                     <TableCell className="font-medium">#{t.queueNumber}</TableCell>
+                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
                                                                     <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                    <TableCell className="text-muted-foreground">
+                                                                        <span className="block max-w-[24rem] whitespace-normal break-words">
+                                                                            {ticketPurpose(t)}
+                                                                        </span>
+                                                                    </TableCell>
                                                                     <TableCell>{t.holdAttempts ?? 0}</TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
                                                                         {fmtTime((t as any).outAt)}
@@ -704,6 +918,8 @@ export default function StaffQueuePage() {
                                                             <TableRow>
                                                                 <TableHead className="w-24">Queue</TableHead>
                                                                 <TableHead className="w-28">Status</TableHead>
+                                                                <TableHead className="w-40">Participant</TableHead>
+                                                                <TableHead className="min-w-[220px]">Purpose</TableHead>
                                                                 <TableHead className="w-28">Window</TableHead>
                                                                 <TableHead>Student ID</TableHead>
                                                                 <TableHead className="hidden md:table-cell">When</TableHead>
@@ -714,6 +930,12 @@ export default function StaffQueuePage() {
                                                                 <TableRow key={t._id}>
                                                                     <TableCell className="font-medium">#{t.queueNumber}</TableCell>
                                                                     <TableCell>{statusBadge(t.status)}</TableCell>
+                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
+                                                                    <TableCell className="text-muted-foreground">
+                                                                        <span className="block max-w-[30rem] whitespace-normal break-words">
+                                                                            {ticketPurpose(t)}
+                                                                        </span>
+                                                                    </TableCell>
                                                                     <TableCell className="text-muted-foreground">
                                                                         {t.windowNumber ? `#${t.windowNumber}` : "—"}
                                                                     </TableCell>
