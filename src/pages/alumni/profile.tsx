@@ -30,7 +30,7 @@ import {
     AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 
-const DRAFT_KEY = "qp_alumni_profile_draft_v1"
+const DRAFT_KEY = "qp_alumni_profile_draft_v2"
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
@@ -64,7 +64,6 @@ type ProfileDraft = {
     firstName: string
     middleName: string
     lastName: string
-    alumniId: string
     mobileNumber: string
     departmentId: string
     smsUpdates: boolean
@@ -106,7 +105,6 @@ export default function AlumniProfilePage() {
     const [firstName, setFirstName] = React.useState("")
     const [middleName, setMiddleName] = React.useState("")
     const [lastName, setLastName] = React.useState("")
-    const [alumniId, setAlumniId] = React.useState("")
     const [mobileNumber, setMobileNumber] = React.useState("")
     const [departmentId, setDepartmentId] = React.useState("")
     const [smsUpdates, setSmsUpdates] = React.useState(true)
@@ -123,7 +121,6 @@ export default function AlumniProfilePage() {
         setFirstName(draft.firstName || "")
         setMiddleName(draft.middleName || "")
         setLastName(draft.lastName || "")
-        setAlumniId(draft.alumniId || "")
         setMobileNumber(draft.mobileNumber || "")
         setDepartmentId(draft.departmentId || "")
         setSmsUpdates(Boolean(draft.smsUpdates))
@@ -171,13 +168,6 @@ export default function AlumniProfilePage() {
                 if (composed.lastName) setLastName(composed.lastName)
             }
 
-            const id =
-                pickNonEmptyString(p.alumniId) ||
-                pickNonEmptyString(p.tcNumber) ||
-                pickNonEmptyString(p.studentId) ||
-                pickNonEmptyString(p.referenceNumber)
-            if (id) setAlumniId(id)
-
             const mobile = pickNonEmptyString(p.mobileNumber) || pickNonEmptyString(p.phone)
             if (mobile) setMobileNumber(mobile)
 
@@ -201,7 +191,6 @@ export default function AlumniProfilePage() {
             firstName: firstName.trim(),
             middleName: middleName.trim(),
             lastName: lastName.trim(),
-            alumniId: alumniId.trim(),
             mobileNumber: mobileNumber.trim(),
             departmentId,
             smsUpdates,
@@ -216,7 +205,6 @@ export default function AlumniProfilePage() {
         setFirstName("")
         setMiddleName("")
         setLastName("")
-        setAlumniId("")
         setMobileNumber("")
         setDepartmentId("")
         setSmsUpdates(true)
@@ -313,30 +301,16 @@ export default function AlumniProfilePage() {
                                 </div>
                             </div>
 
-                            <div className="grid gap-4 sm:grid-cols-2">
-                                <div className="space-y-2">
-                                    <Label htmlFor="alumniId">Alumni / Reference ID</Label>
-                                    <Input
-                                        id="alumniId"
-                                        value={alumniId}
-                                        onChange={(e) => setAlumniId(e.target.value)}
-                                        placeholder="e.g. ALUMNI-00001"
-                                        autoComplete="off"
-                                        inputMode="text"
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label htmlFor="mobileNumber">Mobile Number</Label>
-                                    <Input
-                                        id="mobileNumber"
-                                        value={mobileNumber}
-                                        onChange={(e) => setMobileNumber(e.target.value)}
-                                        placeholder="e.g. 09xxxxxxxxx"
-                                        autoComplete="tel"
-                                        inputMode="tel"
-                                    />
-                                </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="mobileNumber">Mobile Number</Label>
+                                <Input
+                                    id="mobileNumber"
+                                    value={mobileNumber}
+                                    onChange={(e) => setMobileNumber(e.target.value)}
+                                    placeholder="e.g. 09xxxxxxxxx"
+                                    autoComplete="tel"
+                                    inputMode="tel"
+                                />
                             </div>
 
                             <div className="space-y-2">
