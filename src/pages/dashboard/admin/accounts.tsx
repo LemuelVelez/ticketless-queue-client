@@ -2,20 +2,7 @@
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import {
-  MoreHorizontal,
-  Plus,
-  RefreshCw,
-  Shield,
-  User,
-  UserCog,
-  GraduationCap,
-  Users,
-  Mail,
-  Eye,
-  EyeOff,
-  Wand2,
-} from "lucide-react"
+import { MoreHorizontal, Plus, RefreshCw, Shield, User, UserCog, GraduationCap, Users } from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
@@ -166,23 +153,6 @@ function roleBadge(role: AccountRole) {
   )
 }
 
-function generateTempPasswordClient() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-  const take = (n: number) => {
-    try {
-      const arr = new Uint32Array(n)
-      crypto.getRandomValues(arr)
-      return Array.from(arr)
-        .map((x) => alphabet[x % alphabet.length])
-        .join("")
-    } catch {
-      return Array.from({ length: n }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("")
-    }
-  }
-  // readable + meets typical complexity expectations
-  return `${take(12)}A1!`
-}
-
 export default function AdminAccountsPage() {
   const location = useLocation()
   const { user: sessionUser } = useSession()
@@ -207,7 +177,6 @@ export default function AdminAccountsPage() {
   const [createOpen, setCreateOpen] = React.useState(false)
   const [editOpen, setEditOpen] = React.useState(false)
   const [resetOpen, setResetOpen] = React.useState(false)
-  const [sendCredsOpen, setSendCredsOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
 
   // selected user
@@ -217,22 +186,15 @@ export default function AdminAccountsPage() {
   const [cName, setCName] = React.useState("")
   const [cEmail, setCEmail] = React.useState("")
   const [cPassword, setCPassword] = React.useState("")
-  const [cShowPassword, setCShowPassword] = React.useState(false)
   const [cRole, setCRole] = React.useState<StaffAccountRole>("STAFF")
-  const [cSendCreds, setCSendCreds] = React.useState(true)
 
   // edit form
   const [eName, setEName] = React.useState("")
   const [eRole, setERole] = React.useState<EditableRole>("STAFF")
   const [eActive, setEActive] = React.useState(true)
 
-  // reset credential form (no email)
+  // reset credential form
   const [newPassword, setNewPassword] = React.useState("")
-
-  // send/resend credentials form (emails user)
-  const [scUseCustomPassword, setScUseCustomPassword] = React.useState(false)
-  const [scPassword, setScPassword] = React.useState("")
-  const [scShowPassword, setScShowPassword] = React.useState(false)
 
   const editRoleOptions = React.useMemo<EditableRole[]>(() => {
     const sourceRole = selected ? normalizeRole(selected.role ?? selected.type) : eRole
@@ -319,18 +281,6 @@ export default function AdminAccountsPage() {
     setResetOpen(true)
   }
 
-  function openSendCredentials(u: AccountUser) {
-    if (isReadOnlyAccount(u)) {
-      toast.message("Sending login credentials is not available for this account type from this page.")
-      return
-    }
-    setSelected(u)
-    setScUseCustomPassword(false)
-    setScPassword("")
-    setScShowPassword(false)
-    setSendCredsOpen(true)
-  }
-
   function openDelete(u: AccountUser) {
     if (isReadOnlyAccount(u)) {
       toast.message("Delete is not available for this account type from this page.")
@@ -345,9 +295,7 @@ export default function AdminAccountsPage() {
     setCName("")
     setCEmail("")
     setCPassword("")
-    setCShowPassword(false)
     setCRole("STAFF")
-    setCSendCreds(true)
   }
 
   async function handleCreate() {
@@ -368,29 +316,8 @@ export default function AdminAccountsPage() {
 
     setSaving(true)
     try {
-      const createdRes = await adminApi.createStaff(payload)
-
-      const createdUser =
-        (createdRes as any)?.staff ??
-        (createdRes as any)?.user ??
-        (createdRes as any)?.account ??
-        (createdRes as any)?.data?.staff ??
-        null
-
-      const createdId = createdUser ? userId(createdUser as any) : ""
-
-      if (cSendCreds) {
-        if (createdId) {
-          await adminApi.sendLoginCredentials(createdId, { password })
-          toast.success("Account created and login credentials sent.")
-        } else {
-          toast.success("Account created.")
-          toast.message("Could not detect the new user id to send credentials. You can resend from the user actions menu.")
-        }
-      } else {
-        toast.success("Account created.")
-      }
-
+      await adminApi.createStaff(payload)
+      toast.success("Account created.")
       setCreateOpen(false)
       resetCreateForm()
       await fetchAll()
@@ -450,39 +377,6 @@ export default function AdminAccountsPage() {
       setNewPassword("")
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to update credential."
-      toast.error(msg)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function handleSendLoginCredentials() {
-    if (!selected) return
-    if (isReadOnlyAccount(selected)) {
-      return toast.message("Sending login credentials is not available for this account type from this page.")
-    }
-
-    const id = userId(selected)
-    if (!id) return toast.error("Invalid user id.")
-
-    if (scUseCustomPassword) {
-      if (!scPassword.trim()) return toast.error("Temporary password is required.")
-      if (scPassword.trim().length < 8) return toast.error("Temporary password must be at least 8 characters.")
-    }
-
-    setSaving(true)
-    try {
-      const payload = scUseCustomPassword ? { password: scPassword } : {}
-      await adminApi.sendLoginCredentials(id, payload as any)
-
-      toast.success("Login credentials sent.")
-      setSendCredsOpen(false)
-      setSelected(null)
-      setScUseCustomPassword(false)
-      setScPassword("")
-      setScShowPassword(false)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to send login credentials."
       toast.error(msg)
     } finally {
       setSaving(false)
@@ -682,22 +576,10 @@ export default function AdminAccountsPage() {
                                     </DropdownMenuItem>
 
                                     {readOnly ? (
-                                      <DropdownMenuItem disabled className="gap-2">
-                                        <Mail className="h-4 w-4" />
-                                        Send credentials unavailable
-                                      </DropdownMenuItem>
-                                    ) : (
-                                      <DropdownMenuItem onClick={() => openSendCredentials(u)} className="cursor-pointer gap-2">
-                                        <Mail className="h-4 w-4" />
-                                        Send login credentials
-                                      </DropdownMenuItem>
-                                    )}
-
-                                    {readOnly ? (
                                       <DropdownMenuItem disabled>Reset credential unavailable</DropdownMenuItem>
                                     ) : (
                                       <DropdownMenuItem onClick={() => openReset(u)} className="cursor-pointer">
-                                        Reset credential (no email)
+                                        Reset credential
                                       </DropdownMenuItem>
                                     )}
 
@@ -763,45 +645,15 @@ export default function AdminAccountsPage() {
             </div>
 
             <div className="grid gap-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Label htmlFor="c-password">Temporary password</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCPassword(generateTempPasswordClient())}
-                  disabled={saving}
-                  className="gap-2"
-                >
-                  <Wand2 className="h-4 w-4" />
-                  Generate
-                </Button>
-              </div>
-
-              <div className="flex gap-2">
-                <Input
-                  id="c-password"
-                  value={cPassword}
-                  onChange={(e) => setCPassword(e.target.value)}
-                  placeholder="Set an initial password"
-                  type={cShowPassword ? "text" : "password"}
-                  autoComplete="new-password"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setCShowPassword((v) => !v)}
-                  aria-label={cShowPassword ? "Hide password" : "Show password"}
-                  disabled={saving}
-                >
-                  {cShowPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-              </div>
-
-              <div className="text-xs text-muted-foreground">
-                This password will be sent to the user if you enable “Send login credentials”.
-              </div>
+              <Label htmlFor="c-password">Temporary password</Label>
+              <Input
+                id="c-password"
+                value={cPassword}
+                onChange={(e) => setCPassword(e.target.value)}
+                placeholder="Set an initial password"
+                type="password"
+                autoComplete="new-password"
+              />
             </div>
 
             <div className="grid gap-2">
@@ -815,16 +667,6 @@ export default function AdminAccountsPage() {
                   <SelectItem value="ADMIN">ADMIN</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div className="grid gap-0.5">
-                <div className="text-sm font-medium">Send login credentials</div>
-                <div className="text-xs text-muted-foreground">
-                  Emails the user their login details (and verification link if required).
-                </div>
-              </div>
-              <Switch checked={cSendCreds} onCheckedChange={setCSendCreds} />
             </div>
           </div>
 
@@ -913,11 +755,11 @@ export default function AdminAccountsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Reset credential dialog (no email) */}
+      {/* Reset credential dialog */}
       <Dialog open={resetOpen} onOpenChange={setResetOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Reset credential (no email)</DialogTitle>
+            <DialogTitle>Reset credential</DialogTitle>
           </DialogHeader>
 
           <div className="grid gap-2">
@@ -949,120 +791,6 @@ export default function AdminAccountsPage() {
 
             <Button type="button" onClick={() => void handleResetPassword()} disabled={saving} className="w-full sm:w-auto">
               {saving ? "Updating…" : "Update credential"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Send / Resend login credentials (email) */}
-      <Dialog open={sendCredsOpen} onOpenChange={setSendCredsOpen}>
-        <DialogContent className="sm:max-w-lg flex max-h-[85vh] flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
-          <DialogHeader>
-            <DialogTitle>Send login credentials</DialogTitle>
-          </DialogHeader>
-
-          <div className="grid flex-1 gap-4 overflow-y-auto pr-1 sm:overflow-visible sm:pr-0">
-            <div className="rounded-lg border p-3">
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5">
-                  <Mail className="h-5 w-5 text-muted-foreground" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">This will email the user their login credentials.</div>
-                  <div className="text-xs text-muted-foreground">
-                    The server will reset the password and send a new temporary password to the user. If the user needs email
-                    verification, the email will include a verification link.
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <Label>Name</Label>
-              <Input value={selected?.name ?? ""} readOnly />
-            </div>
-
-            <div className="grid gap-2">
-              <Label>Email</Label>
-              <Input value={selected?.email ?? ""} readOnly />
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div className="grid gap-0.5">
-                <div className="text-sm font-medium">Set custom temporary password</div>
-                <div className="text-xs text-muted-foreground">
-                  Turn on if you want to define the password. Otherwise, the server generates one automatically.
-                </div>
-              </div>
-              <Switch checked={scUseCustomPassword} onCheckedChange={setScUseCustomPassword} />
-            </div>
-
-            {scUseCustomPassword ? (
-              <div className="grid gap-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Label htmlFor="sc-password">Temporary password</Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setScPassword(generateTempPasswordClient())}
-                    disabled={saving}
-                    className="gap-2"
-                  >
-                    <Wand2 className="h-4 w-4" />
-                    Generate
-                  </Button>
-                </div>
-
-                <div className="flex gap-2">
-                  <Input
-                    id="sc-password"
-                    value={scPassword}
-                    onChange={(e) => setScPassword(e.target.value)}
-                    placeholder="At least 8 characters"
-                    type={scShowPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setScShowPassword((v) => !v)}
-                    aria-label={scShowPassword ? "Hide password" : "Show password"}
-                    disabled={saving}
-                  >
-                    {scShowPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setSendCredsOpen(false)
-                setSelected(null)
-                setScUseCustomPassword(false)
-                setScPassword("")
-                setScShowPassword(false)
-              }}
-              disabled={saving}
-              className="w-full sm:w-auto sm:mr-2"
-            >
-              Cancel
-            </Button>
-
-            <Button
-              type="button"
-              onClick={() => void handleSendLoginCredentials()}
-              disabled={saving}
-              className="w-full gap-2 sm:w-auto"
-            >
-              <Mail className="h-4 w-4" />
-              {saving ? "Sending…" : "Send email"}
             </Button>
           </DialogFooter>
         </DialogContent>

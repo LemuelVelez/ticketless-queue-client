@@ -120,14 +120,6 @@ type UpdateUserPayload = {
   password?: string
 }
 
-export type SendLoginCredentialsPayload = {
-  /**
-   * If provided, sets this as the NEW temporary password.
-   * If omitted, the server will generate a new temporary password.
-   */
-  password?: string
-}
-
 /** =========================
  * REPORTS + AUDIT LOGS TYPES
  * ========================= */
@@ -299,15 +291,6 @@ export const adminApi = {
   updateStaff: (id: string, payload: UpdateUserPayload) => api.put<{ staff: StaffUser }>(`/admin/staff/${id}`, payload),
 
   deleteStaff: (id: string) => api.delete<{ ok: true }>(`/admin/staff/${id}`),
-
-  /**
-   * Send / resend login credentials email to a user.
-   * Server will reset the password:
-   * - If payload.password is provided => use it
-   * - Else => generate a new temporary password
-   */
-  sendLoginCredentials: (id: string, payload?: SendLoginCredentialsPayload) =>
-    api.post<{ ok: true; message?: string }>(`/users/${id}/send-login-credentials`, payload ?? {}),
 
   // REPORTS
   getReportsSummary: (opts?: { from?: string; to?: string; departmentId?: string }) =>
