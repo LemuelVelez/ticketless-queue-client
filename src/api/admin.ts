@@ -91,10 +91,34 @@ export type StaffUser = {
   assignedTransactionManager?: string | null
 }
 
+export type CredentialsDelivery = {
+  attempted: boolean
+  sent: boolean
+  error: string | null
+}
+
+export type CreateStaffResponse = {
+  staff: StaffUser
+  credentials?: CredentialsDelivery
+}
+
 type CreateUserPayload = {
   name: string
   email: string
-  password: string
+
+  /**
+   * Optional:
+   * - If omitted/blank AND sendCredentials is true, backend will generate a secure temporary password.
+   * - If sendCredentials is false, password is required.
+   */
+  password?: string
+
+  /**
+   * Whether to send login credentials to the user’s email.
+   * Defaults to true in the backend.
+   */
+  sendCredentials?: boolean
+
   role?: UserRole
 
   /**
@@ -287,10 +311,14 @@ export const adminApi = {
 
   // ACCOUNTS (backend still uses /admin/staff endpoints; now supports ADMIN/STAFF and participant records)
   listStaff: () => api.get<{ staff: StaffUser[] }>("/admin/staff"),
-  createStaff: (payload: CreateUserPayload) => api.post<{ staff: StaffUser }>("/admin/staff", payload),
+  createStaff: (payload: CreateUserPayload) => api.post<CreateStaffResponse>("/admin/staff", payload),
   updateStaff: (id: string, payload: UpdateUserPayload) => api.put<{ staff: StaffUser }>(`/admin/staff/${id}`, payload),
 
   deleteStaff: (id: string) => api.delete<{ ok: true }>(`/admin/staff/${id}`),
+
+  // ✅ LOGIN CREDENTIALS
+  resendLoginCredentials: (id: string) =>
+    api.post<{ ok: true; sent: boolean }>(`/admin/staff/${id}/resend-credentials`, {}),
 
   // REPORTS
   getReportsSummary: (opts?: { from?: string; to?: string; departmentId?: string }) =>

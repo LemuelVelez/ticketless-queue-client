@@ -2,7 +2,18 @@
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { MoreHorizontal, Plus, RefreshCw, Shield, User, UserCog, GraduationCap, Users } from "lucide-react"
+import {
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Shield,
+  User,
+  UserCog,
+  GraduationCap,
+  Users,
+  Eye,
+  EyeOff,
+} from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
@@ -153,6 +164,28 @@ function roleBadge(role: AccountRole) {
   )
 }
 
+function generateTempPassword(length = 12) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+  const safeLen = Math.max(8, Math.min(32, Math.floor(length)))
+  try {
+    const buf = new Uint32Array(safeLen)
+    window.crypto.getRandomValues(buf)
+    let out = ""
+    for (let i = 0; i < safeLen; i++) out += chars[buf[i] % chars.length]
+    return out
+  } catch {
+    // fallback
+    let out = ""
+    for (let i = 0; i < safeLen; i++) out += chars[Math.floor(Math.random() * chars.length)]
+    return out
+  }
+}
+
+function looksLikeEmail(v: unknown) {
+  const s = String(v ?? "").trim()
+  return s.includes("@") && s.includes(".") && !s.toLowerCase().startsWith("mobile:")
+}
+
 export default function AdminAccountsPage() {
   const location = useLocation()
   const { user: sessionUser } = useSession()
@@ -178,6 +211,7 @@ export default function AdminAccountsPage() {
   const [editOpen, setEditOpen] = React.useState(false)
   const [resetOpen, setResetOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [resendOpen, setResendOpen] = React.useState(false)
 
   // selected user
   const [selected, setSelected] = React.useState<AccountUser | null>(null)
@@ -186,7 +220,9 @@ export default function AdminAccountsPage() {
   const [cName, setCName] = React.useState("")
   const [cEmail, setCEmail] = React.useState("")
   const [cPassword, setCPassword] = React.useState("")
+  const [cShowPassword, setCShowPassword] = React.useState(false)
   const [cRole, setCRole] = React.useState<StaffAccountRole>("STAFF")
+  const [cSendCredentials, setCSendCredentials] = React.useState(true)
 
   // edit form
   const [eName, setEName] = React.useState("")
@@ -270,6 +306,29 @@ export default function AdminAccountsPage() {
     setEditOpen(true)
   }
 
+  function openResend(u: AccountUser) {
+    const role = normalizeRole(u.role ?? u.type)
+    const email = String(u.email ?? "").trim()
+
+    if (isReadOnlyAccount(u)) {
+      toast.message("Resend credentials is not available for this account type from this page.")
+      return
+    }
+
+    if (!isStaffAccountRole(role)) {
+      toast.message("Resend credentials is only available for STAFF/ADMIN email accounts.")
+      return
+    }
+
+    if (!looksLikeEmail(email)) {
+      toast.error("This account has no valid email address.")
+      return
+    }
+
+    setSelected(u)
+    setResendOpen(true)
+  }
+
   function openReset(u: AccountUser) {
     if (isReadOnlyAccount(u)) {
       toast.message("Credential reset is not available for this account type from this page.")
@@ -295,34 +354,94 @@ export default function AdminAccountsPage() {
     setCName("")
     setCEmail("")
     setCPassword("")
+    setCShowPassword(false)
     setCRole("STAFF")
+    setCSendCredentials(true)
   }
 
   async function handleCreate() {
     const name = cName.trim()
     const email = cEmail.trim()
-    const password = cPassword
+    const password = cPassword.trim()
 
     if (!name) return toast.error("Name is required.")
     if (!email) return toast.error("Email is required.")
-    if (!password) return toast.error("Password is required.")
+
+    if (!cSendCredentials && !password) {
+      return toast.error("Password is required when email credentials is disabled.")
+    }
 
     const payload: any = {
       name,
       email,
-      password,
       role: cRole,
+      sendCredentials: cSendCredentials,
     }
+
+    // If password is blank AND sendCredentials is true, backend will auto-generate.
+    if (password) payload.password = password
 
     setSaving(true)
     try {
-      await adminApi.createStaff(payload)
-      toast.success("Account created.")
+      const res = await adminApi.createStaff(payload)
+
+      const creds = (res as any)?.credentials
+      const attempted = Boolean(creds?.attempted)
+      const sent = Boolean(creds?.sent)
+      const err = typeof creds?.error === "string" ? creds.error : null
+
+      if (attempted && sent) {
+        toast.success("Account created.", { description: `Login credentials were emailed to ${email}.` })
+      } else if (attempted && !sent) {
+        toast.error("Account created, but email failed to send.", {
+          description: err ? err : "Please verify email configuration (GMAIL_USER / GMAIL_APP_PASSWORD).",
+        })
+      } else {
+        toast.success("Account created.", { description: "Credentials email was not sent." })
+      }
+
       setCreateOpen(false)
       resetCreateForm()
       await fetchAll()
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to create account."
+      toast.error(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleResendCredentials() {
+    if (!selected) return
+
+    const id = userId(selected)
+    if (!id) return toast.error("Invalid user id.")
+
+    const role = normalizeRole(selected.role ?? selected.type)
+    const email = String(selected.email ?? "").trim()
+
+    if (!isStaffAccountRole(role)) {
+      toast.message("Resend credentials is only available for STAFF/ADMIN email accounts.")
+      return
+    }
+
+    if (!looksLikeEmail(email)) {
+      toast.error("This account has no valid email address.")
+      return
+    }
+
+    const t = (toast as any).loading ? (toast as any).loading("Resending login credentials…") : null
+
+    setSaving(true)
+    try {
+      await adminApi.resendLoginCredentials(id)
+      if (t) (toast as any).dismiss?.(t)
+      toast.success("Login credentials resent.", { description: `A new temporary password was emailed to ${email}.` })
+      setResendOpen(false)
+      setSelected(null)
+    } catch (e) {
+      if (t) (toast as any).dismiss?.(t)
+      const msg = e instanceof Error ? e.message : "Failed to resend login credentials."
       toast.error(msg)
     } finally {
       setSaving(false)
@@ -446,9 +565,7 @@ export default function AdminAccountsPage() {
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
                 <CardTitle>Account Management</CardTitle>
-                <CardDescription>
-                  Displaying all users (ADMIN, STAFF, STUDENT, ALUMNI/VISITOR, and GUEST).
-                </CardDescription>
+                <CardDescription>Displaying all users (ADMIN, STAFF, STUDENT, ALUMNI/VISITOR, and GUEST).</CardDescription>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
@@ -539,6 +656,7 @@ export default function AdminAccountsPage() {
                           const role = normalizeRole(u.role)
                           const emailDisplay = u.email?.trim() ? u.email : "—"
                           const readOnly = isReadOnlyAccount(u)
+                          const canResend = !readOnly && isStaffAccountRole(role) && looksLikeEmail(emailDisplay)
 
                           return (
                             <TableRow key={id}>
@@ -574,6 +692,14 @@ export default function AdminAccountsPage() {
                                     <DropdownMenuItem onClick={() => openEdit(u)} className="cursor-pointer">
                                       Edit role/account
                                     </DropdownMenuItem>
+
+                                    {canResend ? (
+                                      <DropdownMenuItem onClick={() => openResend(u)} className="cursor-pointer">
+                                        Resend login credentials
+                                      </DropdownMenuItem>
+                                    ) : (
+                                      <DropdownMenuItem disabled>Resend credentials unavailable</DropdownMenuItem>
+                                    )}
 
                                     {readOnly ? (
                                       <DropdownMenuItem disabled>Reset credential unavailable</DropdownMenuItem>
@@ -621,7 +747,7 @@ export default function AdminAccountsPage() {
 
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-lg flex max-h-[85vh] flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
+        <DialogContent className="sm:max-w-lg flex max-h-screen flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
           <DialogHeader>
             <DialogTitle>Create new user</DialogTitle>
           </DialogHeader>
@@ -644,16 +770,72 @@ export default function AdminAccountsPage() {
               />
             </div>
 
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="grid gap-0.5">
+                <div className="text-sm font-medium">Email login credentials</div>
+                <div className="text-xs text-muted-foreground">
+                  Send the user their email + temporary password via email. (Recommended)
+                </div>
+              </div>
+              <Switch checked={cSendCredentials} onCheckedChange={setCSendCredentials} />
+            </div>
+
             <div className="grid gap-2">
-              <Label htmlFor="c-password">Temporary password</Label>
-              <Input
-                id="c-password"
-                value={cPassword}
-                onChange={(e) => setCPassword(e.target.value)}
-                placeholder="Set an initial password"
-                type="password"
-                autoComplete="new-password"
-              />
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="c-password">Temporary password</Label>
+                {cSendCredentials ? (
+                  <Badge variant="secondary" className="font-normal">
+                    Email will include this password
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="font-normal">
+                    Email sending disabled
+                  </Badge>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                <Input
+                  id="c-password"
+                  value={cPassword}
+                  onChange={(e) => setCPassword(e.target.value)}
+                  placeholder={cSendCredentials ? "Leave blank to auto-generate" : "Set an initial password"}
+                  type={cShowPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                />
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setCPassword(generateTempPassword(12))}
+                  disabled={saving}
+                  className="gap-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Generate
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setCShowPassword((v) => !v)}
+                  disabled={saving}
+                  aria-label={cShowPassword ? "Hide password" : "Show password"}
+                >
+                  {cShowPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
+
+              {cSendCredentials ? (
+                <p className="text-xs text-muted-foreground">
+                  Tip: If you leave it blank, the system will auto-generate a secure temporary password and email it to the user.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Since email sending is disabled, you must set a password manually and share it securely to the user.
+                </p>
+              )}
             </div>
 
             <div className="grid gap-2">
@@ -754,6 +936,40 @@ export default function AdminAccountsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Resend credentials confirm */}
+      <AlertDialog open={resendOpen} onOpenChange={setResendOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Resend login credentials?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will generate a <b>new temporary password</b> and email it to the user. The old password will no longer work.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={saving}
+              onClick={() => {
+                setResendOpen(false)
+                setSelected(null)
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+
+            <AlertDialogAction
+              disabled={saving}
+              onClick={(e) => {
+                e.preventDefault()
+                void handleResendCredentials()
+              }}
+            >
+              {saving ? "Resending…" : "Resend credentials"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Reset credential dialog */}
       <Dialog open={resetOpen} onOpenChange={setResetOpen}>
