@@ -262,15 +262,18 @@ function normalizeWindowPayload(windowRaw: any): ServiceWindow | null {
     const departmentIds = Array.isArray(windowRaw?.departmentIds)
         ? uniqueIds(windowRaw.departmentIds)
         : department
-          ? [department]
-          : undefined
+            ? [department]
+            : undefined
 
     return {
         _id: id,
         id,
         department: department || null,
         departmentIds,
-        name: typeof windowRaw?.name === "string" && windowRaw.name.trim() ? String(windowRaw.name) : "Window",
+        name:
+            typeof windowRaw?.name === "string" && windowRaw.name.trim()
+                ? String(windowRaw.name)
+                : "Window",
         number: Number.isFinite(numberRaw) ? numberRaw : 0,
         enabled: windowRaw?.enabled !== false,
         createdAt: typeof windowRaw?.createdAt === "string" ? windowRaw.createdAt : undefined,
@@ -289,7 +292,8 @@ function normalizeDepartmentList(raw: any): DepartmentAssignment[] | undefined {
                 id,
                 name: typeof d?.name === "string" ? d.name : undefined,
                 code: typeof d?.code === "string" ? d.code : null,
-                transactionManager: typeof d?.transactionManager === "string" ? d.transactionManager : null,
+                transactionManager:
+                    typeof d?.transactionManager === "string" ? d.transactionManager : null,
                 enabled: d?.enabled !== false,
             } satisfies DepartmentAssignment
         })
@@ -329,94 +333,6 @@ function unwrapApiData<T>(value: T | { data: T }): T {
         return (value as { data: T }).data
     }
     return value as T
-}
-
-/**
- * Supports queue-management controller style responses:
- *   { ok: true, data: T }
- * while still accepting plain T.
- */
-function unwrapOkData<T>(res: any): T {
-    const raw = unwrapApiData<any>(res)
-    if (raw && typeof raw === "object" && "ok" in raw && (raw as any).ok === true && "data" in raw) {
-        return (raw as any).data as T
-    }
-    return raw as T
-}
-
-/** =========================
- * CENTRALIZED QUEUE (REAL-TIME STAFF STATE)
- * ========================= */
-
-export type CentralTicketView = {
-    id: string
-    dateKey: string
-    queueNumber: number
-    status: TicketStatus
-
-    department: { id: string; name: string; code?: string; transactionManager: string }
-
-    participant: {
-        studentId: string
-        name?: string
-        phone?: string
-        type?: TicketParticipantType
-    }
-
-    transaction?: {
-        category?: string
-        key?: string
-        label?: string
-        purpose?: string
-    }
-
-    window?: { id: string; name: string; number: number }
-
-    holdAttempts: number
-    waitingSince: string
-    calledAt?: string
-    servedAt?: string
-    outAt?: string
-
-    createdAt: string
-    updatedAt: string
-}
-
-export type CentralStaffQueueState = {
-    serverTime: string
-    dateKey: string
-    scope: {
-        manager?: string
-        departmentId?: string
-        windowId?: string
-        departmentIds?: string[]
-    }
-    settings: {
-        upNextCount: number
-        maxHoldAttempts: number
-        disallowDuplicateActiveTickets: boolean
-    }
-    nowServing?: CentralTicketView
-    waiting: CentralTicketView[]
-    hold: CentralTicketView[]
-    called: CentralTicketView[]
-    upNext: CentralTicketView[]
-}
-
-export type CentralQueueStateQuery = {
-    dateKey?: string
-    manager?: string
-    departmentId?: string
-    windowId?: string
-}
-
-export type CentralCallNextRequest = {
-    windowId?: string
-}
-
-export type CentralTicketActionRequest = {
-    ticketId: string
-    reason?: string
 }
 
 /** =========================
@@ -530,33 +446,6 @@ export const staffApi = {
     holdNoShow: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/hold`),
 
     returnFromHold: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/return`),
-
-    // ✅ Centralized real-time staff queue state (single source of truth, shared across all staff windows)
-    getCentralQueueState: (query?: CentralQueueStateQuery) =>
-        api
-            .get(`/staff/queue/state${toQuery(query as any)}`)
-            .then((res) => unwrapOkData<CentralStaffQueueState>(res)),
-
-    // ✅ Centralized operations (race-safe; prevents duplicate serving/calls across windows)
-    callNextCentralized: (payload?: CentralCallNextRequest) =>
-        api
-            .post(`/staff/queue/call-next-central`, payload ?? {})
-            .then((res) => unwrapOkData<CentralTicketView | null>(res)),
-
-    serveCentralized: (ticketId: string) =>
-        api
-            .post(`/staff/queue/serve`, { ticketId } satisfies CentralTicketActionRequest)
-            .then((res) => unwrapOkData<CentralTicketView>(res)),
-
-    holdCentralized: (ticketId: string) =>
-        api
-            .post(`/staff/queue/hold`, { ticketId } satisfies CentralTicketActionRequest)
-            .then((res) => unwrapOkData<CentralTicketView>(res)),
-
-    outCentralized: (ticketId: string, reason?: string) =>
-        api
-            .post(`/staff/queue/out`, { ticketId, reason } satisfies CentralTicketActionRequest)
-            .then((res) => unwrapOkData<CentralTicketView>(res)),
 
     // ✅ SMS endpoints
     sendSms: (payload: StaffSendSmsRequest) =>

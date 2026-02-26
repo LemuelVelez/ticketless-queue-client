@@ -54,7 +54,6 @@ export const PARTICIPANT_NAV_ITEMS: Record<ParticipantNavRole, NavMainItem[]> = 
 export const STAFF_NAV_ITEMS: NavMainItem[] = [
     { title: "Dashboard", href: "/staff/dashboard", icon: LayoutDashboard },
     { title: "Queue", href: "/staff/queue", icon: Ticket },
-    { title: "Queue Control Center", href: "/staff/queue-control-center", icon: LayoutGrid },
     { title: "Now Serving", href: "/staff/now-serving", icon: Megaphone },
     { title: "Public Display", href: "/staff/display", icon: Monitor },
     { title: "Reports", href: "/staff/reports", icon: BarChart3 },

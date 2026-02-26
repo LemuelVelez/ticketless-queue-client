@@ -119,7 +119,7 @@ function ParticipantAreaGuard({ allow }: { allow: "student" | "alumni" }) {
       }
     }
 
-    ;(async () => {
+    ; (async () => {
       // Avoid synchronous setState in effect body
       await Promise.resolve()
       if (!alive) return
@@ -166,12 +166,12 @@ function ParticipantShortcutGuestRedirect({ target }: { target: ShortcutTarget }
   useEffect(() => {
     let alive = true
 
-    ;(async () => {
-      const role = await resolveParticipantRole()
-      if (!alive) return
-      setParticipantRole(role)
-      setCheckingParticipant(false)
-    })()
+      ; (async () => {
+        const role = await resolveParticipantRole()
+        if (!alive) return
+        setParticipantRole(role)
+        setCheckingParticipant(false)
+      })()
 
     return () => {
       alive = false
@@ -277,13 +277,7 @@ export default function App() {
             }
           >
             <Route path="/staff/dashboard" element={<StaffDashboardPage />} />
-
-            {/* Existing Queue route (kept for compatibility) */}
             <Route path="/staff/queue" element={<QueueControlCenterPage />} />
-
-            {/* New route for Queue Control Center */}
-            <Route path="/staff/queue-control-center" element={<QueueControlCenterPage />} />
-
             <Route path="/staff/now-serving" element={<StaffServingPage />} />
             <Route path="/staff/display" element={<StaffDisplayPage />} />
             <Route path="/staff/reports" element={<StaffReportsPage />} />
