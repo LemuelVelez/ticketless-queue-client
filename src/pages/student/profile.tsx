@@ -2,7 +2,7 @@
 import * as React from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
-import { User } from "lucide-react"
+import { Lock, User } from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
@@ -93,6 +93,8 @@ export default function StudentProfilePage() {
     const [sessionExpiresAt, setSessionExpiresAt] = React.useState<string>("")
     const [hasSession, setHasSession] = React.useState(false)
 
+    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>("")
+
     const [firstName, setFirstName] = React.useState("")
     const [middleName, setMiddleName] = React.useState("")
     const [lastName, setLastName] = React.useState("")
@@ -100,6 +102,8 @@ export default function StudentProfilePage() {
     const [mobileNumber, setMobileNumber] = React.useState("")
     const [departmentId, setDepartmentId] = React.useState("")
     const [smsUpdates, setSmsUpdates] = React.useState(true)
+
+    const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
@@ -166,11 +170,20 @@ export default function StudentProfilePage() {
                 const mobile = pickNonEmptyString(p.mobileNumber) || pickNonEmptyString(p.phone)
                 if (mobile) setMobileNumber(mobile)
 
+                // 🔒 Lock department after registration: if session has departmentId, student can't change it
                 const deptId = pickNonEmptyString(p.departmentId)
-                if (deptId) setDepartmentId(deptId)
+                if (deptId) {
+                    setLockedDepartmentId(deptId)
+                    setDepartmentId(deptId)
+                } else {
+                    setLockedDepartmentId("")
+                }
+            } else {
+                setLockedDepartmentId("")
             }
         } catch {
             setHasSession(false)
+            setLockedDepartmentId("")
         } finally {
             setLoadingSession(false)
         }
@@ -182,6 +195,17 @@ export default function StudentProfilePage() {
         void loadSession()
     }, [applyDraft, loadDepartments, loadSession])
 
+    const handleDepartmentChange = React.useCallback(
+        (value: string) => {
+            if (isDepartmentLocked) {
+                toast.message("Department is locked after registration.")
+                return
+            }
+            setDepartmentId(value)
+        },
+        [isDepartmentLocked],
+    )
+
     function onSaveDraft() {
         const payload: ProfileDraft = {
             firstName: firstName.trim(),
@@ -189,7 +213,7 @@ export default function StudentProfilePage() {
             lastName: lastName.trim(),
             studentId: studentId.trim(),
             mobileNumber: mobileNumber.trim(),
-            departmentId,
+            departmentId: isDepartmentLocked ? lockedDepartmentId : departmentId,
             smsUpdates,
         }
         writeDraft(payload)
@@ -198,6 +222,7 @@ export default function StudentProfilePage() {
 
     function onClearDraft() {
         clearDraftStorage()
+
         setFirstName("")
         setMiddleName("")
         setLastName("")
@@ -205,6 +230,13 @@ export default function StudentProfilePage() {
         setMobileNumber("")
         setDepartmentId("")
         setSmsUpdates(true)
+
+        if (hasSession) {
+            void loadSession()
+            toast.success("Profile draft cleared. Restored from session.")
+            return
+        }
+
         toast.success("Profile draft cleared.")
     }
 
@@ -247,12 +279,18 @@ export default function StudentProfilePage() {
                         <Badge variant={hasSession ? "default" : "secondary"}>
                             Session: {hasSession ? "Active" : "Not Active"}
                         </Badge>
+                        {isDepartmentLocked ? (
+                            <Badge variant="outline" className="gap-2">
+                                <Lock className="h-3.5 w-3.5" />
+                                Department locked
+                            </Badge>
+                        ) : null}
                         {selectedDept?.name ? <Badge variant="outline">{selectedDept.name}</Badge> : null}
                     </div>
 
                     <h1 className="mt-3 text-2xl font-semibold tracking-tight">My Profile</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Manage your profile details. Inputs/selects/switches are shadcn/ui components built on Radix UI.
+                        Manage your profile details. Department is locked after registration to prevent abuse/spam and ensure correct routing.
                     </p>
                 </div>
 
@@ -308,11 +346,20 @@ export default function StudentProfilePage() {
                             </div>
 
                             <div className="space-y-2">
-                                <Label>Department</Label>
+                                <div className="flex items-center justify-between gap-2">
+                                    <Label>Department</Label>
+                                    {isDepartmentLocked ? (
+                                        <Badge variant="secondary" className="gap-2">
+                                            <Lock className="h-3.5 w-3.5" />
+                                            Locked
+                                        </Badge>
+                                    ) : null}
+                                </div>
+
                                 {loadingDepts ? (
                                     <Skeleton className="h-10 w-full" />
                                 ) : (
-                                    <Select value={departmentId} onValueChange={setDepartmentId}>
+                                    <Select value={departmentId} onValueChange={handleDepartmentChange} disabled={isDepartmentLocked}>
                                         <SelectTrigger className="w-full">
                                             <SelectValue placeholder="Select department" />
                                         </SelectTrigger>
@@ -325,6 +372,16 @@ export default function StudentProfilePage() {
                                             ))}
                                         </SelectContent>
                                     </Select>
+                                )}
+
+                                {isDepartmentLocked ? (
+                                    <div className="text-xs text-muted-foreground">
+                                        Your department is locked after registration. Contact staff if it needs correction.
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-muted-foreground">
+                                        Choose the correct department for queue routing.
+                                    </div>
                                 )}
                             </div>
 
