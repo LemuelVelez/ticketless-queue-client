@@ -33,6 +33,7 @@ import { Separator } from "@/components/ui/separator"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import { Progress } from "@/components/ui/progress"
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -99,7 +100,7 @@ type DuplicateActivePair = {
     count: number
 }
 
-const POLL_MS = 2500 // ✅ 2–3s polling as requested (best UX, low friction)
+const POLL_MS = 2500 // ✅ 2.5s loop
 const LEADER_TTL_MS = 10_000
 
 const QUEUE_POLL_LEADER_KEY = "queuepass:staff:queue_poll_leader_v1"
@@ -336,7 +337,13 @@ function ticketPurpose(ticket?: TicketLike | null) {
     if (direct) return direct
 
     // 4) Key arrays -> humanized labels
-    const keyArrayCandidates = [t.transactionKeys, t.selectedTransactionKeys, t.meta?.transactionKeys, t.transactions?.transactionKeys, t.selection?.transactionKeys]
+    const keyArrayCandidates = [
+        t.transactionKeys,
+        t.selectedTransactionKeys,
+        t.meta?.transactionKeys,
+        t.transactions?.transactionKeys,
+        t.selection?.transactionKeys,
+    ]
     for (const candidate of keyArrayCandidates) {
         const keys = extractStringArray(candidate)
             .map((k) => humanizeTransactionKey(k))
@@ -461,6 +468,11 @@ function canUseBroadcastChannel() {
     return typeof window !== "undefined" && typeof (window as any).BroadcastChannel !== "undefined"
 }
 
+function formatSeconds(ms: number) {
+    const s = Math.max(0, ms) / 1000
+    return s.toFixed(1)
+}
+
 export default function StaffQueuePage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -484,7 +496,7 @@ export default function StaffQueuePage() {
     const [queueState, setQueueState] = React.useState<StaffQueueState | null>(null)
     const [stateLoading, setStateLoading] = React.useState(false)
 
-    // ✅ Auto-refresh (AJAX polling every 2–3 seconds)
+    // ✅ Auto-refresh (AJAX polling every 2.5 seconds)
     const [liveSync, setLiveSync] = React.useState(true)
 
     // ✅ Cross-tab sync: one tab polls (leader), all open windows receive updates
@@ -493,6 +505,16 @@ export default function StaffQueuePage() {
     const lastToastSyncErrorAtRef = React.useRef<number>(0)
     const bcRef = React.useRef<BroadcastChannel | null>(null)
     const [lastSyncedAtIso, setLastSyncedAtIso] = React.useState<string>("")
+
+    // ✅ 2.5s countdown loop (visual + numeric)
+    const nextRefreshAtRef = React.useRef<number>(0)
+    const [refreshRemainingMs, setRefreshRemainingMs] = React.useState<number>(0)
+
+    const scheduleNextRefresh = React.useCallback((baseTs?: number) => {
+        if (typeof window === "undefined") return
+        const base = typeof baseTs === "number" && Number.isFinite(baseTs) ? baseTs : Date.now()
+        nextRefreshAtRef.current = base + POLL_MS
+    }, [])
 
     const [out, setOut] = React.useState<TicketLike[]>([])
     const [history, setHistory] = React.useState<TicketLike[]>([])
@@ -744,13 +766,14 @@ export default function StaffQueuePage() {
 
             setQueueState(payload.state)
             setLastSyncedAtIso(new Date(payload.ts).toISOString())
+            scheduleNextRefresh(payload.ts)
             setStateLoading(false)
         },
-        [windowInfo?.id],
+        [scheduleNextRefresh, windowInfo?.id],
     )
 
     const fetchCentralState = React.useCallback(
-        async (opts?: { silent?: boolean; broadcast?: boolean }) => {
+        async (opts?: { silent?: boolean; broadcast?: boolean; tickTs?: number }) => {
             if (!windowInfo?.id) {
                 setQueueState(null)
                 return
@@ -762,13 +785,15 @@ export default function StaffQueuePage() {
                 const raw = await api.get(`/staff/queue/state?windowId=${encodeURIComponent(windowInfo.id)}`)
                 const state = unwrapPayload<StaffQueueState>(raw)
 
+                const baseTs = typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
+
                 setQueueState(state)
-                const nowTs = Date.now()
-                setLastSyncedAtIso(new Date(nowTs).toISOString())
-                lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, nowTs)
+                setLastSyncedAtIso(new Date(baseTs).toISOString())
+                lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, baseTs)
+                scheduleNextRefresh(baseTs)
 
                 if (opts?.broadcast) {
-                    broadcastQueueState({ ts: nowTs, windowId: windowInfo.id, state })
+                    broadcastQueueState({ ts: baseTs, windowId: windowInfo.id, state })
                 }
 
                 // Duplicate-active-number detection (quick warning)
@@ -794,7 +819,7 @@ export default function StaffQueuePage() {
             } catch (e: any) {
                 const msg = safeErrorMessage(e, "Failed to load centralized queue state.")
 
-                // ✅ Avoid toast spam during 2–3s polling
+                // ✅ Avoid toast spam during 2.5s polling
                 if (!opts?.silent) {
                     toast.error(msg)
                 } else {
@@ -808,7 +833,7 @@ export default function StaffQueuePage() {
                 if (!opts?.silent) setStateLoading(false)
             }
         },
-        [broadcastQueueState, windowInfo?.id],
+        [broadcastQueueState, scheduleNextRefresh, windowInfo?.id],
     )
 
     const fetchSecondary = React.useCallback(async () => {
@@ -853,9 +878,30 @@ export default function StaffQueuePage() {
             setHistory([])
             return
         }
-        void fetchCentralState({ broadcast: true })
+        scheduleNextRefresh(Date.now())
+        void fetchCentralState({ broadcast: true, tickTs: Date.now() })
         void fetchSecondary()
-    }, [windowInfo?.id, fetchCentralState, fetchSecondary])
+    }, [scheduleNextRefresh, windowInfo?.id, fetchCentralState, fetchSecondary])
+
+    // ✅ Countdown loop updater (smooth)
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        if (!liveSync || !assignedOk) {
+            nextRefreshAtRef.current = 0
+            setRefreshRemainingMs(0)
+            return
+        }
+
+        if (!nextRefreshAtRef.current) scheduleNextRefresh(Date.now())
+
+        const iv = window.setInterval(() => {
+            const target = nextRefreshAtRef.current || Date.now() + POLL_MS
+            const remaining = Math.max(0, target - Date.now())
+            setRefreshRemainingMs(remaining)
+        }, 100)
+
+        return () => window.clearInterval(iv)
+    }, [assignedOk, liveSync, scheduleNextRefresh])
 
     // ✅ Cross-tab receive: BroadcastChannel + localStorage fallback
     React.useEffect(() => {
@@ -958,7 +1004,7 @@ export default function StaffQueuePage() {
         return () => window.clearInterval(iv)
     }, [liveSync, windowInfo?.id])
 
-    // ✅ Leader polling: every 2–3 seconds; broadcasts state to all tabs/windows
+    // ✅ Leader polling: every 2.5 seconds; broadcasts state to all tabs/windows
     React.useEffect(() => {
         if (!liveSync) return
         if (!windowInfo?.id) return
@@ -966,11 +1012,13 @@ export default function StaffQueuePage() {
         if (typeof window === "undefined") return
 
         const iv = window.setInterval(() => {
-            void fetchCentralState({ silent: true, broadcast: true })
+            const tickTs = Date.now()
+            scheduleNextRefresh(tickTs)
+            void fetchCentralState({ silent: true, broadcast: true, tickTs })
         }, POLL_MS)
 
         return () => window.clearInterval(iv)
-    }, [fetchCentralState, isQueueLeader, liveSync, windowInfo?.id])
+    }, [fetchCentralState, isQueueLeader, liveSync, scheduleNextRefresh, windowInfo?.id])
 
     // Secondary refresh can be less frequent; no need to spam server
     React.useEffect(() => {
@@ -1097,11 +1145,11 @@ export default function StaffQueuePage() {
                 announceTicket(ticket)
             }
 
-            await fetchCentralState({ broadcast: true })
+            await fetchCentralState({ broadcast: true, tickTs: Date.now() })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to call next."))
-            await fetchCentralState({ silent: true, broadcast: true })
+            await fetchCentralState({ silent: true, broadcast: true, tickTs: Date.now() })
         } finally {
             setBusy(false)
         }
@@ -1117,11 +1165,11 @@ export default function StaffQueuePage() {
             const updated = unwrapPayload<TicketView>(raw)
             const dep = getDepartmentMeta(updated)
             toast.success(`Marked ${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} as served.`)
-            await fetchCentralState({ broadcast: true })
+            await fetchCentralState({ broadcast: true, tickTs: Date.now() })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to mark served."))
-            await fetchCentralState({ silent: true, broadcast: true })
+            await fetchCentralState({ silent: true, broadcast: true, tickTs: Date.now() })
         } finally {
             setBusy(false)
         }
@@ -1143,11 +1191,11 @@ export default function StaffQueuePage() {
                 toast.success(`${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} moved to HOLD.`)
             }
 
-            await fetchCentralState({ broadcast: true })
+            await fetchCentralState({ broadcast: true, tickTs: Date.now() })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to hold ticket."))
-            await fetchCentralState({ silent: true, broadcast: true })
+            await fetchCentralState({ silent: true, broadcast: true, tickTs: Date.now() })
         } finally {
             setBusy(false)
         }
@@ -1159,11 +1207,11 @@ export default function StaffQueuePage() {
             const res = await staffApi.returnFromHold(ticketId)
             const qn = Number((res as any)?.ticket?.queueNumber ?? 0)
             toast.success(`Returned ${qn ? `#${qn}` : "ticket"} to WAITING.`)
-            await fetchCentralState({ broadcast: true })
+            await fetchCentralState({ broadcast: true, tickTs: Date.now() })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to return from HOLD."))
-            await fetchCentralState({ silent: true, broadcast: true })
+            await fetchCentralState({ silent: true, broadcast: true, tickTs: Date.now() })
         } finally {
             setBusy(false)
         }
@@ -1175,6 +1223,18 @@ export default function StaffQueuePage() {
         return `Auto-refresh: ON (${(POLL_MS / 1000).toFixed(1)}s)`
     }, [assignedOk, liveSync])
 
+    const countdownText = React.useMemo(() => {
+        if (!assignedOk) return "Next refresh: —"
+        if (!liveSync) return "Next refresh: —"
+        return `Next refresh: ${formatSeconds(refreshRemainingMs)}s`
+    }, [assignedOk, liveSync, refreshRemainingMs])
+
+    const refreshProgress = React.useMemo(() => {
+        if (!assignedOk || !liveSync) return 0
+        const elapsed = Math.min(POLL_MS, Math.max(0, POLL_MS - refreshRemainingMs))
+        return Math.min(100, Math.max(0, (elapsed / POLL_MS) * 100))
+    }, [assignedOk, liveSync, refreshRemainingMs])
+
     return (
         <DashboardLayout title="Queue" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
@@ -1185,7 +1245,7 @@ export default function StaffQueuePage() {
                             Staff Queue Control Center
                         </CardTitle>
                         <CardDescription>
-                            ✅ Centralized, synchronized queue state across all windows. Auto-refresh is enabled (2–3s polling), no manual refresh needed.
+                            ✅ Centralized, synchronized queue state across all windows. Auto-refresh runs on a 2.5s loop with a live countdown.
                         </CardDescription>
                     </CardHeader>
 
@@ -1208,7 +1268,7 @@ export default function StaffQueuePage() {
                                                 </CardDescription>
                                             </div>
 
-                                            {/* ✅ Keep optional actions tucked away (no manual refresh needed) */}
+                                            {/* ✅ Optional actions tucked away (no manual refresh needed) */}
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button variant="outline" size="icon" className="shrink-0" aria-label="Queue options">
@@ -1220,8 +1280,10 @@ export default function StaffQueuePage() {
                                                     <DropdownMenuSeparator />
                                                     <DropdownMenuItem
                                                         onClick={() => {
+                                                            const ts = Date.now()
                                                             toast.message("Syncing now…")
-                                                            void fetchCentralState({ broadcast: true })
+                                                            scheduleNextRefresh(ts)
+                                                            void fetchCentralState({ broadcast: true, tickTs: ts })
                                                             void fetchSecondary()
                                                         }}
                                                     >
@@ -1244,7 +1306,8 @@ export default function StaffQueuePage() {
                                                             toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
                                                             if (next) {
                                                                 claimQueueLeadership()
-                                                                void fetchCentralState({ broadcast: true })
+                                                                scheduleNextRefresh(Date.now())
+                                                                void fetchCentralState({ broadcast: true, tickTs: Date.now() })
                                                             }
                                                         }}
                                                     >
@@ -1266,6 +1329,8 @@ export default function StaffQueuePage() {
                                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
 
                                                 <Badge variant={liveSync ? "default" : "secondary"}>{syncBadgeText}</Badge>
+
+                                                <Badge variant="secondary">{countdownText}</Badge>
 
                                                 <Badge variant="secondary">
                                                     Server: {queueState?.serverTime ? shortTime(queueState.serverTime) : "—"}
@@ -1292,6 +1357,17 @@ export default function StaffQueuePage() {
                                                     <Badge variant="secondary">Central audio: OFF</Badge>
                                                 )}
                                             </div>
+
+                                            {/* ✅ 2.5s loop progress bar (smooth visual countdown) */}
+                                            {assignedOk && liveSync ? (
+                                                <div className="space-y-2">
+                                                    <Progress value={refreshProgress} className="h-2" />
+                                                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                        <span className="tabular-nums">Loop: {(POLL_MS / 1000).toFixed(1)}s</span>
+                                                        <span className="tabular-nums">Remaining: {formatSeconds(refreshRemainingMs)}s</span>
+                                                    </div>
+                                                </div>
+                                            ) : null}
 
                                             {duplicateActivePairs.length ? (
                                                 <Card className="border-destructive/40 bg-destructive/5">
@@ -1352,7 +1428,8 @@ export default function StaffQueuePage() {
                                                                 toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
                                                                 if (next) {
                                                                     claimQueueLeadership()
-                                                                    void fetchCentralState({ broadcast: true })
+                                                                    scheduleNextRefresh(Date.now())
+                                                                    void fetchCentralState({ broadcast: true, tickTs: Date.now() })
                                                                 }
                                                             }}
                                                             disabled={!assignedOk}
@@ -1511,9 +1588,7 @@ export default function StaffQueuePage() {
                                                                     Department: {getDepartmentMeta(current).name}
                                                                 </div>
 
-                                                                <div className="text-sm text-muted-foreground">
-                                                                    Called at: {fmtTime(current.calledAt)}
-                                                                </div>
+                                                                <div className="text-sm text-muted-foreground">Called at: {fmtTime(current.calledAt)}</div>
 
                                                                 <div className="mt-3 flex flex-wrap items-center gap-2">
                                                                     {participantTypeBadge(getParticipantType(current) || "")}
