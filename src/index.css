@@ -125,6 +125,42 @@
     @apply bg-background text-foreground;
   }
 
+  /**
+   * Sonner (toast) theming
+   * Fixes white-on-white description by explicitly mapping Sonner CSS vars
+   * to our OKLCH theme tokens.
+   */
+  [data-sonner-toaster] {
+    --normal-bg: var(--popover);
+    --normal-text: var(--popover-foreground);
+    --normal-border: var(--border);
+
+    --success-bg: var(--primary);
+    --success-text: var(--primary-foreground);
+    --success-border: var(--primary);
+
+    --info-bg: var(--secondary);
+    --info-text: var(--secondary-foreground);
+    --info-border: var(--border);
+
+    --warning-bg: var(--accent);
+    --warning-text: var(--accent-foreground);
+    --warning-border: var(--border);
+
+    --error-bg: var(--destructive);
+    --error-text: var(--primary-foreground);
+    --error-border: var(--destructive);
+  }
+
+  /* Ensure non-rich toasts always have readable title/description */
+  [data-sonner-toast][data-rich-colors="false"] [data-title] {
+    color: var(--foreground);
+  }
+
+  [data-sonner-toast][data-rich-colors="false"] [data-description] {
+    color: var(--muted-foreground);
+  }
+
   /* WebKit (Chrome, Edge, Safari) */
   *::-webkit-scrollbar {
     width: 8px;
