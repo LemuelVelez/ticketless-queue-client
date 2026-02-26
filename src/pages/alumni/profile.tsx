@@ -9,6 +9,8 @@ import Footer from "@/components/Footer"
 import { guestApi, participantAuthStorage } from "@/api/guest"
 import { studentApi, type Department } from "@/api/student"
 
+import { api, ApiError } from "@/lib/http"
+
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -60,6 +62,17 @@ function getErrorMessage(error: unknown, fallback: string) {
     return fallback
 }
 
+function normalizeMobile(input: string) {
+    const raw = input.trim()
+    // keep + and digits only
+    const cleaned = raw.replace(/[^\d+]/g, "")
+    return cleaned
+}
+
+function buildDisplayName(firstName: string, middleName: string, lastName: string) {
+    return [firstName, middleName, lastName].map((s) => s.trim()).filter(Boolean).join(" ")
+}
+
 type ProfileDraft = {
     firstName: string
     middleName: string
@@ -96,6 +109,7 @@ export default function AlumniProfilePage() {
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
+    const [busySaveOnline, setBusySaveOnline] = React.useState(false)
 
     const [departments, setDepartments] = React.useState<Department[]>([])
     const [participantType, setParticipantType] = React.useState<string>("ALUMNI_VISITOR")
@@ -186,6 +200,11 @@ export default function AlumniProfilePage() {
             } else {
                 setLockedDepartmentId("")
             }
+
+            // Optional preference field if backend provides it
+            if (typeof (p as any).smsUpdates === "boolean") {
+                setSmsUpdates(Boolean((p as any).smsUpdates))
+            }
         } catch {
             setHasSession(false)
             setLockedDepartmentId("")
@@ -242,6 +261,96 @@ export default function AlumniProfilePage() {
         }
 
         toast.success("Profile draft cleared.")
+    }
+
+    const getParticipantAuthHeaders = React.useCallback(() => {
+        const token = participantAuthStorage.getToken()
+        if (!token) return null
+        return { Authorization: `Bearer ${token}` }
+    }, [])
+
+    const updateProfileOnline = React.useCallback(
+        async (payload: Record<string, unknown>) => {
+            const headers = getParticipantAuthHeaders()
+            if (!headers) throw new Error("Not logged in. Please login again.")
+
+            // Try common endpoints (keeps frontend resilient across backend route names)
+            const candidates = [
+                "/guest/me",
+                "/guest/profile",
+                "/guest/session",
+                "/guest/session/profile",
+                "/participant/me",
+                "/participant/profile",
+                "/participants/me",
+                "/participants/profile",
+            ]
+
+            let lastErr: unknown = null
+
+            for (const url of candidates) {
+                try {
+                    return await api.patch<Record<string, unknown>>(url, payload, {
+                        auth: false,
+                        headers,
+                    })
+                } catch (err) {
+                    lastErr = err
+                    if (err instanceof ApiError && err.status === 404) continue
+                    throw err
+                }
+            }
+
+            throw lastErr ?? new Error("Profile update endpoint not found.")
+        },
+        [getParticipantAuthHeaders],
+    )
+
+    async function onSaveOnline() {
+        const f = firstName.trim()
+        const m = middleName.trim()
+        const l = lastName.trim()
+        const dept = (isDepartmentLocked ? lockedDepartmentId : departmentId).trim()
+        const mobile = normalizeMobile(mobileNumber)
+
+        if (!f) return toast.error("First name is required.")
+        if (!l) return toast.error("Last name is required.")
+        if (!mobile) return toast.error("Mobile number is required.")
+        if (!dept) return toast.error("Department is required.")
+
+        setBusySaveOnline(true)
+        const toastId = toast.loading("Saving profile online…")
+
+        try {
+            const name = buildDisplayName(f, m, l)
+
+            const payload: Record<string, unknown> = {
+                type: participantType || "ALUMNI_VISITOR",
+                firstName: f,
+                middleName: m || undefined,
+                lastName: l,
+                name,
+                mobileNumber: mobile,
+                phone: mobile, // alias safety
+                departmentId: dept,
+                smsUpdates,
+            }
+
+            await updateProfileOnline(payload)
+
+            clearDraftStorage()
+            await loadSession()
+
+            toast.success("Profile saved online.", { id: toastId })
+        } catch (error) {
+            const msg =
+                error instanceof ApiError && error.status === 404
+                    ? "Profile save endpoint not found on the server."
+                    : getErrorMessage(error, "Failed to save profile online.")
+            toast.error(msg, { id: toastId })
+        } finally {
+            setBusySaveOnline(false)
+        }
     }
 
     async function onRefreshSession() {
@@ -305,7 +414,7 @@ export default function AlumniProfilePage() {
                     <Card>
                         <CardHeader>
                             <CardTitle>Profile Details</CardTitle>
-                            <CardDescription>Edit fields and save as local draft.</CardDescription>
+                            <CardDescription>Edit fields and save online (recommended) or keep a local draft.</CardDescription>
                         </CardHeader>
 
                         <CardContent className="space-y-5">
@@ -406,11 +515,14 @@ export default function AlumniProfilePage() {
                             <Separator />
 
                             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                <Button type="button" variant="outline" onClick={onClearDraft}>
+                                <Button type="button" variant="outline" onClick={onClearDraft} disabled={busySaveOnline}>
                                     Clear Draft
                                 </Button>
-                                <Button type="button" onClick={onSaveDraft}>
+                                <Button type="button" variant="secondary" onClick={onSaveDraft} disabled={busySaveOnline}>
                                     Save Draft
+                                </Button>
+                                <Button type="button" onClick={() => void onSaveOnline()} disabled={busySaveOnline}>
+                                    {busySaveOnline ? "Saving…" : "Save Online"}
                                 </Button>
                             </div>
                         </CardContent>
