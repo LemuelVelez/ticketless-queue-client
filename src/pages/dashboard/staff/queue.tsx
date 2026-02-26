@@ -16,12 +16,13 @@ import {
     Volume2,
 } from "lucide-react"
 
+import { api } from "@/lib/http"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { useSession } from "@/hooks/use-session"
-import { staffApi, type Ticket as TicketType } from "@/api/staff"
+import { staffApi, type Ticket as LegacyTicket } from "@/api/staff"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -32,11 +33,75 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 
+type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
+type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST" | string
+
+type TicketView = {
+    id: string
+    dateKey: string
+    queueNumber: number
+    status: TicketStatus
+    department: { id: string; name: string; code?: string; transactionManager: string }
+    participant: { studentId: string; name?: string; phone?: string; type?: TicketParticipantType }
+    transaction?: { category?: string; key?: string; label?: string; purpose?: string }
+    window?: { id: string; name: string; number: number }
+    holdAttempts: number
+    waitingSince: string
+    calledAt?: string
+    servedAt?: string
+    outAt?: string
+    createdAt: string
+    updatedAt: string
+    [key: string]: any
+}
+
+/**
+ * ✅ TicketLike now supports BOTH shapes:
+ * - centralized TicketView (department is an object)
+ * - legacy Ticket (department is string)
+ */
+type TicketLike = TicketView | Partial<LegacyTicket>
+
+type StaffQueueState = {
+    serverTime: string
+    dateKey: string
+    scope: {
+        manager?: string
+        departmentId?: string
+        windowId?: string
+        departmentIds?: string[]
+    }
+    settings: {
+        upNextCount: number
+        maxHoldAttempts: number
+        disallowDuplicateActiveTickets: boolean
+    }
+    nowServing?: TicketView
+    waiting: TicketView[]
+    hold: TicketView[]
+    called: TicketView[]
+    upNext: TicketView[]
+}
+
+type DuplicateActivePair = {
+    departmentName: string
+    departmentCode?: string
+    queueNumber: number
+    count: number
+}
+
 function fmtTime(v?: string | null) {
     if (!v) return "—"
     const d = new Date(v)
     if (Number.isNaN(d.getTime())) return "—"
     return d.toLocaleString()
+}
+
+function shortTime(v?: string | null) {
+    if (!v) return "—"
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return "—"
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
 function statusBadge(status?: string) {
@@ -68,30 +133,11 @@ function normalizeParticipantTypeKey(value?: string | null) {
 
     if (normalized === "STUDENT") return "STUDENT"
     if (normalized === "GUEST") return "GUEST"
-    if (
-        normalized === "ALUMNI_VISITOR" ||
-        normalized === "ALUMNI" ||
-        normalized === "VISITOR"
-    ) {
+    if (normalized === "ALUMNI_VISITOR" || normalized === "ALUMNI" || normalized === "VISITOR") {
         return "ALUMNI_VISITOR"
     }
 
     return normalized
-}
-
-function extractStringArray(value: unknown): string[] {
-    if (!Array.isArray(value)) return []
-    return value
-        .map((v) => String(v ?? "").trim())
-        .filter(Boolean)
-}
-
-function firstNonEmptyText(candidates: unknown[]) {
-    for (const candidate of candidates) {
-        const text = String(candidate ?? "").trim()
-        if (text) return text
-    }
-    return ""
 }
 
 function participantText(value?: string | null) {
@@ -103,7 +149,7 @@ function participantText(value?: string | null) {
     return humanizeTransactionKey(s) || s
 }
 
-function participantBadge(value?: string | null) {
+function participantTypeBadge(value?: string | null) {
     const s = normalizeParticipantTypeKey(value)
 
     if (!s) return <Badge variant="secondary">—</Badge>
@@ -114,37 +160,99 @@ function participantBadge(value?: string | null) {
     return <Badge variant="outline">{participantText(s)}</Badge>
 }
 
-function participantFromTicket(ticket?: TicketType | null) {
-    if (!ticket) return ""
+function extractStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    return value.map((v) => String(v ?? "").trim()).filter(Boolean)
+}
 
-    const t = ticket as any
-    const explicit = firstNonEmptyText([
-        t.participantType,
-        t.participantLabel,
-        t.participant,
-        t.userType,
-        t.role,
-        t.meta?.participantType,
-        t.meta?.participantLabel,
-        t.transactions?.participantType,
-        t.transactions?.participantLabel,
-    ])
-
-    if (explicit) return explicit
-
-    // Practical fallback: tc/student-style IDs are typically student records.
-    const sid = String(ticket.studentId ?? "").trim()
-    if (/^TC[-_A-Z0-9]/i.test(sid)) return "STUDENT"
-
+function firstNonEmptyText(candidates: unknown[]) {
+    for (const candidate of candidates) {
+        const text = String(candidate ?? "").trim()
+        if (text) return text
+    }
     return ""
 }
 
-function ticketPurpose(ticket?: TicketType | null) {
-    if (!ticket) return "—"
+function getTicketId(ticket: TicketLike): string {
+    const t = ticket as any
+    return String(t?.id ?? t?._id ?? "").trim()
+}
 
+function getDepartmentMeta(ticket: TicketLike) {
+    const t = ticket as any
+    const depObj = t?.department && typeof t.department === "object" ? t.department : null
+
+    const id = String(depObj?.id ?? t?.departmentId ?? t?.department ?? "").trim()
+    const name = String(depObj?.name ?? t?.departmentName ?? "").trim()
+    const code = String(depObj?.code ?? t?.departmentCode ?? "").trim()
+    const transactionManager = String(depObj?.transactionManager ?? t?.transactionManager ?? "").trim()
+
+    return {
+        id,
+        name: name || "Department",
+        code: code || undefined,
+        transactionManager,
+    }
+}
+
+function getWindowMeta(ticket: TicketLike) {
+    const t = ticket as any
+    const winObj = t?.window && typeof t.window === "object" ? t.window : null
+    const number = Number(winObj?.number ?? t?.windowNumber ?? 0)
+    const name = String(winObj?.name ?? t?.windowName ?? "").trim()
+    const id = String(winObj?.id ?? t?.windowId ?? t?.window ?? "").trim()
+
+    return {
+        id,
+        name: name || (number ? `Window ${number}` : "Window"),
+        number: Number.isFinite(number) ? number : 0,
+    }
+}
+
+function getParticipantName(ticket: TicketLike): string {
+    const t = ticket as any
+    const name = firstNonEmptyText([
+        t?.participant?.name,
+        t?.participantName,
+        t?.__participantName,
+        t?.user?.name,
+        t?.name,
+        t?.meta?.participantName,
+    ])
+    return name || ""
+}
+
+function getParticipantType(ticket: TicketLike): string {
+    const t = ticket as any
+    const type = firstNonEmptyText([
+        t?.participant?.type,
+        t?.participantType,
+        t?.participantLabel,
+        t?.participantTypeLabel,
+        t?.transactions?.participantType,
+        t?.transactions?.participantTypeLabel,
+        t?.meta?.participantType,
+        t?.meta?.participantLabel,
+        t?.userType,
+        t?.role,
+    ])
+    return type || ""
+}
+
+function getStudentId(ticket: TicketLike): string {
+    const t = ticket as any
+    return String(t?.participant?.studentId ?? t?.studentId ?? t?.tcNumber ?? "").trim()
+}
+
+function ticketPurpose(ticket?: TicketLike | null) {
+    if (!ticket) return "—"
     const t = ticket as any
 
-    // 1) Array label candidates (highest fidelity)
+    // Centralized TicketView path
+    const fromView = firstNonEmptyText([t?.transaction?.purpose, t?.transaction?.label, t?.transaction?.category])
+    if (fromView) return fromView
+
+    // 1) Array label candidates
     const arrayLabelCandidates = [
         t.transactionLabels,
         t.selectedTransactionLabels,
@@ -154,7 +262,6 @@ function ticketPurpose(ticket?: TicketType | null) {
         t.selection?.transactionLabels,
         t.join?.transactionLabels,
     ]
-
     for (const candidate of arrayLabelCandidates) {
         const labels = extractStringArray(candidate)
         if (labels.length) return labels.join(" • ")
@@ -167,30 +274,19 @@ function ticketPurpose(ticket?: TicketType | null) {
         t.transactions?.items,
         t.transactions?.selected,
     ]
-
     for (const candidate of objectArrayCandidates) {
         if (!Array.isArray(candidate)) continue
-
         const labels = candidate
-            .map((item: any) =>
-                String(
-                    item?.label ??
-                    item?.name ??
-                    item?.title ??
-                    item?.transactionLabel ??
-                    "",
-                ).trim(),
-            )
+            .map((item: any) => String(item?.label ?? item?.name ?? item?.title ?? item?.transactionLabel ?? "").trim())
             .filter(Boolean)
-
         if (labels.length) return labels.join(" • ")
     }
 
     // 3) Direct string candidates
     const direct = firstNonEmptyText([
-        ticket.queuePurpose,
-        ticket.purpose,
-        ticket.transactionLabel,
+        t.queuePurpose,
+        t.purpose,
+        t.transactionLabel,
         t.transaction?.label,
         t.transactionName,
         t.transactionTitle,
@@ -199,7 +295,6 @@ function ticketPurpose(ticket?: TicketType | null) {
         t.transactionCategory,
         t.meta?.transactionCategory,
     ])
-
     if (direct) return direct
 
     // 4) Key arrays -> humanized labels
@@ -210,39 +305,29 @@ function ticketPurpose(ticket?: TicketType | null) {
         t.transactions?.transactionKeys,
         t.selection?.transactionKeys,
     ]
-
     for (const candidate of keyArrayCandidates) {
         const keys = extractStringArray(candidate).map((k) => humanizeTransactionKey(k)).filter(Boolean)
         if (keys.length) return keys.join(" • ")
     }
 
     // 5) Single key fallback
-    const key = firstNonEmptyText([
-        ticket.transactionKey,
-        t.transaction?.key,
-        t.meta?.transactionKey,
-        t.transactionCode,
-    ])
-
+    const key = firstNonEmptyText([t.transactionKey, t.transaction?.key, t.meta?.transactionKey, t.transactionCode])
     if (key) return humanizeTransactionKey(key)
 
     return "—"
 }
 
-function historyWhen(t: TicketType) {
-    const s = String(t.status || "").toUpperCase()
-    if (s === "SERVED") return fmtTime((t as any).servedAt)
-    if (s === "OUT") return fmtTime((t as any).outAt)
-    if (s === "CALLED") return fmtTime((t as any).calledAt)
-    return fmtTime((t as any).updatedAt)
+function historyWhen(t: TicketLike) {
+    const x = t as any
+    const s = String(x?.status || "").toUpperCase()
+    if (s === "SERVED") return fmtTime(x?.servedAt)
+    if (s === "OUT") return fmtTime(x?.outAt)
+    if (s === "CALLED") return fmtTime(x?.calledAt)
+    return fmtTime(x?.updatedAt)
 }
 
 function isSpeechSupported() {
-    return (
-        typeof window !== "undefined" &&
-        "speechSynthesis" in window &&
-        "SpeechSynthesisUtterance" in window
-    )
+    return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
 }
 
 function EmptyStateCard({ message }: { message: string }) {
@@ -274,6 +359,67 @@ function QueueStatCard({ label, value }: { label: string; value: number }) {
     )
 }
 
+function safeErrorMessage(err: any, fallback: string) {
+    return err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || fallback
+}
+
+/**
+ * Unwraps:
+ * 1) axios response -> response.data
+ * 2) QueueManagementController envelope -> { ok:true, data: T } -> T
+ * 3) other payloads -> as-is
+ */
+function unwrapPayload<T>(value: any): T {
+    let v = value
+    if (v && typeof v === "object" && "data" in v) v = (v as any).data
+    if (v && typeof v === "object" && "ok" in v && "data" in v) v = (v as any).data
+    return v as T
+}
+
+function pad3(n: number) {
+    const s = String(Math.max(0, Math.floor(n)))
+    return s.length >= 3 ? s : s.padStart(3, "0")
+}
+
+function ticketKey(t: TicketLike) {
+    const id = getTicketId(t)
+    if (id) return id
+    const dep = getDepartmentMeta(t)
+    const qn = Number((t as any)?.queueNumber ?? 0)
+    return `${dep.id || "dep"}:${String(qn)}`
+}
+
+function TicketNumberPill({ ticket }: { ticket: TicketLike }) {
+    const dep = getDepartmentMeta(ticket)
+    const qn = Number((ticket as any)?.queueNumber ?? 0)
+    const label = dep.code ? `${dep.code}-${pad3(qn)}` : `#${qn}`
+
+    return (
+        <div className="flex items-center gap-2">
+            <span className="font-medium tabular-nums">{label}</span>
+            <Badge variant="secondary" className="max-w-full whitespace-normal wrap-break-word">
+                {dep.code || dep.name}
+            </Badge>
+        </div>
+    )
+}
+
+function ParticipantCell({ ticket }: { ticket: TicketLike }) {
+    const name = getParticipantName(ticket)
+    const type = getParticipantType(ticket)
+    const sid = getStudentId(ticket)
+
+    return (
+        <div className="min-w-0">
+            <div className="truncate font-medium">{name || "—"}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+                {participantTypeBadge(type || "")}
+                <span className="text-xs text-muted-foreground">ID: {sid || "—"}</span>
+            </div>
+        </div>
+    )
+}
+
 export default function StaffQueuePage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -287,23 +433,22 @@ export default function StaffQueuePage() {
         }
     }, [sessionUser])
 
-    const [loading, setLoading] = React.useState(true)
+    const [bootLoading, setBootLoading] = React.useState(true)
     const [busy, setBusy] = React.useState(false)
 
     const [departmentId, setDepartmentId] = React.useState<string | null>(null)
     const [departmentNames, setDepartmentNames] = React.useState<string[]>([])
     const [windowInfo, setWindowInfo] = React.useState<{ id: string; name: string; number: number } | null>(null)
 
-    const [current, setCurrent] = React.useState<TicketType | null>(null)
+    const [queueState, setQueueState] = React.useState<StaffQueueState | null>(null)
+    const [stateLoading, setStateLoading] = React.useState(false)
+    const [liveSync, setLiveSync] = React.useState(true)
 
-    const [waiting, setWaiting] = React.useState<TicketType[]>([])
-    const [hold, setHold] = React.useState<TicketType[]>([])
-    const [out, setOut] = React.useState<TicketType[]>([])
-    const [history, setHistory] = React.useState<TicketType[]>([])
-
+    const [out, setOut] = React.useState<TicketLike[]>([])
+    const [history, setHistory] = React.useState<TicketLike[]>([])
     const [historyMine, setHistoryMine] = React.useState(false)
 
-    const assignedOk = Boolean(departmentId && windowInfo?.id)
+    const assignedOk = Boolean(windowInfo?.id)
 
     const departmentDisplay = React.useMemo(() => {
         if (departmentNames.length) return departmentNames.join(", ")
@@ -315,7 +460,26 @@ export default function StaffQueuePage() {
     const [voiceSupported, setVoiceSupported] = React.useState(true)
     const voicesRef = React.useRef<SpeechSynthesisVoice[]>([])
     const voiceWarnedRef = React.useRef(false)
-    const lastAnnouncedRef = React.useRef<number | null>(null)
+
+    // ✅ Centralized Audio Trigger (single shared announcer per device via leader election)
+    const [centralAudio, setCentralAudio] = React.useState(true)
+    const [isAudioLeader, setIsAudioLeader] = React.useState(false)
+
+    const tabIdRef = React.useRef<string>("")
+    if (!tabIdRef.current) {
+        try {
+            tabIdRef.current =
+                typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `tab_${Date.now()}_${Math.random()}`
+        } catch {
+            tabIdRef.current = `tab_${Date.now()}_${Math.random()}`
+        }
+    }
+
+    const lastAnnouncedTicketIdsRef = React.useRef<Set<string>>(new Set())
+    const lastAnnouncedQueueRef = React.useRef<number | null>(null)
+    const duplicateWarnedRef = React.useRef(false)
 
     React.useEffect(() => {
         const supported = isSpeechSupported()
@@ -357,7 +521,6 @@ export default function StaffQueuePage() {
 
         try {
             const synth = window.speechSynthesis
-
             try {
                 synth.resume()
             } catch {
@@ -370,23 +533,25 @@ export default function StaffQueuePage() {
             u.pitch = 1
             u.volume = 1
 
-            const voices = voicesRef.current?.length ? voicesRef.current : (synth.getVoices?.() ?? [])
+            const voices = voicesRef.current?.length ? voicesRef.current : synth.getVoices?.() ?? []
             const preferred =
                 voices.find((v) => v.lang?.toLowerCase().startsWith("en-ph")) ||
                 voices.find((v) => v.lang?.toLowerCase().startsWith("en")) ||
                 voices[0]
 
             if (preferred) u.voice = preferred
-
             synth.speak(u)
         } catch {
             // ignore
         }
     }, [])
 
-    const announceCall = React.useCallback(
-        (queueNumber: number) => {
-            lastAnnouncedRef.current = queueNumber
+    const announceTicket = React.useCallback(
+        (ticket: TicketLike) => {
+            const qn = Number((ticket as any)?.queueNumber ?? 0)
+            if (!qn) return
+
+            lastAnnouncedQueueRef.current = qn
 
             if (!voiceEnabled) return
             if (!voiceSupported) {
@@ -397,126 +562,391 @@ export default function StaffQueuePage() {
                 return
             }
 
-            const win = windowInfo?.number
-            const text = win
-                ? `Queue number ${queueNumber}. Please proceed to window ${win}.`
-                : `Queue number ${queueNumber}.`
+            const dep = getDepartmentMeta(ticket)
+            const win = getWindowMeta(ticket)
+            const participantName = getParticipantName(ticket)
 
-            speak(text)
+            const parts = [
+                `Queue number ${qn}.`,
+                dep?.name ? `For ${dep.name}.` : "",
+                win?.number ? `Please proceed to window ${win.number}.` : "",
+                participantName ? `Participant ${participantName}.` : "",
+            ]
+                .map((s) => String(s).trim())
+                .filter(Boolean)
+
+            speak(parts.join(" "))
         },
-        [speak, voiceEnabled, voiceSupported, windowInfo?.number],
+        [speak, voiceEnabled, voiceSupported],
     )
 
     const onRecallVoice = React.useCallback(() => {
-        const n = current?.queueNumber ?? lastAnnouncedRef.current
+        const n = (queueState?.nowServing?.queueNumber ?? lastAnnouncedQueueRef.current) || 0
         if (!n) return toast.message("No ticket to announce.")
-        announceCall(n)
-    }, [announceCall, current?.queueNumber])
+        announceTicket({
+            queueNumber: n,
+            window:
+                queueState?.nowServing?.window ??
+                (windowInfo ? { number: windowInfo.number, name: windowInfo.name, id: windowInfo.id } : undefined),
+            department: (queueState?.nowServing as any)?.department,
+            participant: (queueState?.nowServing as any)?.participant,
+        } as any)
+    }, [announceTicket, queueState?.nowServing, windowInfo])
 
-    // -------- Data refresh --------
-    const refreshAll = React.useCallback(async () => {
-        setLoading(true)
+    // -------- Central Audio Leader Election (per device) --------
+    const AUDIO_LEADER_KEY = "queuepass:staff:audio_leader_v1"
+    const claimAudioLeadership = React.useCallback(() => {
         try {
-            const a = await staffApi.myAssignment()
+            const payload = { id: tabIdRef.current, ts: Date.now() }
+            localStorage.setItem(AUDIO_LEADER_KEY, JSON.stringify(payload))
+            setIsAudioLeader(true)
+        } catch {
+            // ignore
+        }
+    }, [])
 
-            const names = (a.assignedDepartments?.length ? a.assignedDepartments : a.handledDepartments ?? [])
-                .map((d) => String(d?.name ?? "").trim())
-                .filter(Boolean)
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        if (!centralAudio) {
+            setIsAudioLeader(false)
+            return
+        }
 
-            setDepartmentNames(names)
+        const tick = () => {
+            try {
+                const raw = localStorage.getItem(AUDIO_LEADER_KEY)
+                const now = Date.now()
+                const parsed = raw ? (JSON.parse(raw) as { id?: string; ts?: number }) : null
 
-            const firstAssignedDepartmentId: string | null = Array.isArray(a.assignedDepartmentIds)
-                ? a.assignedDepartmentIds[0] ?? null
-                : null
+                const leaderId = String(parsed?.id ?? "")
+                const leaderTs = Number(parsed?.ts ?? 0)
+                const expired = !leaderId || !Number.isFinite(leaderTs) || now - leaderTs > 10_000
 
-            const firstHandledDepartmentId: string | null = Array.isArray(a.handledDepartmentIds)
-                ? a.handledDepartmentIds[0] ?? null
-                : null
+                if (expired || leaderId === tabIdRef.current) {
+                    localStorage.setItem(AUDIO_LEADER_KEY, JSON.stringify({ id: tabIdRef.current, ts: now }))
+                    setIsAudioLeader(true)
+                } else {
+                    setIsAudioLeader(false)
+                }
+            } catch {
+                // If storage is blocked, fall back to "single tab" behavior
+                setIsAudioLeader(true)
+            }
+        }
 
-            const resolvedDepartmentId: string | null =
-                a.departmentId ?? firstAssignedDepartmentId ?? firstHandledDepartmentId ?? null
+        tick()
+        const iv = window.setInterval(tick, 3000)
+        return () => window.clearInterval(iv)
+    }, [centralAudio])
 
-            setDepartmentId(resolvedDepartmentId)
-            setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
+    // -------- Unified (centralized) refresh --------
+    const fetchAssignment = React.useCallback(async () => {
+        const a = await staffApi.myAssignment()
 
-            if (!resolvedDepartmentId || !a.window?._id) {
-                setCurrent(null)
-                setWaiting([])
-                setHold([])
-                setOut([])
-                setHistory([])
+        const names = (a.assignedDepartments?.length ? a.assignedDepartments : a.handledDepartments ?? [])
+            .map((d) => String(d?.name ?? "").trim())
+            .filter(Boolean)
+
+        setDepartmentNames(names)
+
+        const firstAssignedDepartmentId: string | null = Array.isArray(a.assignedDepartmentIds)
+            ? a.assignedDepartmentIds[0] ?? null
+            : null
+
+        const firstHandledDepartmentId: string | null = Array.isArray(a.handledDepartmentIds)
+            ? a.handledDepartmentIds[0] ?? null
+            : null
+
+        const resolvedDepartmentId: string | null =
+            (a as any).departmentId ?? firstAssignedDepartmentId ?? firstHandledDepartmentId ?? null
+
+        setDepartmentId(resolvedDepartmentId)
+        setWindowInfo(
+            a.window
+                ? { id: String((a.window as any)._id ?? a.window.id), name: a.window.name, number: a.window.number }
+                : null,
+        )
+
+        return { windowId: a.window ? String((a.window as any)._id ?? a.window.id ?? "").trim() : "" }
+    }, [])
+
+    const fetchCentralState = React.useCallback(
+        async (opts?: { silent?: boolean }) => {
+            if (!windowInfo?.id) {
+                setQueueState(null)
                 return
             }
 
-            const [c, w, h, o, his] = await Promise.all([
-                staffApi.currentCalledForWindow().catch(() => ({ ticket: null })),
-                staffApi.listWaiting({ limit: 25 }).catch(() => ({ tickets: [] })),
-                staffApi.listHold({ limit: 25 }).catch(() => ({ tickets: [] })),
-                staffApi.listOut({ limit: 25 }).catch(() => ({ tickets: [] })),
-                staffApi.listHistory({ limit: 25, mine: historyMine }).catch(() => ({ tickets: [] })),
+            if (!opts?.silent) setStateLoading(true)
+
+            try {
+                const raw = await api.get(`/staff/queue/state?windowId=${encodeURIComponent(windowInfo.id)}`)
+                const state = unwrapPayload<StaffQueueState>(raw)
+                setQueueState(state)
+
+                // Duplicate-active-number detection (quick warning)
+                const active = [...(state?.waiting ?? []), ...(state?.hold ?? []), ...(state?.called ?? [])]
+                const seen = new Map<string, number>()
+                let hasDup = false
+
+                for (const t of active) {
+                    const dep = getDepartmentMeta(t)
+                    const qn = Number((t as any)?.queueNumber ?? NaN)
+                    if (!dep.id || !Number.isFinite(qn)) continue
+                    const key = `${dep.id}:${qn}`
+                    const count = (seen.get(key) ?? 0) + 1
+                    seen.set(key, count)
+                    if (count > 1) hasDup = true
+                }
+
+                if (hasDup && !duplicateWarnedRef.current) {
+                    duplicateWarnedRef.current = true
+                    toast.warning("Duplicate active queue numbers detected. Refreshing the live state may help.")
+                }
+                if (!hasDup) duplicateWarnedRef.current = false
+            } catch (e: any) {
+                toast.error(safeErrorMessage(e, "Failed to load centralized queue state."))
+            } finally {
+                if (!opts?.silent) setStateLoading(false)
+            }
+        },
+        [windowInfo?.id],
+    )
+
+    const fetchSecondary = React.useCallback(async () => {
+        if (!windowInfo?.id) {
+            setOut([])
+            setHistory([])
+            return
+        }
+
+        try {
+            const [o, his] = await Promise.all([
+                staffApi.listOut({ limit: 25 }).catch(() => ({ tickets: [] as any[] })),
+                staffApi.listHistory({ limit: 25, mine: historyMine }).catch(() => ({ tickets: [] as any[] })),
             ])
 
-            setCurrent(c.ticket ?? null)
-            setWaiting(w.tickets ?? [])
-            setHold(h.tickets ?? [])
-            setOut(o.tickets ?? [])
-            setHistory(his.tickets ?? [])
-        } catch (e: any) {
-            toast.error(e?.message ?? "Failed to load staff queue.")
-        } finally {
-            setLoading(false)
+            setOut(((o as any).tickets ?? []) as TicketLike[])
+            setHistory(((his as any).tickets ?? []) as TicketLike[])
+        } catch {
+            // non-critical
         }
-    }, [historyMine])
+    }, [historyMine, windowInfo?.id])
+
+    const refreshAll = React.useCallback(async () => {
+        setBootLoading(true)
+        try {
+            await fetchAssignment()
+        } catch (e: any) {
+            toast.error(safeErrorMessage(e, "Failed to load staff assignment."))
+        } finally {
+            setBootLoading(false)
+        }
+    }, [fetchAssignment])
 
     React.useEffect(() => {
         void refreshAll()
     }, [refreshAll])
 
-    async function onCallNext() {
-        if (!assignedOk) return toast.error("You are not assigned to a department/window.")
+    React.useEffect(() => {
+        if (!windowInfo?.id) {
+            setQueueState(null)
+            setOut([])
+            setHistory([])
+            return
+        }
+        void fetchCentralState()
+        void fetchSecondary()
+    }, [windowInfo?.id, fetchCentralState, fetchSecondary])
+
+    React.useEffect(() => {
+        if (!liveSync) return
+        if (!windowInfo?.id) return
+        if (typeof window === "undefined") return
+
+        const stateIv = window.setInterval(() => {
+            if (document.visibilityState === "hidden") return
+            void fetchCentralState({ silent: true })
+        }, 2000)
+
+        const secondaryIv = window.setInterval(() => {
+            if (document.visibilityState === "hidden") return
+            void fetchSecondary()
+        }, 8000)
+
+        return () => {
+            window.clearInterval(stateIv)
+            window.clearInterval(secondaryIv)
+        }
+    }, [fetchCentralState, fetchSecondary, liveSync, windowInfo?.id])
+
+    React.useEffect(() => {
+        if (!centralAudio) return
+        if (!isAudioLeader) return
+        if (!voiceEnabled || !voiceSupported) return
+
+        const called = queueState?.called ?? []
+        if (!called.length) return
+
+        const announced = lastAnnouncedTicketIdsRef.current
+        const newlyCalled = called
+            .slice()
+            .sort((a, b) => {
+                const ta = new Date(a.calledAt ?? a.updatedAt ?? a.createdAt ?? 0).getTime()
+                const tb = new Date(b.calledAt ?? b.updatedAt ?? b.createdAt ?? 0).getTime()
+                return ta - tb
+            })
+            .filter((t) => !announced.has(String(t.id)))
+
+        if (!newlyCalled.length) return
+
+        for (const t of newlyCalled.slice(-3)) {
+            announced.add(String(t.id))
+            announceTicket(t)
+        }
+    }, [announceTicket, centralAudio, isAudioLeader, queueState?.called, voiceEnabled, voiceSupported])
+
+    const current = queueState?.nowServing ?? null
+    const waiting = React.useMemo(() => (queueState?.waiting ?? []).slice(), [queueState?.waiting])
+    const hold = React.useMemo(() => (queueState?.hold ?? []).slice(), [queueState?.hold])
+    const called = React.useMemo(() => (queueState?.called ?? []).slice(), [queueState?.called])
+
+    const nowServingBoard = React.useMemo(() => {
+        const map = new Map<number, TicketView>()
+        for (const t of called) {
+            const win = getWindowMeta(t)
+            if (!win.number) continue
+
+            const prev = map.get(win.number)
+            if (!prev) {
+                map.set(win.number, t)
+                continue
+            }
+
+            const prevAt = new Date(prev.calledAt ?? prev.updatedAt ?? prev.createdAt ?? 0).getTime()
+            const curAt = new Date(t.calledAt ?? t.updatedAt ?? t.createdAt ?? 0).getTime()
+            if (curAt > prevAt) map.set(win.number, t)
+        }
+
+        return Array.from(map.entries())
+            .sort((a, b) => a[0] - b[0])
+            .map(([windowNumber, ticket]) => ({ windowNumber, ticket }))
+    }, [called])
+
+    // ✅ FIX: standardize the shape to ONE type (DuplicateActivePair) to avoid TS union property errors
+    const duplicateActivePairs = React.useMemo<DuplicateActivePair[]>(() => {
+        const state = queueState
+        if (!state) return []
+
+        const active = [...(state.waiting ?? []), ...(state.hold ?? []), ...(state.called ?? [])]
+        const counts = new Map<string, DuplicateActivePair>()
+
+        for (const t of active) {
+            const dep = getDepartmentMeta(t)
+            const qn = Number((t as any)?.queueNumber ?? NaN)
+            if (!dep.id || !Number.isFinite(qn)) continue
+
+            const key = `${dep.id}:${qn}`
+            const existing = counts.get(key)
+
+            if (!existing) {
+                counts.set(key, {
+                    departmentName: dep.name,
+                    departmentCode: dep.code,
+                    queueNumber: qn,
+                    count: 1,
+                })
+            } else {
+                counts.set(key, {
+                    ...existing,
+                    count: existing.count + 1,
+                })
+            }
+        }
+
+        return Array.from(counts.values()).filter((x) => x.count > 1)
+    }, [queueState])
+
+    async function onCallNextCentral() {
+        if (!windowInfo?.id) return toast.error("You are not assigned to a service window.")
+
         setBusy(true)
         try {
-            const res = await staffApi.callNext()
-            setCurrent(res.ticket)
-            toast.success(`Called #${res.ticket.queueNumber}`)
+            if (centralAudio) claimAudioLeadership()
 
-            announceCall(res.ticket.queueNumber)
+            const raw = await api.post("/staff/queue/call-next-central", { windowId: windowInfo.id })
+            const ticket = unwrapPayload<TicketView | null>(raw)
 
-            await refreshAll()
+            if (!ticket) {
+                toast.message("No waiting tickets.")
+                return
+            }
+
+            const dep = getDepartmentMeta(ticket)
+            toast.success(`Called ${dep.code ? `${dep.code}-${pad3(ticket.queueNumber)}` : `#${ticket.queueNumber}`}`)
+
+            if (centralAudio) {
+                if (isAudioLeader) announceTicket(ticket)
+                else toast.message("Call placed. Audio is handled by another active tab/device.")
+            } else {
+                announceTicket(ticket)
+            }
+
+            await fetchCentralState()
+            await fetchSecondary()
         } catch (e: any) {
-            toast.error(e?.message ?? "No waiting tickets.")
+            toast.error(safeErrorMessage(e, "Failed to call next."))
+            await fetchCentralState({ silent: true })
         } finally {
             setBusy(false)
         }
     }
 
-    async function onServed() {
-        if (!current?._id) return
-        setBusy(true)
-        try {
-            await staffApi.markServed(current._id)
-            toast.success(`Marked #${current.queueNumber} as served.`)
-            await refreshAll()
-        } catch (e: any) {
-            toast.error(e?.message ?? "Failed to mark served.")
-        } finally {
-            setBusy(false)
-        }
-    }
+    async function onServeCentral() {
+        const ticketId = String(current?.id ?? "").trim()
+        if (!ticketId) return
 
-    async function onHoldNoShow() {
-        if (!current?._id) return
         setBusy(true)
         try {
-            const res = await staffApi.holdNoShow(current._id)
+            const raw = await api.post("/staff/queue/serve", { ticketId })
+            const updated = unwrapPayload<TicketView>(raw)
+            const dep = getDepartmentMeta(updated)
             toast.success(
-                res.ticket.status === "OUT"
-                    ? `Ticket #${current.queueNumber} is OUT.`
-                    : `Ticket #${current.queueNumber} moved to HOLD.`,
+                `Marked ${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} as served.`,
             )
-            await refreshAll()
+            await fetchCentralState()
+            await fetchSecondary()
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to hold ticket.")
+            toast.error(safeErrorMessage(e, "Failed to mark served."))
+            await fetchCentralState({ silent: true })
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function onHoldCentral() {
+        const ticketId = String(current?.id ?? "").trim()
+        if (!ticketId) return
+
+        setBusy(true)
+        try {
+            const raw = await api.post("/staff/queue/hold", { ticketId })
+            const updated = unwrapPayload<TicketView>(raw)
+            const dep = getDepartmentMeta(updated)
+
+            if (String(updated.status).toUpperCase() === "OUT") {
+                toast.success(`${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} is OUT.`)
+            } else {
+                toast.success(
+                    `${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} moved to HOLD.`,
+                )
+            }
+
+            await fetchCentralState()
+            await fetchSecondary()
+        } catch (e: any) {
+            toast.error(safeErrorMessage(e, "Failed to hold ticket."))
+            await fetchCentralState({ silent: true })
         } finally {
             setBusy(false)
         }
@@ -526,10 +956,13 @@ export default function StaffQueuePage() {
         setBusy(true)
         try {
             const res = await staffApi.returnFromHold(ticketId)
-            toast.success(`Returned #${res.ticket.queueNumber} to WAITING.`)
-            await refreshAll()
+            const qn = Number((res as any)?.ticket?.queueNumber ?? 0)
+            toast.success(`Returned ${qn ? `#${qn}` : "ticket"} to WAITING.`)
+            await fetchCentralState()
+            await fetchSecondary()
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to return from HOLD.")
+            toast.error(safeErrorMessage(e, "Failed to return from HOLD."))
+            await fetchCentralState({ silent: true })
         } finally {
             setBusy(false)
         }
@@ -545,12 +978,12 @@ export default function StaffQueuePage() {
                             Staff Queue Control Center
                         </CardTitle>
                         <CardDescription>
-                            Manage waiting line operations and clearly view who is in queue and their transaction purpose.
+                            ✅ One unified queue state shared across all staff/windows (live sync). All windows see the same source of truth.
                         </CardDescription>
                     </CardHeader>
 
                     <CardContent className="min-w-0">
-                        {loading ? (
+                        {bootLoading ? (
                             <div className="space-y-3">
                                 <Skeleton className="h-28 w-full" />
                                 <Skeleton className="h-56 w-full" />
@@ -558,57 +991,111 @@ export default function StaffQueuePage() {
                             </div>
                         ) : (
                             <div className="space-y-6">
-                                {/* Command + Snapshot row */}
                                 <div className="grid gap-4 xl:grid-cols-12">
                                     <Card className="xl:col-span-8">
                                         <CardHeader>
                                             <CardTitle className="text-base">Queue Commands</CardTitle>
-                                            <CardDescription>Primary actions for your assigned window.</CardDescription>
+                                            <CardDescription>
+                                                Centralized actions + real-time state. No separate queue instances per staff window.
+                                            </CardDescription>
                                         </CardHeader>
                                         <CardContent className="space-y-4">
                                             <div className="flex flex-wrap items-center gap-2">
-                                                <Badge variant="secondary" className="max-w-full whitespace-normal break-words">
+                                                <Badge variant="secondary" className="max-w-full whitespace-normal wrap-break-word">
                                                     Departments: {departmentDisplay}
                                                 </Badge>
                                                 <Badge variant="secondary">
                                                     Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
                                                 </Badge>
+
                                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+
+                                                <Badge variant={liveSync ? "default" : "secondary"}>
+                                                    Live sync: {liveSync ? "ON" : "OFF"}
+                                                </Badge>
+
+                                                <Badge variant="secondary">
+                                                    Server: {queueState?.serverTime ? shortTime(queueState.serverTime) : "—"}
+                                                </Badge>
+
+                                                {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
+
                                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
+                                                {centralAudio ? (
+                                                    <Badge variant={isAudioLeader ? "default" : "secondary"}>
+                                                        Audio leader: {isAudioLeader ? "YES" : "NO"}
+                                                    </Badge>
+                                                ) : (
+                                                    <Badge variant="secondary">Central audio: OFF</Badge>
+                                                )}
                                             </div>
+
+                                            {duplicateActivePairs.length ? (
+                                                <Card className="border-destructive/40 bg-destructive/5">
+                                                    <CardContent className="py-3">
+                                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                            <div className="min-w-0">
+                                                                <div className="font-medium">Duplicate active queue numbers detected</div>
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    This should not happen. Please refresh; if it persists, check backend queue counter constraints.
+                                                                </div>
+                                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                                    {duplicateActivePairs.slice(0, 6).map((d) => (
+                                                                        <Badge
+                                                                            key={`${d.departmentName}:${d.queueNumber}`}
+                                                                            variant="destructive"
+                                                                        >
+                                                                            {(d.departmentCode || d.departmentName) +
+                                                                                ` #${d.queueNumber} (${d.count}x)`}
+                                                                        </Badge>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                            <Button
+                                                                variant="outline"
+                                                                className="w-full sm:w-auto gap-2"
+                                                                disabled={busy}
+                                                                onClick={() => void fetchCentralState()}
+                                                            >
+                                                                <RefreshCw className="h-4 w-4" />
+                                                                Refresh state
+                                                            </Button>
+                                                        </div>
+                                                    </CardContent>
+                                                </Card>
+                                            ) : null}
 
                                             <Separator />
 
                                             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                                 <Button
                                                     variant="outline"
-                                                    onClick={() => void refreshAll()}
-                                                    disabled={loading || busy}
+                                                    onClick={() => void fetchCentralState()}
+                                                    disabled={busy || !assignedOk}
                                                     className="w-full gap-2 sm:w-auto"
                                                 >
                                                     <RefreshCw className="h-4 w-4" />
-                                                    Refresh data
+                                                    Refresh state
                                                 </Button>
 
                                                 <Button
-                                                    onClick={() => void onCallNext()}
-                                                    disabled={loading || busy || !assignedOk}
+                                                    onClick={() => void onCallNextCentral()}
+                                                    disabled={busy || !assignedOk}
                                                     className="w-full gap-2 sm:w-auto"
                                                 >
                                                     <Megaphone className="h-4 w-4" />
-                                                    Call next
+                                                    Next queue (central)
                                                 </Button>
 
                                                 <Button
                                                     variant="outline"
                                                     onClick={() => onRecallVoice()}
                                                     disabled={
-                                                        loading ||
                                                         busy ||
                                                         !assignedOk ||
                                                         !voiceEnabled ||
                                                         !voiceSupported ||
-                                                        (!current?.queueNumber && !lastAnnouncedRef.current)
+                                                        (!current?.queueNumber && !lastAnnouncedQueueRef.current)
                                                     }
                                                     className="w-full gap-2 sm:w-auto"
                                                 >
@@ -616,16 +1103,46 @@ export default function StaffQueuePage() {
                                                     Recall voice
                                                 </Button>
 
-                                                <div className="ml-0 flex items-center gap-2 rounded-md border px-3 py-2 sm:ml-auto">
-                                                    <Switch
-                                                        id="voiceEnabled"
-                                                        checked={voiceEnabled}
-                                                        onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
-                                                        disabled={busy || !voiceSupported}
-                                                    />
-                                                    <Label htmlFor="voiceEnabled" className="text-sm">
-                                                        Voice enabled
-                                                    </Label>
+                                                <div className="grid w-full gap-2 sm:ml-auto sm:w-auto sm:grid-cols-3">
+                                                    <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 sm:justify-start">
+                                                        <Switch
+                                                            id="liveSync"
+                                                            checked={liveSync}
+                                                            onCheckedChange={(v) => setLiveSync(Boolean(v))}
+                                                            disabled={!assignedOk}
+                                                        />
+                                                        <Label htmlFor="liveSync" className="text-sm">
+                                                            Live sync
+                                                        </Label>
+                                                    </div>
+
+                                                    <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 sm:justify-start">
+                                                        <Switch
+                                                            id="voiceEnabled"
+                                                            checked={voiceEnabled}
+                                                            onCheckedChange={(v) => setVoiceEnabled(Boolean(v))}
+                                                            disabled={busy || !voiceSupported}
+                                                        />
+                                                        <Label htmlFor="voiceEnabled" className="text-sm">
+                                                            Voice
+                                                        </Label>
+                                                    </div>
+
+                                                    <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 sm:justify-start">
+                                                        <Switch
+                                                            id="centralAudio"
+                                                            checked={centralAudio}
+                                                            onCheckedChange={(v) => {
+                                                                const next = Boolean(v)
+                                                                setCentralAudio(next)
+                                                                if (next) claimAudioLeadership()
+                                                            }}
+                                                            disabled={busy || !voiceSupported}
+                                                        />
+                                                        <Label htmlFor="centralAudio" className="text-sm">
+                                                            Central audio
+                                                        </Label>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </CardContent>
@@ -634,16 +1151,80 @@ export default function StaffQueuePage() {
                                     <Card className="xl:col-span-4">
                                         <CardHeader>
                                             <CardTitle className="text-base">Queue Snapshot</CardTitle>
-                                            <CardDescription>Live counters for today.</CardDescription>
+                                            <CardDescription>Unified live counters (same across all staff windows).</CardDescription>
                                         </CardHeader>
                                         <CardContent className="grid grid-cols-2 gap-3">
                                             <QueueStatCard label="Waiting" value={waiting.length} />
                                             <QueueStatCard label="Hold" value={hold.length} />
-                                            <QueueStatCard label="Out" value={out.length} />
+                                            <QueueStatCard label="Called" value={called.length} />
                                             <QueueStatCard label="History" value={history.length} />
                                         </CardContent>
                                     </Card>
                                 </div>
+
+                                {/* Now Serving Board */}
+                                <Card className="min-w-0">
+                                    <CardHeader>
+                                        <CardTitle className="text-base">Now Serving Board (All Windows)</CardTitle>
+                                        <CardDescription>
+                                            Live, centralized view of what each window is currently serving (synchronized everywhere).
+                                        </CardDescription>
+                                    </CardHeader>
+                                    <CardContent>
+                                        {nowServingBoard.length === 0 ? (
+                                            <EmptyStateCard message="No windows are currently serving a ticket." />
+                                        ) : (
+                                            <TableShell>
+                                                <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead className="w-24">Window</TableHead>
+                                                            <TableHead className="w-44">Now serving</TableHead>
+                                                            <TableHead className="min-w-55">Department</TableHead>
+                                                            <TableHead>Participant</TableHead>
+                                                            <TableHead className="hidden md:table-cell">Called at</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {nowServingBoard.map(({ windowNumber, ticket }) => {
+                                                            const isMine = Number(windowInfo?.number ?? 0) === windowNumber
+                                                            const dep = getDepartmentMeta(ticket)
+                                                            const qLabel = dep.code
+                                                                ? `${dep.code}-${pad3(ticket.queueNumber)}`
+                                                                : `#${ticket.queueNumber}`
+
+                                                            return (
+                                                                <TableRow
+                                                                    key={`${windowNumber}:${ticket.id}`}
+                                                                    className={isMine ? "bg-muted/50" : ""}
+                                                                >
+                                                                    <TableCell className="font-medium">#{windowNumber}</TableCell>
+                                                                    <TableCell className="font-medium tabular-nums">{qLabel}</TableCell>
+                                                                    <TableCell className="text-muted-foreground">
+                                                                        <span className="block max-w-md whitespace-normal wrap-break-word">
+                                                                            {dep.name}
+                                                                        </span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="font-medium">
+                                                                            {getParticipantName(ticket) || "—"}
+                                                                        </span>
+                                                                        <span className="ml-2 text-xs text-muted-foreground">
+                                                                            ({getStudentId(ticket) || "—"})
+                                                                        </span>
+                                                                    </TableCell>
+                                                                    <TableCell className="hidden md:table-cell text-muted-foreground">
+                                                                        {fmtTime(ticket?.calledAt ?? ticket?.updatedAt)}
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            )
+                                                        })}
+                                                    </TableBody>
+                                                </Table>
+                                            </TableShell>
+                                        )}
+                                    </CardContent>
+                                </Card>
 
                                 {/* Main queue work area */}
                                 <div className="grid gap-6 lg:grid-cols-12">
@@ -651,11 +1232,13 @@ export default function StaffQueuePage() {
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
                                             <CardTitle>Current called</CardTitle>
-                                            <CardDescription>Ticket currently assigned to your window.</CardDescription>
+                                            <CardDescription>Ticket currently assigned to your window (centralized state).</CardDescription>
                                         </CardHeader>
 
                                         <CardContent className="space-y-4">
-                                            {current ? (
+                                            {!assignedOk ? (
+                                                <EmptyStateCard message="You are not assigned to a service window yet." />
+                                            ) : current ? (
                                                 <>
                                                     <div className="rounded-xl border bg-muted/40 p-4">
                                                         <div className="flex items-start justify-between gap-3">
@@ -663,21 +1246,43 @@ export default function StaffQueuePage() {
                                                                 <div className="text-xs uppercase tracking-wide text-muted-foreground">
                                                                     Active ticket
                                                                 </div>
-                                                                <div className="mt-1 text-4xl font-semibold tracking-tight">
-                                                                    #{current.queueNumber}
-                                                                </div>
+
+                                                                {(() => {
+                                                                    const dep = getDepartmentMeta(current)
+                                                                    const label = dep.code
+                                                                        ? `${dep.code}-${pad3(current.queueNumber)}`
+                                                                        : `#${current.queueNumber}`
+                                                                    return (
+                                                                        <div className="mt-1 text-4xl font-semibold tracking-tight tabular-nums">
+                                                                            {label}
+                                                                        </div>
+                                                                    )
+                                                                })()}
+
                                                                 <div className="mt-2 text-sm text-muted-foreground">
-                                                                    Student ID: {current.studentId ?? "—"}
+                                                                    Participant:{" "}
+                                                                    <span className="text-foreground font-medium">
+                                                                        {getParticipantName(current) || "—"}
+                                                                    </span>
                                                                 </div>
+
                                                                 <div className="text-sm text-muted-foreground">
-                                                                    Called at: {fmtTime((current as any).calledAt)}
+                                                                    Student ID: {getStudentId(current) || "—"}
+                                                                </div>
+
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    Department: {getDepartmentMeta(current).name}
+                                                                </div>
+
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    Called at: {fmtTime(current.calledAt)}
                                                                 </div>
 
                                                                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                                                                    {participantBadge(participantFromTicket(current))}
+                                                                    {participantTypeBadge(getParticipantType(current) || "")}
                                                                     <Badge
                                                                         variant="outline"
-                                                                        className="max-w-full whitespace-normal break-words"
+                                                                        className="max-w-full whitespace-normal wrap-break-word"
                                                                     >
                                                                         Purpose: {ticketPurpose(current)}
                                                                     </Badge>
@@ -687,7 +1292,7 @@ export default function StaffQueuePage() {
                                                         </div>
 
                                                         <div className="mt-3 text-xs text-muted-foreground">
-                                                            Hold attempts: {current.holdAttempts ?? 0}
+                                                            Hold attempts: {Number(current.holdAttempts ?? 0)}
                                                         </div>
                                                     </div>
 
@@ -695,7 +1300,7 @@ export default function StaffQueuePage() {
                                                         <Button
                                                             type="button"
                                                             variant="secondary"
-                                                            onClick={() => void onHoldNoShow()}
+                                                            onClick={() => void onHoldCentral()}
                                                             disabled={busy}
                                                             className="w-full gap-2"
                                                         >
@@ -705,7 +1310,7 @@ export default function StaffQueuePage() {
 
                                                         <Button
                                                             type="button"
-                                                            onClick={() => void onServed()}
+                                                            onClick={() => void onServeCentral()}
                                                             disabled={busy}
                                                             className="w-full gap-2"
                                                         >
@@ -725,34 +1330,40 @@ export default function StaffQueuePage() {
                                         <CardHeader>
                                             <CardTitle className="flex items-center gap-2">
                                                 <ListOrdered className="h-5 w-5" />
-                                                Waiting Line
+                                                Waiting Line (Unified)
                                             </CardTitle>
-                                            <CardDescription>Oldest tickets appear first and should be prioritized.</CardDescription>
+                                            <CardDescription>
+                                                Oldest tickets appear first. This list is synchronized across all staff windows.
+                                            </CardDescription>
                                         </CardHeader>
 
                                         <CardContent>
-                                            {waiting.length === 0 ? (
+                                            {!assignedOk ? (
+                                                <EmptyStateCard message="Waiting line is unavailable until you are assigned to a window." />
+                                            ) : waiting.length === 0 ? (
                                                 <EmptyStateCard message="No WAITING tickets." />
                                             ) : (
                                                 <TableShell>
                                                     <Table>
                                                         <TableHeader>
                                                             <TableRow>
-                                                                <TableHead className="w-24">Queue</TableHead>
-                                                                <TableHead className="w-40">Participant</TableHead>
-                                                                <TableHead>Student ID</TableHead>
-                                                                <TableHead className="min-w-[220px]">Purpose / Transaction</TableHead>
+                                                                <TableHead className="w-44">Queue</TableHead>
+                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead className="min-w-55">Purpose / Transaction</TableHead>
                                                                 <TableHead className="hidden xl:table-cell">Waiting since</TableHead>
                                                             </TableRow>
                                                         </TableHeader>
                                                         <TableBody>
                                                             {waiting.map((t, idx) => (
-                                                                <TableRow key={t._id} className={idx === 0 ? "bg-muted/50" : ""}>
-                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
-                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                <TableRow key={ticketKey(t)} className={idx === 0 ? "bg-muted/50" : ""}>
+                                                                    <TableCell>
+                                                                        <TicketNumberPill ticket={t} />
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <ParticipantCell ticket={t} />
+                                                                    </TableCell>
                                                                     <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-[28rem] whitespace-normal break-words">
+                                                                        <span className="block max-w-md whitespace-normal wrap-break-word">
                                                                             {ticketPurpose(t)}
                                                                         </span>
                                                                     </TableCell>
@@ -773,23 +1384,24 @@ export default function StaffQueuePage() {
                                         <CardHeader>
                                             <CardTitle className="flex items-center gap-2">
                                                 <PauseOctagon className="h-5 w-5" />
-                                                HOLD Queue
+                                                HOLD Queue (Unified)
                                             </CardTitle>
                                             <CardDescription>Return tickets to WAITING when they are ready.</CardDescription>
                                         </CardHeader>
 
                                         <CardContent>
-                                            {hold.length === 0 ? (
+                                            {!assignedOk ? (
+                                                <EmptyStateCard message="HOLD queue is unavailable until you are assigned to a window." />
+                                            ) : hold.length === 0 ? (
                                                 <EmptyStateCard message="No HOLD tickets." />
                                             ) : (
                                                 <TableShell>
                                                     <Table>
                                                         <TableHeader>
                                                             <TableRow>
-                                                                <TableHead className="w-24">Queue</TableHead>
-                                                                <TableHead className="w-40">Participant</TableHead>
-                                                                <TableHead>Student ID</TableHead>
-                                                                <TableHead className="min-w-[180px]">Purpose</TableHead>
+                                                                <TableHead className="w-44">Queue</TableHead>
+                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead className="min-w-45">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Updated</TableHead>
                                                                 <TableHead className="w-32 text-right">Action</TableHead>
@@ -797,18 +1409,21 @@ export default function StaffQueuePage() {
                                                         </TableHeader>
                                                         <TableBody>
                                                             {hold.map((t) => (
-                                                                <TableRow key={t._id}>
-                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
-                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                <TableRow key={ticketKey(t)}>
+                                                                    <TableCell>
+                                                                        <TicketNumberPill ticket={t} />
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <ParticipantCell ticket={t} />
+                                                                    </TableCell>
                                                                     <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-[24rem] whitespace-normal break-words">
+                                                                        <span className="block max-w-sm whitespace-normal wrap-break-word">
                                                                             {ticketPurpose(t)}
                                                                         </span>
                                                                     </TableCell>
-                                                                    <TableCell>{t.holdAttempts ?? 0}</TableCell>
+                                                                    <TableCell>{Number((t as any)?.holdAttempts ?? 0)}</TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                        {fmtTime((t as any).updatedAt)}
+                                                                        {fmtTime((t as any)?.updatedAt)}
                                                                     </TableCell>
                                                                     <TableCell className="text-right">
                                                                         <Button
@@ -817,7 +1432,7 @@ export default function StaffQueuePage() {
                                                                             size="sm"
                                                                             className="gap-2"
                                                                             disabled={busy}
-                                                                            onClick={() => void onReturnFromHold(t._id)}
+                                                                            onClick={() => void onReturnFromHold(String(getTicketId(t)))}
                                                                         >
                                                                             <Undo2 className="h-4 w-4" />
                                                                             Return
@@ -843,35 +1458,39 @@ export default function StaffQueuePage() {
                                         </CardHeader>
 
                                         <CardContent>
-                                            {out.length === 0 ? (
+                                            {!assignedOk ? (
+                                                <EmptyStateCard message="OUT queue is unavailable until you are assigned to a window." />
+                                            ) : out.length === 0 ? (
                                                 <EmptyStateCard message="No OUT tickets." />
                                             ) : (
                                                 <TableShell>
                                                     <Table>
                                                         <TableHeader>
                                                             <TableRow>
-                                                                <TableHead className="w-24">Queue</TableHead>
-                                                                <TableHead className="w-40">Participant</TableHead>
-                                                                <TableHead>Student ID</TableHead>
-                                                                <TableHead className="min-w-[180px]">Purpose</TableHead>
+                                                                <TableHead className="w-44">Queue</TableHead>
+                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead className="min-w-45">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Out at</TableHead>
                                                             </TableRow>
                                                         </TableHeader>
                                                         <TableBody>
                                                             {out.map((t) => (
-                                                                <TableRow key={t._id}>
-                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
-                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
+                                                                <TableRow key={ticketKey(t)}>
+                                                                    <TableCell>
+                                                                        <TicketNumberPill ticket={t} />
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <ParticipantCell ticket={t} />
+                                                                    </TableCell>
                                                                     <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-[24rem] whitespace-normal break-words">
+                                                                        <span className="block max-w-sm whitespace-normal wrap-break-word">
                                                                             {ticketPurpose(t)}
                                                                         </span>
                                                                     </TableCell>
-                                                                    <TableCell>{t.holdAttempts ?? 0}</TableCell>
+                                                                    <TableCell>{Number((t as any)?.holdAttempts ?? 0)}</TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                        {fmtTime((t as any).outAt)}
+                                                                        {fmtTime((t as any)?.outAt)}
                                                                     </TableCell>
                                                                 </TableRow>
                                                             ))}
@@ -909,42 +1528,49 @@ export default function StaffQueuePage() {
                                         </CardHeader>
 
                                         <CardContent>
-                                            {history.length === 0 ? (
+                                            {!assignedOk ? (
+                                                <EmptyStateCard message="History is unavailable until you are assigned to a window." />
+                                            ) : history.length === 0 ? (
                                                 <EmptyStateCard message="No history yet." />
                                             ) : (
                                                 <TableShell>
                                                     <Table>
                                                         <TableHeader>
                                                             <TableRow>
-                                                                <TableHead className="w-24">Queue</TableHead>
+                                                                <TableHead className="w-44">Queue</TableHead>
                                                                 <TableHead className="w-28">Status</TableHead>
-                                                                <TableHead className="w-40">Participant</TableHead>
-                                                                <TableHead className="min-w-[220px]">Purpose</TableHead>
+                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead className="min-w-55">Purpose</TableHead>
                                                                 <TableHead className="w-28">Window</TableHead>
-                                                                <TableHead>Student ID</TableHead>
                                                                 <TableHead className="hidden md:table-cell">When</TableHead>
                                                             </TableRow>
                                                         </TableHeader>
                                                         <TableBody>
-                                                            {history.map((t) => (
-                                                                <TableRow key={t._id}>
-                                                                    <TableCell className="font-medium">#{t.queueNumber}</TableCell>
-                                                                    <TableCell>{statusBadge(t.status)}</TableCell>
-                                                                    <TableCell>{participantBadge(participantFromTicket(t))}</TableCell>
-                                                                    <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-[30rem] whitespace-normal break-words">
-                                                                            {ticketPurpose(t)}
-                                                                        </span>
-                                                                    </TableCell>
-                                                                    <TableCell className="text-muted-foreground">
-                                                                        {t.windowNumber ? `#${t.windowNumber}` : "—"}
-                                                                    </TableCell>
-                                                                    <TableCell className="truncate">{t.studentId ?? "—"}</TableCell>
-                                                                    <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                        {historyWhen(t)}
-                                                                    </TableCell>
-                                                                </TableRow>
-                                                            ))}
+                                                            {history.map((t) => {
+                                                                const win = getWindowMeta(t)
+                                                                return (
+                                                                    <TableRow key={ticketKey(t)}>
+                                                                        <TableCell>
+                                                                            <TicketNumberPill ticket={t} />
+                                                                        </TableCell>
+                                                                        <TableCell>{statusBadge(String((t as any)?.status ?? ""))}</TableCell>
+                                                                        <TableCell>
+                                                                            <ParticipantCell ticket={t} />
+                                                                        </TableCell>
+                                                                        <TableCell className="text-muted-foreground">
+                                                                            <span className="block max-w-120 whitespace-normal wrap-break-word">
+                                                                                {ticketPurpose(t)}
+                                                                            </span>
+                                                                        </TableCell>
+                                                                        <TableCell className="text-muted-foreground">
+                                                                            {win?.number ? `#${win.number}` : "—"}
+                                                                        </TableCell>
+                                                                        <TableCell className="hidden md:table-cell text-muted-foreground">
+                                                                            {historyWhen(t)}
+                                                                        </TableCell>
+                                                                    </TableRow>
+                                                                )
+                                                            })}
                                                         </TableBody>
                                                     </Table>
                                                 </TableShell>
