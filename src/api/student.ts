@@ -287,9 +287,7 @@ export const studentApi = {
 
     // Participant signup
     signupStudent: async (payload: StudentSignupPayload) =>
-        persistToken(
-            await api.post<ParticipantAuthResponse>("/public/auth/signup/student", payload, { auth: false })
-        ),
+        persistToken(await api.post<ParticipantAuthResponse>("/public/auth/signup/student", payload, { auth: false })),
 
     signupAlumniVisitor: async (payload: AlumniVisitorSignupPayload) =>
         persistToken(
@@ -298,15 +296,11 @@ export const studentApi = {
 
     // Guest alias
     signupGuest: async (payload: AlumniVisitorSignupPayload) =>
-        persistToken(
-            await api.post<ParticipantAuthResponse>("/public/auth/signup/guest", payload, { auth: false })
-        ),
+        persistToken(await api.post<ParticipantAuthResponse>("/public/auth/signup/guest", payload, { auth: false })),
 
     // Participant login
     loginStudent: async (payload: StudentLoginPayload) =>
-        persistToken(
-            await api.post<ParticipantAuthResponse>("/public/auth/login/student", payload, { auth: false })
-        ),
+        persistToken(await api.post<ParticipantAuthResponse>("/public/auth/login/student", payload, { auth: false })),
 
     loginAlumniVisitor: async (payload: AlumniVisitorLoginPayload) =>
         persistToken(
@@ -315,40 +309,42 @@ export const studentApi = {
 
     // Guest alias
     loginGuest: async (payload: AlumniVisitorLoginPayload) =>
-        persistToken(
-            await api.post<ParticipantAuthResponse>("/public/auth/login/guest", payload, { auth: false })
-        ),
+        persistToken(await api.post<ParticipantAuthResponse>("/public/auth/login/guest", payload, { auth: false })),
 
-    // Session
-    getSession: (opts?: { departmentId?: string }) =>
-        api.get<ParticipantSessionResponse>(`/public/auth/session${toQuery(opts as any)}`, {
+    // Session (🔒 do not allow client to switch/override department via query anymore)
+    getSession: (_opts?: { departmentId?: string }) =>
+        api.get<ParticipantSessionResponse>("/public/auth/session", {
             auth: false,
             headers: participantAuthHeaders(),
         }),
 
     restoreSession: () =>
-        api.post<ParticipantSessionResponse>("/public/auth/session", {}, {
-            auth: false,
-            headers: participantAuthHeaders(),
-        }),
+        api.post<ParticipantSessionResponse>(
+            "/public/auth/session",
+            {},
+            {
+                auth: false,
+                headers: participantAuthHeaders(),
+            }
+        ),
 
     logout: async () => {
         try {
-            return await api.post<{ ok: true }>("/public/auth/logout", {}, {
-                auth: false,
-                headers: participantAuthHeaders(),
-            })
+            return await api.post<{ ok: true }>(
+                "/public/auth/logout",
+                {},
+                {
+                    auth: false,
+                    headers: participantAuthHeaders(),
+                }
+            )
         } finally {
             participantAuthStorage.clearToken()
         }
     },
 
     // Home overview charts (student/alumni dashboards)
-    getHomeOverview: (opts?: {
-        participantType?: ParticipantType
-        departmentId?: string
-        days?: number
-    }) =>
+    getHomeOverview: (opts?: { participantType?: ParticipantType; departmentId?: string; days?: number }) =>
         api.get<HomeOverviewResponse>(`/public/home/overview${toQuery(opts as any)}`, {
             auth: false,
             headers: participantAuthHeaders(),
@@ -363,7 +359,9 @@ export const studentApi = {
 
     findActiveByStudent: (payload: { departmentId: string; studentId: string }) =>
         api.get<FindActiveTicketResponse>(
-            `/public/tickets?departmentId=${encodeURIComponent(payload.departmentId)}&studentId=${encodeURIComponent(payload.studentId)}`,
+            `/public/tickets?departmentId=${encodeURIComponent(payload.departmentId)}&studentId=${encodeURIComponent(
+                payload.studentId
+            )}`,
             {
                 auth: false,
                 headers: participantAuthHeaders(),

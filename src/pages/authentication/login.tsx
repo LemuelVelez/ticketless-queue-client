@@ -10,14 +10,7 @@ import { useSession } from "@/hooks/use-session"
 import { ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardFooter,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -31,20 +24,22 @@ type LocationState = {
     }
 }
 
-type AppRole = "ADMIN" | "STAFF" | "STUDENT"
+type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 
-function normalizeRole(raw: unknown): AppRole | null {
-    const value = String(raw ?? "").trim().toUpperCase()
-    if (value === "ADMIN") return "ADMIN"
-    if (value === "STAFF") return "STAFF"
-    if (value === "STUDENT") return "STUDENT"
-    return null
+function defaultDashboardPath(role: "ADMIN" | "STAFF") {
+    return role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
 }
 
-function defaultDashboardPath(role: AppRole) {
-    if (role === "ADMIN") return "/admin/dashboard"
-    if (role === "STAFF") return "/staff/dashboard"
-    return "/student/home"
+function defaultParticipantPath(role: ParticipantRole) {
+    return role === "STUDENT" ? "/student/home" : "/alumni/home"
+}
+
+function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
+    const value = String(raw ?? "").trim().toUpperCase()
+    if (value === "STUDENT") return "STUDENT"
+    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+    if (value === "GUEST" || value === "VISITOR") return "GUEST"
+    return null
 }
 
 function isAuthOrResetPath(pathname: string) {
@@ -56,20 +51,33 @@ function isAuthOrResetPath(pathname: string) {
     )
 }
 
+function isParticipantPath(pathname: string) {
+    return pathname.startsWith("/student") || pathname.startsWith("/alumni")
+}
+
 /**
  * Prevent redirect loops / wrong-role redirects.
- * Role-based protection for /admin, /staff, /student routes.
+ * Important: staff/admin should never be redirected to participant-only routes.
  */
-function canRedirectTo(pathname: string | undefined, role: AppRole) {
+function canRedirectTo(pathname: string | undefined, role: "ADMIN" | "STAFF") {
     if (!pathname || typeof pathname !== "string") return false
     if (isAuthOrResetPath(pathname)) return false
+    if (isParticipantPath(pathname)) return false
 
-    // Role-based areas
     if (pathname.startsWith("/admin")) return role === "ADMIN"
     if (pathname.startsWith("/staff")) return role === "STAFF"
-    if (pathname.startsWith("/student")) return role === "STUDENT"
 
-    // Shared/public routes are OK
+    return true
+}
+
+function canRedirectParticipantTo(pathname: string | undefined, role: ParticipantRole) {
+    if (!pathname || typeof pathname !== "string") return false
+    if (isAuthOrResetPath(pathname)) return false
+    if (pathname.startsWith("/admin") || pathname.startsWith("/staff")) return false
+
+    if (pathname.startsWith("/student")) return role === "STUDENT"
+    if (pathname.startsWith("/alumni")) return role !== "STUDENT"
+
     return true
 }
 
@@ -83,15 +91,23 @@ function isFourDigitPin(pin: string) {
 
 function looksLikeEmail(value: string) {
     const v = value.trim()
-    return v.includes("@") && v.includes(".")
+    if (!v) return false
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
 }
 
-async function resolveStudentRoleFromSession(): Promise<AppRole | null> {
+function looksLikePhone(value: string) {
+    const v = value.trim()
+    if (!v) return false
+    const digits = v.replace(/\D+/g, "")
+    return digits.length >= 10
+}
+
+async function resolveParticipantRole(fallback: ParticipantRole): Promise<ParticipantRole> {
     try {
         const session = await guestApi.getSession()
-        return normalizeRole(session?.participant?.type)
+        return normalizeParticipantRole(session?.participant?.type) ?? fallback
     } catch {
-        return null
+        return fallback
     }
 }
 
@@ -100,26 +116,24 @@ export default function LoginPage() {
     const location = useLocation()
     const { login, user, loading } = useSession()
 
-    const [identifier, setIdentifier] = React.useState("") // email (staff/admin) OR tcNumber (student)
-    const [secret, setSecret] = React.useState("") // password OR 4-digit PIN
-
+    const [identifier, setIdentifier] = React.useState("")
+    const [secret, setSecret] = React.useState("")
     const [rememberMe, setRememberMe] = React.useState(true)
+
     const [isSubmitting, setIsSubmitting] = React.useState(false)
     const [showSecret, setShowSecret] = React.useState(false)
 
-    const isEmailMode = looksLikeEmail(identifier)
-    const secretLabel = isEmailMode ? "Password" : "PIN (4 digits)"
-    const secretPlaceholder = isEmailMode ? "Enter your password" : "4-digit PIN"
-    const identifierLabel = "Email or TC Number"
-    const identifierPlaceholder = "name@example.com or TC-2024-12345"
+    // ✅ Always auto-detect:
+    // Email => Staff/Admin (password)
+    // Otherwise => Participant (PIN)
+    const isStaffMode = looksLikeEmail(identifier)
 
     // ✅ If there's an active session, redirect away from /login automatically.
     React.useEffect(() => {
         if (loading) return
 
-        // Staff/Admin (and possibly Student if your main session supports it)
         if (user) {
-            const role = normalizeRole((user as any)?.role) ?? "STAFF"
+            const role = user.role
             const home = defaultDashboardPath(role)
             const state = location.state as LocationState | null
             const fromPath = state?.from?.pathname
@@ -133,7 +147,6 @@ export default function LoginPage() {
             return
         }
 
-        // Student session (participant token)
         const participantToken = participantAuthStorage.getToken()
         if (!participantToken) return
 
@@ -141,10 +154,11 @@ export default function LoginPage() {
 
         ;(async () => {
             try {
-                const role = await resolveStudentRoleFromSession()
+                const session = await guestApi.getSession()
                 if (!alive) return
 
-                if (role !== "STUDENT") {
+                const role = normalizeParticipantRole(session?.participant?.type)
+                if (!role) {
                     participantAuthStorage.clearToken()
                     return
                 }
@@ -152,12 +166,12 @@ export default function LoginPage() {
                 const state = location.state as LocationState | null
                 const fromPath = state?.from?.pathname
 
-                if (canRedirectTo(fromPath, "STUDENT")) {
+                if (canRedirectParticipantTo(fromPath, role)) {
                     navigate(fromPath!, { replace: true })
                     return
                 }
 
-                navigate(defaultDashboardPath("STUDENT"), { replace: true })
+                navigate(defaultParticipantPath(role), { replace: true })
             } catch {
                 if (!alive) return
                 participantAuthStorage.clearToken()
@@ -173,10 +187,8 @@ export default function LoginPage() {
         e.preventDefault()
         if (isSubmitting) return
 
-        const cleanIdentifier = identifier.trim()
-        const cleanSecret = secret.trim()
-
-        if (!cleanIdentifier || !cleanSecret) {
+        const cleanId = identifier.trim()
+        if (!cleanId || !secret) {
             toast.error("Please enter your login details.")
             return
         }
@@ -184,16 +196,21 @@ export default function LoginPage() {
         setIsSubmitting(true)
 
         try {
-            // Staff/Admin login (email + password)
-            if (looksLikeEmail(cleanIdentifier)) {
-                const res = await login(cleanIdentifier, cleanSecret, rememberMe)
+            if (isStaffMode) {
+                // ✅ Staff/Admin must use EMAIL + PASSWORD
+                if (!looksLikeEmail(cleanId)) {
+                    toast.error("Please enter a valid email for Staff/Admin sign in.")
+                    return
+                }
 
-                // Clear stale student session to avoid mixed-role redirect behavior.
+                const res = await login(cleanId, secret, rememberMe)
+
+                // Avoid mixed-role sessions
                 participantAuthStorage.clearToken()
 
                 toast.success("Signed in successfully")
 
-                const role = normalizeRole((res as any)?.user?.role) ?? "STAFF"
+                const role = res.user.role
                 const home = defaultDashboardPath(role)
 
                 const state = location.state as LocationState | null
@@ -208,39 +225,61 @@ export default function LoginPage() {
                 return
             }
 
-            // Student login (TC Number + 4-digit PIN)
-            const pin = normalizePin(cleanSecret)
+            // ✅ Participant (Student / Alumni / Visitor) uses PIN
+            const pin = normalizePin(secret)
             if (!isFourDigitPin(pin)) {
                 toast.error("PIN must be exactly 4 digits.")
                 return
             }
 
-            await guestApi.loginStudent({
-                tcNumber: cleanIdentifier,
-                pin,
-                // aliases for compatibility
-                studentId: cleanIdentifier,
-                password: pin,
-            })
-
-            const role = (await resolveStudentRoleFromSession()) ?? "STUDENT"
-            if (role !== "STUDENT") {
-                participantAuthStorage.clearToken()
-                toast.error("Unauthorized role. Please contact the administrator.")
-                return
+            // Try student first, then alumni/visitor, then legacy guest (older accounts)
+            try {
+                await guestApi.loginStudent({
+                    tcNumber: cleanId,
+                    pin,
+                    studentId: cleanId,
+                    password: pin,
+                })
+            } catch (err) {
+                if (err instanceof ApiError && (err.status === 401 || err.status === 404)) {
+                    try {
+                        await guestApi.loginAlumniVisitor({
+                            mobileNumber: cleanId,
+                            pin,
+                            phone: cleanId,
+                            password: pin,
+                        })
+                    } catch (err2) {
+                        if (err2 instanceof ApiError && (err2.status === 401 || err2.status === 404)) {
+                            await guestApi.loginGuest({
+                                mobileNumber: cleanId,
+                                pin,
+                                phone: cleanId,
+                                password: pin,
+                            })
+                        } else {
+                            throw err2
+                        }
+                    }
+                } else {
+                    throw err
+                }
             }
+
+            const fallbackRole: ParticipantRole = looksLikePhone(cleanId) ? "ALUMNI_VISITOR" : "STUDENT"
+            const participantRole = await resolveParticipantRole(fallbackRole)
 
             toast.success("Signed in successfully")
 
             const state = location.state as LocationState | null
             const fromPath = state?.from?.pathname
 
-            if (canRedirectTo(fromPath, "STUDENT")) {
+            if (canRedirectParticipantTo(fromPath, participantRole)) {
                 navigate(fromPath!, { replace: true })
                 return
             }
 
-            navigate(defaultDashboardPath("STUDENT"), { replace: true })
+            navigate(defaultParticipantPath(participantRole), { replace: true })
         } catch (err) {
             const message =
                 err instanceof ApiError
@@ -254,7 +293,6 @@ export default function LoginPage() {
         }
     }
 
-    // While resolving an existing token/session, show loading instead of flashing the login form.
     if (loading) return <LoadingPage />
 
     return (
@@ -278,62 +316,53 @@ export default function LoginPage() {
                         <Card>
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-2xl">Sign in</CardTitle>
-                                <CardDescription>
-                                    Use your staff email or your student TC Number to continue.
-                                </CardDescription>
                             </CardHeader>
 
                             <CardContent>
                                 <form onSubmit={onSubmit} className="space-y-4">
                                     <div className="grid gap-2">
-                                        <Label htmlFor="identifier">{identifierLabel}</Label>
+                                        <Label htmlFor="identifier">
+                                            {isStaffMode ? "Email" : "Email / TC Number / Mobile number"}
+                                        </Label>
                                         <Input
                                             id="identifier"
-                                            placeholder={identifierPlaceholder}
+                                            placeholder="name@example.com or TC-2024-12345 or +63 9XX XXX XXXX"
                                             autoComplete="username"
                                             required
                                             disabled={isSubmitting}
                                             value={identifier}
                                             onChange={(e) => setIdentifier(e.target.value)}
                                         />
-                                        <p className="text-muted-foreground text-xs">
-                                            Tip: Email signs you into <span className="font-medium">Staff/Admin</span>.
-                                            TC Number signs you into <span className="font-medium">Student</span>.
-                                        </p>
                                     </div>
 
                                     <div className="grid gap-2">
                                         <div className="flex items-center justify-between">
-                                            <Label htmlFor="secret">{secretLabel}</Label>
+                                            <Label htmlFor="secret">{isStaffMode ? "Password" : "PIN (4 digits)"}</Label>
 
-                                            {isEmailMode ? (
+                                            {isStaffMode ? (
                                                 <Link
                                                     to="/forgot-password"
                                                     className="text-muted-foreground hover:text-foreground text-sm underline-offset-4 hover:underline"
                                                 >
                                                     Forgot password?
                                                 </Link>
-                                            ) : (
-                                                <span className="text-muted-foreground text-sm" />
-                                            )}
+                                            ) : null}
                                         </div>
 
                                         <div className="relative">
                                             <Input
                                                 id="secret"
                                                 type={showSecret ? "text" : "password"}
-                                                autoComplete={isEmailMode ? "current-password" : "current-password"}
+                                                autoComplete="current-password"
                                                 required
                                                 disabled={isSubmitting}
                                                 className="pr-10"
-                                                value={isEmailMode ? secret : normalizePin(secret)}
-                                                onChange={(e) =>
-                                                    setSecret(isEmailMode ? e.target.value : normalizePin(e.target.value))
-                                                }
-                                                inputMode={isEmailMode ? undefined : "numeric"}
-                                                maxLength={isEmailMode ? undefined : 4}
-                                                pattern={isEmailMode ? undefined : "\\d{4}"}
-                                                placeholder={secretPlaceholder}
+                                                value={isStaffMode ? secret : normalizePin(secret)}
+                                                onChange={(e) => setSecret(e.target.value)}
+                                                inputMode={isStaffMode ? undefined : "numeric"}
+                                                maxLength={isStaffMode ? undefined : 4}
+                                                pattern={isStaffMode ? undefined : "\\d{4}"}
+                                                placeholder={isStaffMode ? "Your password" : "4-digit PIN"}
                                             />
                                             <Button
                                                 type="button"
@@ -341,7 +370,7 @@ export default function LoginPage() {
                                                 size="icon"
                                                 disabled={isSubmitting}
                                                 onClick={() => setShowSecret((s) => !s)}
-                                                aria-label={showSecret ? "Hide secret" : "Show secret"}
+                                                aria-label={showSecret ? "Hide" : "Show"}
                                                 className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
                                             >
                                                 {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -349,27 +378,25 @@ export default function LoginPage() {
                                         </div>
                                     </div>
 
-                                    {/* Remember me only matters for staff/admin sessions */}
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <Checkbox
-                                                id="remember"
-                                                checked={rememberMe}
-                                                onCheckedChange={(v) => setRememberMe(v === true)}
-                                                disabled={isSubmitting || !isEmailMode}
-                                            />
-                                            <Label
-                                                htmlFor="remember"
-                                                className="text-sm font-normal"
-                                            >
-                                                Remember me
-                                            </Label>
-                                        </div>
+                                    {isStaffMode ? (
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Checkbox
+                                                    id="remember"
+                                                    checked={rememberMe}
+                                                    onCheckedChange={(v) => setRememberMe(v === true)}
+                                                    disabled={isSubmitting}
+                                                />
+                                                <Label htmlFor="remember" className="text-sm font-normal">
+                                                    Keep me signed in
+                                                </Label>
+                                            </div>
 
-                                        <span className="text-muted-foreground text-xs">
-                                            {isEmailMode && rememberMe ? "Keeps you signed in" : ""}
-                                        </span>
-                                    </div>
+                                            <span className="text-muted-foreground text-xs">
+                                                {rememberMe ? "Recommended on personal devices" : ""}
+                                            </span>
+                                        </div>
+                                    ) : null}
 
                                     <Button className="w-full" type="submit" disabled={isSubmitting}>
                                         {isSubmitting ? "Signing in..." : "Sign in"}
@@ -379,25 +406,10 @@ export default function LoginPage() {
 
                             <CardFooter className="flex flex-col gap-3">
                                 <p className="text-muted-foreground text-center text-sm">
-                                    Don&apos;t have a student account?{" "}
-                                    <Link
-                                        to="/authentication/register"
-                                        className="text-foreground underline-offset-4 hover:underline"
-                                    >
+                                    Don&apos;t have an account?{" "}
+                                    <Link to="/authentication/register" className="text-foreground underline-offset-4 hover:underline">
                                         Create one
                                     </Link>
-                                </p>
-
-                                <p className="text-muted-foreground text-balance text-center text-xs">
-                                    By continuing, you agree to our{" "}
-                                    <Link to="/terms" className="underline-offset-4 hover:underline">
-                                        Terms
-                                    </Link>{" "}
-                                    and{" "}
-                                    <Link to="/privacy" className="underline-offset-4 hover:underline">
-                                        Privacy Policy
-                                    </Link>
-                                    .
                                 </p>
                             </CardFooter>
                         </Card>
