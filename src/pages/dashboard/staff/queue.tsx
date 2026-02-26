@@ -3,7 +3,6 @@ import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
 import {
-    RefreshCw,
     Ticket,
     Megaphone,
     CheckCircle2,
@@ -14,6 +13,8 @@ import {
     XCircle,
     History,
     Volume2,
+    MoreHorizontal,
+    RefreshCw,
 } from "lucide-react"
 
 import { api } from "@/lib/http"
@@ -32,6 +33,14 @@ import { Separator } from "@/components/ui/separator"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
 type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST" | string
@@ -89,6 +98,13 @@ type DuplicateActivePair = {
     queueNumber: number
     count: number
 }
+
+const POLL_MS = 2500 // ✅ 2–3s polling as requested (best UX, low friction)
+const LEADER_TTL_MS = 10_000
+
+const QUEUE_POLL_LEADER_KEY = "queuepass:staff:queue_poll_leader_v1"
+const QUEUE_SYNC_CHANNEL = "queuepass:staff:queue_state_sync_v1"
+const QUEUE_SYNC_SNAPSHOT_KEY = "queuepass:staff:queue_state_snapshot_v1"
 
 function fmtTime(v?: string | null) {
     if (!v) return "—"
@@ -173,6 +189,16 @@ function firstNonEmptyText(candidates: unknown[]) {
     return ""
 }
 
+function composeName(parts: unknown[]) {
+    const s = parts
+        .map((p) => String(p ?? "").trim())
+        .filter(Boolean)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+    return s
+}
+
 function getTicketId(ticket: TicketLike): string {
     const t = ticket as any
     return String(t?.id ?? t?._id ?? "").trim()
@@ -211,7 +237,10 @@ function getWindowMeta(ticket: TicketLike) {
 
 function getParticipantName(ticket: TicketLike): string {
     const t = ticket as any
+
+    // ✅ Prefer full name fields first (names > IDs)
     const name = firstNonEmptyText([
+        t?.participant?.fullName,
         t?.participant?.name,
         t?.participantName,
         t?.__participantName,
@@ -219,7 +248,21 @@ function getParticipantName(ticket: TicketLike): string {
         t?.name,
         t?.meta?.participantName,
     ])
-    return name || ""
+    if (name) return name
+
+    // ✅ Try composing from possible parts (if backend sends structured fields)
+    const composed = composeName([
+        t?.participant?.firstName,
+        t?.participant?.middleName,
+        t?.participant?.lastName,
+        t?.user?.firstName,
+        t?.user?.middleName,
+        t?.user?.lastName,
+        t?.firstName,
+        t?.middleName,
+        t?.lastName,
+    ])
+    return composed || ""
 }
 
 function getParticipantType(ticket: TicketLike): string {
@@ -268,12 +311,7 @@ function ticketPurpose(ticket?: TicketLike | null) {
     }
 
     // 2) Array-of-object candidates
-    const objectArrayCandidates = [
-        t.selectedTransactions,
-        t.transactionSelections,
-        t.transactions?.items,
-        t.transactions?.selected,
-    ]
+    const objectArrayCandidates = [t.selectedTransactions, t.transactionSelections, t.transactions?.items, t.transactions?.selected]
     for (const candidate of objectArrayCandidates) {
         if (!Array.isArray(candidate)) continue
         const labels = candidate
@@ -298,15 +336,11 @@ function ticketPurpose(ticket?: TicketLike | null) {
     if (direct) return direct
 
     // 4) Key arrays -> humanized labels
-    const keyArrayCandidates = [
-        t.transactionKeys,
-        t.selectedTransactionKeys,
-        t.meta?.transactionKeys,
-        t.transactions?.transactionKeys,
-        t.selection?.transactionKeys,
-    ]
+    const keyArrayCandidates = [t.transactionKeys, t.selectedTransactionKeys, t.meta?.transactionKeys, t.transactions?.transactionKeys, t.selection?.transactionKeys]
     for (const candidate of keyArrayCandidates) {
-        const keys = extractStringArray(candidate).map((k) => humanizeTransactionKey(k)).filter(Boolean)
+        const keys = extractStringArray(candidate)
+            .map((k) => humanizeTransactionKey(k))
+            .filter(Boolean)
         if (keys.length) return keys.join(" • ")
     }
 
@@ -411,13 +445,20 @@ function ParticipantCell({ ticket }: { ticket: TicketLike }) {
 
     return (
         <div className="min-w-0">
-            <div className="truncate font-medium">{name || "—"}</div>
+            {/* ✅ show full name (no forced truncate) */}
+            <div className="font-medium whitespace-normal wrap-break-word leading-snug">{name || "—"}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
                 {participantTypeBadge(type || "")}
-                <span className="text-xs text-muted-foreground">ID: {sid || "—"}</span>
+                <span className="text-xs text-muted-foreground">
+                    Student ID: <span className="tabular-nums">{sid || "—"}</span>
+                </span>
             </div>
         </div>
     )
+}
+
+function canUseBroadcastChannel() {
+    return typeof window !== "undefined" && typeof (window as any).BroadcastChannel !== "undefined"
 }
 
 export default function StaffQueuePage() {
@@ -442,7 +483,16 @@ export default function StaffQueuePage() {
 
     const [queueState, setQueueState] = React.useState<StaffQueueState | null>(null)
     const [stateLoading, setStateLoading] = React.useState(false)
+
+    // ✅ Auto-refresh (AJAX polling every 2–3 seconds)
     const [liveSync, setLiveSync] = React.useState(true)
+
+    // ✅ Cross-tab sync: one tab polls (leader), all open windows receive updates
+    const [isQueueLeader, setIsQueueLeader] = React.useState(false)
+    const lastAppliedStateTsRef = React.useRef<number>(0)
+    const lastToastSyncErrorAtRef = React.useRef<number>(0)
+    const bcRef = React.useRef<BroadcastChannel | null>(null)
+    const [lastSyncedAtIso, setLastSyncedAtIso] = React.useState<string>("")
 
     const [out, setOut] = React.useState<TicketLike[]>([])
     const [history, setHistory] = React.useState<TicketLike[]>([])
@@ -469,9 +519,7 @@ export default function StaffQueuePage() {
     if (!tabIdRef.current) {
         try {
             tabIdRef.current =
-                typeof crypto !== "undefined" && "randomUUID" in crypto
-                    ? crypto.randomUUID()
-                    : `tab_${Date.now()}_${Math.random()}`
+                typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `tab_${Date.now()}_${Math.random()}`
         } catch {
             tabIdRef.current = `tab_${Date.now()}_${Math.random()}`
         }
@@ -620,7 +668,7 @@ export default function StaffQueuePage() {
 
                 const leaderId = String(parsed?.id ?? "")
                 const leaderTs = Number(parsed?.ts ?? 0)
-                const expired = !leaderId || !Number.isFinite(leaderTs) || now - leaderTs > 10_000
+                const expired = !leaderId || !Number.isFinite(leaderTs) || now - leaderTs > LEADER_TTL_MS
 
                 if (expired || leaderId === tabIdRef.current) {
                     localStorage.setItem(AUDIO_LEADER_KEY, JSON.stringify({ id: tabIdRef.current, ts: now }))
@@ -649,29 +697,60 @@ export default function StaffQueuePage() {
 
         setDepartmentNames(names)
 
-        const firstAssignedDepartmentId: string | null = Array.isArray(a.assignedDepartmentIds)
-            ? a.assignedDepartmentIds[0] ?? null
-            : null
+        const firstAssignedDepartmentId: string | null = Array.isArray(a.assignedDepartmentIds) ? a.assignedDepartmentIds[0] ?? null : null
+        const firstHandledDepartmentId: string | null = Array.isArray(a.handledDepartmentIds) ? a.handledDepartmentIds[0] ?? null : null
 
-        const firstHandledDepartmentId: string | null = Array.isArray(a.handledDepartmentIds)
-            ? a.handledDepartmentIds[0] ?? null
-            : null
-
-        const resolvedDepartmentId: string | null =
-            (a as any).departmentId ?? firstAssignedDepartmentId ?? firstHandledDepartmentId ?? null
+        const resolvedDepartmentId: string | null = (a as any).departmentId ?? firstAssignedDepartmentId ?? firstHandledDepartmentId ?? null
 
         setDepartmentId(resolvedDepartmentId)
         setWindowInfo(
-            a.window
-                ? { id: String((a.window as any)._id ?? a.window.id), name: a.window.name, number: a.window.number }
-                : null,
+            a.window ? { id: String((a.window as any)._id ?? a.window.id), name: a.window.name, number: a.window.number } : null,
         )
 
         return { windowId: a.window ? String((a.window as any)._id ?? a.window.id ?? "").trim() : "" }
     }, [])
 
+    const broadcastQueueState = React.useCallback(
+        (payload: { ts: number; windowId: string; state: StaffQueueState }) => {
+            if (typeof window === "undefined") return
+
+            // Prefer BroadcastChannel; fallback to localStorage snapshot for cross-tab sync.
+            if (canUseBroadcastChannel()) {
+                try {
+                    bcRef.current?.postMessage({ type: "QUEUE_STATE", ...payload })
+                    return
+                } catch {
+                    // fallback below
+                }
+            }
+
+            try {
+                localStorage.setItem(QUEUE_SYNC_SNAPSHOT_KEY, JSON.stringify({ type: "QUEUE_STATE", ...payload }))
+            } catch {
+                // ignore
+            }
+        },
+        [],
+    )
+
+    const applyRemoteQueueState = React.useCallback(
+        (payload: { ts: number; windowId: string; state: StaffQueueState }) => {
+            if (!payload?.state) return
+            if (!windowInfo?.id) return
+            if (payload.windowId !== windowInfo.id) return
+
+            if (payload.ts <= lastAppliedStateTsRef.current) return
+            lastAppliedStateTsRef.current = payload.ts
+
+            setQueueState(payload.state)
+            setLastSyncedAtIso(new Date(payload.ts).toISOString())
+            setStateLoading(false)
+        },
+        [windowInfo?.id],
+    )
+
     const fetchCentralState = React.useCallback(
-        async (opts?: { silent?: boolean }) => {
+        async (opts?: { silent?: boolean; broadcast?: boolean }) => {
             if (!windowInfo?.id) {
                 setQueueState(null)
                 return
@@ -682,7 +761,15 @@ export default function StaffQueuePage() {
             try {
                 const raw = await api.get(`/staff/queue/state?windowId=${encodeURIComponent(windowInfo.id)}`)
                 const state = unwrapPayload<StaffQueueState>(raw)
+
                 setQueueState(state)
+                const nowTs = Date.now()
+                setLastSyncedAtIso(new Date(nowTs).toISOString())
+                lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, nowTs)
+
+                if (opts?.broadcast) {
+                    broadcastQueueState({ ts: nowTs, windowId: windowInfo.id, state })
+                }
 
                 // Duplicate-active-number detection (quick warning)
                 const active = [...(state?.waiting ?? []), ...(state?.hold ?? []), ...(state?.called ?? [])]
@@ -701,16 +788,27 @@ export default function StaffQueuePage() {
 
                 if (hasDup && !duplicateWarnedRef.current) {
                     duplicateWarnedRef.current = true
-                    toast.warning("Duplicate active queue numbers detected. Refreshing the live state may help.")
+                    toast.warning("Duplicate active queue numbers detected. Backend constraints may need review.")
                 }
                 if (!hasDup) duplicateWarnedRef.current = false
             } catch (e: any) {
-                toast.error(safeErrorMessage(e, "Failed to load centralized queue state."))
+                const msg = safeErrorMessage(e, "Failed to load centralized queue state.")
+
+                // ✅ Avoid toast spam during 2–3s polling
+                if (!opts?.silent) {
+                    toast.error(msg)
+                } else {
+                    const now = Date.now()
+                    if (now - lastToastSyncErrorAtRef.current > 15_000) {
+                        lastToastSyncErrorAtRef.current = now
+                        toast.error(msg)
+                    }
+                }
             } finally {
                 if (!opts?.silent) setStateLoading(false)
             }
         },
-        [windowInfo?.id],
+        [broadcastQueueState, windowInfo?.id],
     )
 
     const fetchSecondary = React.useCallback(async () => {
@@ -755,30 +853,137 @@ export default function StaffQueuePage() {
             setHistory([])
             return
         }
-        void fetchCentralState()
+        void fetchCentralState({ broadcast: true })
         void fetchSecondary()
     }, [windowInfo?.id, fetchCentralState, fetchSecondary])
 
+    // ✅ Cross-tab receive: BroadcastChannel + localStorage fallback
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+
+        // BroadcastChannel
+        if (canUseBroadcastChannel()) {
+            try {
+                const bc = new BroadcastChannel(QUEUE_SYNC_CHANNEL)
+                bcRef.current = bc
+                bc.onmessage = (ev) => {
+                    const data = ev?.data
+                    if (!data || typeof data !== "object") return
+                    if (data.type !== "QUEUE_STATE") return
+                    applyRemoteQueueState({
+                        ts: Number((data as any).ts ?? 0),
+                        windowId: String((data as any).windowId ?? ""),
+                        state: (data as any).state as StaffQueueState,
+                    })
+                }
+                return () => {
+                    try {
+                        bc.close()
+                    } catch {
+                        // ignore
+                    }
+                    bcRef.current = null
+                }
+            } catch {
+                // fall through to storage listener only
+            }
+        }
+
+        // localStorage snapshot listener (fallback)
+        const onStorage = (e: StorageEvent) => {
+            if (e.key !== QUEUE_SYNC_SNAPSHOT_KEY) return
+            if (!e.newValue) return
+            try {
+                const parsed = JSON.parse(e.newValue) as any
+                if (parsed?.type !== "QUEUE_STATE") return
+                applyRemoteQueueState({
+                    ts: Number(parsed.ts ?? 0),
+                    windowId: String(parsed.windowId ?? ""),
+                    state: parsed.state as StaffQueueState,
+                })
+            } catch {
+                // ignore
+            }
+        }
+
+        window.addEventListener("storage", onStorage)
+        return () => window.removeEventListener("storage", onStorage)
+    }, [applyRemoteQueueState])
+
+    // ✅ Queue poll leader election (one tab polls, all tabs stay in sync)
+    const claimQueueLeadership = React.useCallback(() => {
+        try {
+            localStorage.setItem(QUEUE_POLL_LEADER_KEY, JSON.stringify({ id: tabIdRef.current, ts: Date.now() }))
+            setIsQueueLeader(true)
+        } catch {
+            // If blocked, allow polling in this tab
+            setIsQueueLeader(true)
+        }
+    }, [])
+
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        if (!liveSync) {
+            setIsQueueLeader(false)
+            return
+        }
+        if (!windowInfo?.id) {
+            setIsQueueLeader(false)
+            return
+        }
+
+        const tick = () => {
+            try {
+                const raw = localStorage.getItem(QUEUE_POLL_LEADER_KEY)
+                const now = Date.now()
+                const parsed = raw ? (JSON.parse(raw) as { id?: string; ts?: number }) : null
+
+                const leaderId = String(parsed?.id ?? "")
+                const leaderTs = Number(parsed?.ts ?? 0)
+                const expired = !leaderId || !Number.isFinite(leaderTs) || now - leaderTs > LEADER_TTL_MS
+
+                if (expired || leaderId === tabIdRef.current) {
+                    localStorage.setItem(QUEUE_POLL_LEADER_KEY, JSON.stringify({ id: tabIdRef.current, ts: now }))
+                    setIsQueueLeader(true)
+                } else {
+                    setIsQueueLeader(false)
+                }
+            } catch {
+                setIsQueueLeader(true)
+            }
+        }
+
+        tick()
+        const iv = window.setInterval(tick, 3000)
+        return () => window.clearInterval(iv)
+    }, [liveSync, windowInfo?.id])
+
+    // ✅ Leader polling: every 2–3 seconds; broadcasts state to all tabs/windows
+    React.useEffect(() => {
+        if (!liveSync) return
+        if (!windowInfo?.id) return
+        if (!isQueueLeader) return
+        if (typeof window === "undefined") return
+
+        const iv = window.setInterval(() => {
+            void fetchCentralState({ silent: true, broadcast: true })
+        }, POLL_MS)
+
+        return () => window.clearInterval(iv)
+    }, [fetchCentralState, isQueueLeader, liveSync, windowInfo?.id])
+
+    // Secondary refresh can be less frequent; no need to spam server
     React.useEffect(() => {
         if (!liveSync) return
         if (!windowInfo?.id) return
         if (typeof window === "undefined") return
 
-        const stateIv = window.setInterval(() => {
-            if (document.visibilityState === "hidden") return
-            void fetchCentralState({ silent: true })
-        }, 2000)
-
         const secondaryIv = window.setInterval(() => {
-            if (document.visibilityState === "hidden") return
             void fetchSecondary()
         }, 8000)
 
-        return () => {
-            window.clearInterval(stateIv)
-            window.clearInterval(secondaryIv)
-        }
-    }, [fetchCentralState, fetchSecondary, liveSync, windowInfo?.id])
+        return () => window.clearInterval(secondaryIv)
+    }, [fetchSecondary, liveSync, windowInfo?.id])
 
     React.useEffect(() => {
         if (!centralAudio) return
@@ -892,11 +1097,11 @@ export default function StaffQueuePage() {
                 announceTicket(ticket)
             }
 
-            await fetchCentralState()
+            await fetchCentralState({ broadcast: true })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to call next."))
-            await fetchCentralState({ silent: true })
+            await fetchCentralState({ silent: true, broadcast: true })
         } finally {
             setBusy(false)
         }
@@ -911,14 +1116,12 @@ export default function StaffQueuePage() {
             const raw = await api.post("/staff/queue/serve", { ticketId })
             const updated = unwrapPayload<TicketView>(raw)
             const dep = getDepartmentMeta(updated)
-            toast.success(
-                `Marked ${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} as served.`,
-            )
-            await fetchCentralState()
+            toast.success(`Marked ${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} as served.`)
+            await fetchCentralState({ broadcast: true })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to mark served."))
-            await fetchCentralState({ silent: true })
+            await fetchCentralState({ silent: true, broadcast: true })
         } finally {
             setBusy(false)
         }
@@ -937,16 +1140,14 @@ export default function StaffQueuePage() {
             if (String(updated.status).toUpperCase() === "OUT") {
                 toast.success(`${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} is OUT.`)
             } else {
-                toast.success(
-                    `${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} moved to HOLD.`,
-                )
+                toast.success(`${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} moved to HOLD.`)
             }
 
-            await fetchCentralState()
+            await fetchCentralState({ broadcast: true })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to hold ticket."))
-            await fetchCentralState({ silent: true })
+            await fetchCentralState({ silent: true, broadcast: true })
         } finally {
             setBusy(false)
         }
@@ -958,15 +1159,21 @@ export default function StaffQueuePage() {
             const res = await staffApi.returnFromHold(ticketId)
             const qn = Number((res as any)?.ticket?.queueNumber ?? 0)
             toast.success(`Returned ${qn ? `#${qn}` : "ticket"} to WAITING.`)
-            await fetchCentralState()
+            await fetchCentralState({ broadcast: true })
             await fetchSecondary()
         } catch (e: any) {
             toast.error(safeErrorMessage(e, "Failed to return from HOLD."))
-            await fetchCentralState({ silent: true })
+            await fetchCentralState({ silent: true, broadcast: true })
         } finally {
             setBusy(false)
         }
     }
+
+    const syncBadgeText = React.useMemo(() => {
+        if (!assignedOk) return "Auto-refresh: —"
+        if (!liveSync) return "Auto-refresh: OFF"
+        return `Auto-refresh: ON (${(POLL_MS / 1000).toFixed(1)}s)`
+    }, [assignedOk, liveSync])
 
     return (
         <DashboardLayout title="Queue" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
@@ -978,7 +1185,7 @@ export default function StaffQueuePage() {
                             Staff Queue Control Center
                         </CardTitle>
                         <CardDescription>
-                            ✅ One unified queue state shared across all staff/windows (live sync). All windows see the same source of truth.
+                            ✅ Centralized, synchronized queue state across all windows. Auto-refresh is enabled (2–3s polling), no manual refresh needed.
                         </CardDescription>
                     </CardHeader>
 
@@ -993,12 +1200,60 @@ export default function StaffQueuePage() {
                             <div className="space-y-6">
                                 <div className="grid gap-4 xl:grid-cols-12">
                                     <Card className="xl:col-span-8">
-                                        <CardHeader>
-                                            <CardTitle className="text-base">Queue Commands</CardTitle>
-                                            <CardDescription>
-                                                Centralized actions + real-time state. No separate queue instances per staff window.
-                                            </CardDescription>
+                                        <CardHeader className="flex flex-row items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <CardTitle className="text-base">Queue Commands</CardTitle>
+                                                <CardDescription>
+                                                    Centralized actions + real-time state. Updates sync across all open staff windows automatically.
+                                                </CardDescription>
+                                            </div>
+
+                                            {/* ✅ Keep optional actions tucked away (no manual refresh needed) */}
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="outline" size="icon" className="shrink-0" aria-label="Queue options">
+                                                        <MoreHorizontal className="h-4 w-4" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end" className="w-56">
+                                                    <DropdownMenuLabel>Queue options</DropdownMenuLabel>
+                                                    <DropdownMenuSeparator />
+                                                    <DropdownMenuItem
+                                                        onClick={() => {
+                                                            toast.message("Syncing now…")
+                                                            void fetchCentralState({ broadcast: true })
+                                                            void fetchSecondary()
+                                                        }}
+                                                    >
+                                                        <RefreshCw className="mr-2 h-4 w-4" />
+                                                        Sync now
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuItem
+                                                        onClick={() => {
+                                                            toast.message("Re-checking assignment…")
+                                                            void refreshAll()
+                                                        }}
+                                                    >
+                                                        Re-check assignment
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuSeparator />
+                                                    <DropdownMenuItem
+                                                        onClick={() => {
+                                                            const next = !liveSync
+                                                            setLiveSync(next)
+                                                            toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
+                                                            if (next) {
+                                                                claimQueueLeadership()
+                                                                void fetchCentralState({ broadcast: true })
+                                                            }
+                                                        }}
+                                                    >
+                                                        {liveSync ? "Pause auto-refresh" : "Resume auto-refresh"}
+                                                    </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
                                         </CardHeader>
+
                                         <CardContent className="space-y-4">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <Badge variant="secondary" className="max-w-full whitespace-normal wrap-break-word">
@@ -1010,15 +1265,23 @@ export default function StaffQueuePage() {
 
                                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
 
-                                                <Badge variant={liveSync ? "default" : "secondary"}>
-                                                    Live sync: {liveSync ? "ON" : "OFF"}
-                                                </Badge>
+                                                <Badge variant={liveSync ? "default" : "secondary"}>{syncBadgeText}</Badge>
 
                                                 <Badge variant="secondary">
                                                     Server: {queueState?.serverTime ? shortTime(queueState.serverTime) : "—"}
                                                 </Badge>
 
+                                                {lastSyncedAtIso ? (
+                                                    <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge>
+                                                ) : null}
+
                                                 {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
+
+                                                {liveSync && assignedOk ? (
+                                                    <Badge variant={isQueueLeader ? "default" : "secondary"}>
+                                                        Sync leader: {isQueueLeader ? "YES" : "NO"}
+                                                    </Badge>
+                                                ) : null}
 
                                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                                                 {centralAudio ? (
@@ -1033,33 +1296,18 @@ export default function StaffQueuePage() {
                                             {duplicateActivePairs.length ? (
                                                 <Card className="border-destructive/40 bg-destructive/5">
                                                     <CardContent className="py-3">
-                                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                                            <div className="min-w-0">
-                                                                <div className="font-medium">Duplicate active queue numbers detected</div>
-                                                                <div className="text-sm text-muted-foreground">
-                                                                    This should not happen. Please refresh; if it persists, check backend queue counter constraints.
-                                                                </div>
-                                                                <div className="mt-2 flex flex-wrap gap-2">
-                                                                    {duplicateActivePairs.slice(0, 6).map((d) => (
-                                                                        <Badge
-                                                                            key={`${d.departmentName}:${d.queueNumber}`}
-                                                                            variant="destructive"
-                                                                        >
-                                                                            {(d.departmentCode || d.departmentName) +
-                                                                                ` #${d.queueNumber} (${d.count}x)`}
-                                                                        </Badge>
-                                                                    ))}
-                                                                </div>
+                                                        <div className="min-w-0">
+                                                            <div className="font-medium">Duplicate active queue numbers detected</div>
+                                                            <div className="text-sm text-muted-foreground">
+                                                                This should not happen. The dashboard auto-syncs; if it persists, check backend queue counter constraints.
                                                             </div>
-                                                            <Button
-                                                                variant="outline"
-                                                                className="w-full sm:w-auto gap-2"
-                                                                disabled={busy}
-                                                                onClick={() => void fetchCentralState()}
-                                                            >
-                                                                <RefreshCw className="h-4 w-4" />
-                                                                Refresh state
-                                                            </Button>
+                                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                                {duplicateActivePairs.slice(0, 6).map((d) => (
+                                                                    <Badge key={`${d.departmentName}:${d.queueNumber}`} variant="destructive">
+                                                                        {(d.departmentCode || d.departmentName) + ` #${d.queueNumber} (${d.count}x)`}
+                                                                    </Badge>
+                                                                ))}
+                                                            </div>
                                                         </div>
                                                     </CardContent>
                                                 </Card>
@@ -1068,16 +1316,6 @@ export default function StaffQueuePage() {
                                             <Separator />
 
                                             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                                                <Button
-                                                    variant="outline"
-                                                    onClick={() => void fetchCentralState()}
-                                                    disabled={busy || !assignedOk}
-                                                    className="w-full gap-2 sm:w-auto"
-                                                >
-                                                    <RefreshCw className="h-4 w-4" />
-                                                    Refresh state
-                                                </Button>
-
                                                 <Button
                                                     onClick={() => void onCallNextCentral()}
                                                     disabled={busy || !assignedOk}
@@ -1108,11 +1346,19 @@ export default function StaffQueuePage() {
                                                         <Switch
                                                             id="liveSync"
                                                             checked={liveSync}
-                                                            onCheckedChange={(v) => setLiveSync(Boolean(v))}
+                                                            onCheckedChange={(v) => {
+                                                                const next = Boolean(v)
+                                                                setLiveSync(next)
+                                                                toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
+                                                                if (next) {
+                                                                    claimQueueLeadership()
+                                                                    void fetchCentralState({ broadcast: true })
+                                                                }
+                                                            }}
                                                             disabled={!assignedOk}
                                                         />
                                                         <Label htmlFor="liveSync" className="text-sm">
-                                                            Live sync
+                                                            Auto-refresh
                                                         </Label>
                                                     </div>
 
@@ -1181,7 +1427,7 @@ export default function StaffQueuePage() {
                                                             <TableHead className="w-24">Window</TableHead>
                                                             <TableHead className="w-44">Now serving</TableHead>
                                                             <TableHead className="min-w-55">Department</TableHead>
-                                                            <TableHead>Participant</TableHead>
+                                                            <TableHead>Student</TableHead>
                                                             <TableHead className="hidden md:table-cell">Called at</TableHead>
                                                         </TableRow>
                                                     </TableHeader>
@@ -1189,29 +1435,24 @@ export default function StaffQueuePage() {
                                                         {nowServingBoard.map(({ windowNumber, ticket }) => {
                                                             const isMine = Number(windowInfo?.number ?? 0) === windowNumber
                                                             const dep = getDepartmentMeta(ticket)
-                                                            const qLabel = dep.code
-                                                                ? `${dep.code}-${pad3(ticket.queueNumber)}`
-                                                                : `#${ticket.queueNumber}`
+                                                            const qLabel = dep.code ? `${dep.code}-${pad3(ticket.queueNumber)}` : `#${ticket.queueNumber}`
 
                                                             return (
-                                                                <TableRow
-                                                                    key={`${windowNumber}:${ticket.id}`}
-                                                                    className={isMine ? "bg-muted/50" : ""}
-                                                                >
+                                                                <TableRow key={`${windowNumber}:${ticket.id}`} className={isMine ? "bg-muted/50" : ""}>
                                                                     <TableCell className="font-medium">#{windowNumber}</TableCell>
                                                                     <TableCell className="font-medium tabular-nums">{qLabel}</TableCell>
                                                                     <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-md whitespace-normal wrap-break-word">
-                                                                            {dep.name}
-                                                                        </span>
+                                                                        <span className="block max-w-md whitespace-normal wrap-break-word">{dep.name}</span>
                                                                     </TableCell>
                                                                     <TableCell>
-                                                                        <span className="font-medium">
-                                                                            {getParticipantName(ticket) || "—"}
-                                                                        </span>
-                                                                        <span className="ml-2 text-xs text-muted-foreground">
-                                                                            ({getStudentId(ticket) || "—"})
-                                                                        </span>
+                                                                        <div className="min-w-0">
+                                                                            <div className="font-medium whitespace-normal wrap-break-word leading-snug">
+                                                                                {getParticipantName(ticket) || "—"}
+                                                                            </div>
+                                                                            <div className="text-xs text-muted-foreground">
+                                                                                Student ID: <span className="tabular-nums">{getStudentId(ticket) || "—"}</span>
+                                                                            </div>
+                                                                        </div>
                                                                     </TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
                                                                         {fmtTime(ticket?.calledAt ?? ticket?.updatedAt)}
@@ -1243,15 +1484,11 @@ export default function StaffQueuePage() {
                                                     <div className="rounded-xl border bg-muted/40 p-4">
                                                         <div className="flex items-start justify-between gap-3">
                                                             <div className="min-w-0">
-                                                                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                                                                    Active ticket
-                                                                </div>
+                                                                <div className="text-xs uppercase tracking-wide text-muted-foreground">Active ticket</div>
 
                                                                 {(() => {
                                                                     const dep = getDepartmentMeta(current)
-                                                                    const label = dep.code
-                                                                        ? `${dep.code}-${pad3(current.queueNumber)}`
-                                                                        : `#${current.queueNumber}`
+                                                                    const label = dep.code ? `${dep.code}-${pad3(current.queueNumber)}` : `#${current.queueNumber}`
                                                                     return (
                                                                         <div className="mt-1 text-4xl font-semibold tracking-tight tabular-nums">
                                                                             {label}
@@ -1260,14 +1497,14 @@ export default function StaffQueuePage() {
                                                                 })()}
 
                                                                 <div className="mt-2 text-sm text-muted-foreground">
-                                                                    Participant:{" "}
-                                                                    <span className="text-foreground font-medium">
+                                                                    Student:{" "}
+                                                                    <span className="text-foreground font-medium whitespace-normal wrap-break-word">
                                                                         {getParticipantName(current) || "—"}
                                                                     </span>
                                                                 </div>
 
                                                                 <div className="text-sm text-muted-foreground">
-                                                                    Student ID: {getStudentId(current) || "—"}
+                                                                    Student ID: <span className="tabular-nums">{getStudentId(current) || "—"}</span>
                                                                 </div>
 
                                                                 <div className="text-sm text-muted-foreground">
@@ -1280,10 +1517,7 @@ export default function StaffQueuePage() {
 
                                                                 <div className="mt-3 flex flex-wrap items-center gap-2">
                                                                     {participantTypeBadge(getParticipantType(current) || "")}
-                                                                    <Badge
-                                                                        variant="outline"
-                                                                        className="max-w-full whitespace-normal wrap-break-word"
-                                                                    >
+                                                                    <Badge variant="outline" className="max-w-full whitespace-normal wrap-break-word">
                                                                         Purpose: {ticketPurpose(current)}
                                                                     </Badge>
                                                                 </div>
@@ -1308,12 +1542,7 @@ export default function StaffQueuePage() {
                                                             Hold / No-show
                                                         </Button>
 
-                                                        <Button
-                                                            type="button"
-                                                            onClick={() => void onServeCentral()}
-                                                            disabled={busy}
-                                                            className="w-full gap-2"
-                                                        >
+                                                        <Button type="button" onClick={() => void onServeCentral()} disabled={busy} className="w-full gap-2">
                                                             <CheckCircle2 className="h-4 w-4" />
                                                             Mark served
                                                         </Button>
@@ -1348,7 +1577,7 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
-                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead>Student (Full name)</TableHead>
                                                                 <TableHead className="min-w-55">Purpose / Transaction</TableHead>
                                                                 <TableHead className="hidden xl:table-cell">Waiting since</TableHead>
                                                             </TableRow>
@@ -1363,9 +1592,7 @@ export default function StaffQueuePage() {
                                                                         <ParticipantCell ticket={t} />
                                                                     </TableCell>
                                                                     <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-md whitespace-normal wrap-break-word">
-                                                                            {ticketPurpose(t)}
-                                                                        </span>
+                                                                        <span className="block max-w-md whitespace-normal wrap-break-word">{ticketPurpose(t)}</span>
                                                                     </TableCell>
                                                                     <TableCell className="hidden xl:table-cell text-muted-foreground">
                                                                         {fmtTime((t as any).waitingSince)}
@@ -1400,7 +1627,7 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
-                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead>Student</TableHead>
                                                                 <TableHead className="min-w-45">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Updated</TableHead>
@@ -1417,9 +1644,7 @@ export default function StaffQueuePage() {
                                                                         <ParticipantCell ticket={t} />
                                                                     </TableCell>
                                                                     <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-sm whitespace-normal wrap-break-word">
-                                                                            {ticketPurpose(t)}
-                                                                        </span>
+                                                                        <span className="block max-w-sm whitespace-normal wrap-break-word">{ticketPurpose(t)}</span>
                                                                     </TableCell>
                                                                     <TableCell>{Number((t as any)?.holdAttempts ?? 0)}</TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
@@ -1468,7 +1693,7 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
-                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead>Student</TableHead>
                                                                 <TableHead className="min-w-45">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Out at</TableHead>
@@ -1484,9 +1709,7 @@ export default function StaffQueuePage() {
                                                                         <ParticipantCell ticket={t} />
                                                                     </TableCell>
                                                                     <TableCell className="text-muted-foreground">
-                                                                        <span className="block max-w-sm whitespace-normal wrap-break-word">
-                                                                            {ticketPurpose(t)}
-                                                                        </span>
+                                                                        <span className="block max-w-sm whitespace-normal wrap-break-word">{ticketPurpose(t)}</span>
                                                                     </TableCell>
                                                                     <TableCell>{Number((t as any)?.holdAttempts ?? 0)}</TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
@@ -1517,7 +1740,10 @@ export default function StaffQueuePage() {
                                                     <Switch
                                                         id="historyMine"
                                                         checked={historyMine}
-                                                        onCheckedChange={(v) => setHistoryMine(Boolean(v))}
+                                                        onCheckedChange={(v) => {
+                                                            setHistoryMine(Boolean(v))
+                                                            toast.message(Boolean(v) ? "Showing your window history." : "Showing all window history.")
+                                                        }}
                                                         disabled={!assignedOk || busy}
                                                     />
                                                     <Label htmlFor="historyMine" className="text-sm">
@@ -1539,7 +1765,7 @@ export default function StaffQueuePage() {
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
                                                                 <TableHead className="w-28">Status</TableHead>
-                                                                <TableHead>Participant</TableHead>
+                                                                <TableHead>Student</TableHead>
                                                                 <TableHead className="min-w-55">Purpose</TableHead>
                                                                 <TableHead className="w-28">Window</TableHead>
                                                                 <TableHead className="hidden md:table-cell">When</TableHead>
@@ -1558,16 +1784,10 @@ export default function StaffQueuePage() {
                                                                             <ParticipantCell ticket={t} />
                                                                         </TableCell>
                                                                         <TableCell className="text-muted-foreground">
-                                                                            <span className="block max-w-120 whitespace-normal wrap-break-word">
-                                                                                {ticketPurpose(t)}
-                                                                            </span>
+                                                                            <span className="block max-w-120 whitespace-normal wrap-break-word">{ticketPurpose(t)}</span>
                                                                         </TableCell>
-                                                                        <TableCell className="text-muted-foreground">
-                                                                            {win?.number ? `#${win.number}` : "—"}
-                                                                        </TableCell>
-                                                                        <TableCell className="hidden md:table-cell text-muted-foreground">
-                                                                            {historyWhen(t)}
-                                                                        </TableCell>
+                                                                        <TableCell className="text-muted-foreground">{win?.number ? `#${win.number}` : "—"}</TableCell>
+                                                                        <TableCell className="hidden md:table-cell text-muted-foreground">{historyWhen(t)}</TableCell>
                                                                     </TableRow>
                                                                 )
                                                             })}
