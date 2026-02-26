@@ -64,7 +64,6 @@ export default function AdminSettingsPage() {
     const [savingPassword, setSavingPassword] = React.useState(false)
 
     // ✅ Show/Hide password toggles
-    const [showProfileCurrentPassword, setShowProfileCurrentPassword] = React.useState(false)
     const [showCurrentPassword, setShowCurrentPassword] = React.useState(false)
     const [showNewPassword, setShowNewPassword] = React.useState(false)
     const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
@@ -353,30 +352,6 @@ export default function AdminSettingsPage() {
                                         </div>
 
                                         <div className="space-y-2">
-                                            <Label htmlFor="currentPasswordForProfile">
-                                                Current password (required only when changing email)
-                                            </Label>
-
-                                            <div className="relative">
-                                                <Input
-                                                    id="currentPasswordForProfile"
-                                                    type={showProfileCurrentPassword ? "text" : "password"}
-                                                    value={currentPasswordForProfile}
-                                                    onChange={(e) => setCurrentPasswordForProfile(e.target.value)}
-                                                    autoComplete="current-password"
-                                                    className="pr-10"
-                                                />
-                                                <Button
-                                                    type="button"
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
-                                                    onClick={() => setShowProfileCurrentPassword((v) => !v)}
-                                                    aria-label={showProfileCurrentPassword ? "Hide password" : "Show password"}
-                                                >
-                                                    {showProfileCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                                </Button>
-                                            </div>
                                         </div>
 
                                         <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">

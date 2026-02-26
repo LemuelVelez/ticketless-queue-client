@@ -68,7 +68,7 @@ export default function Hero() {
                 </div>
 
                 {/* Right column: hero image (Live display removed) */}
-                <div className="flex items-start justify-center md:justify-end">
+                <div className="flex justify-center">
                     <Card className="w-full max-w-70 overflow-hidden">
                         <CardContent className="p-3">
                             <img
