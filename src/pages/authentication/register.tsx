@@ -319,7 +319,7 @@ export default function RegisterPage() {
 
             const role = (await resolveParticipantRoleFromSession()) ?? "STUDENT"
 
-            toast.success("Student account created. You are now signed in.")
+            toast.success("Student account created.")
             navigate(defaultParticipantPath(role), { replace: true })
         } catch (err) {
             const message =
@@ -418,7 +418,7 @@ export default function RegisterPage() {
 
             const role = (await resolveParticipantRoleFromSession()) ?? "ALUMNI_VISITOR"
 
-            toast.success("Alumni/Visitor account created. You are now signed in.")
+            toast.success("Alumni/Visitor account created.")
             navigate(defaultParticipantPath(role), { replace: true })
         } catch (err) {
             const message =

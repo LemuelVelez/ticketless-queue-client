@@ -108,6 +108,31 @@ function fmtTime(v?: string | null) {
     return d.toLocaleString()
 }
 
+function readLastTs(key: string) {
+    try {
+        const raw = window.localStorage.getItem(key)
+        const n = Number(raw ?? "0")
+        return Number.isFinite(n) ? n : 0
+    } catch {
+        return 0
+    }
+}
+
+function writeNowTs(key: string) {
+    try {
+        window.localStorage.setItem(key, String(Date.now()))
+    } catch {
+        // ignore
+    }
+}
+
+function cooldownRemainingMs(key: string, intervalMs: number) {
+    const last = readLastTs(key)
+    const diff = Date.now() - last
+    if (diff >= intervalMs) return 0
+    return intervalMs - diff
+}
+
 export default function StudentHomePage() {
     const location = useLocation()
 
@@ -141,10 +166,20 @@ export default function StudentHomePage() {
 
     const sessionDisplayName = React.useMemo(() => {
         if (!participant) return ""
-        const full = [participant.firstName, participant.lastName].map(pickNonEmptyString).filter(Boolean).join(" ")
+        const full = [participant.firstName, participant.lastName]
+            .map(pickNonEmptyString)
+            .filter(Boolean)
+            .join(" ")
         if (full) return full
         return pickNonEmptyString(participant.studentId) || pickNonEmptyString(participant.tcNumber)
     }, [participant])
+
+    // ✅ Student restriction: lock department after registration/profile sync
+    const isDepartmentLocked = React.useMemo(() => {
+        return Boolean(participant && pickNonEmptyString(sessionDepartmentId))
+    }, [participant, sessionDepartmentId])
+
+    const hasActiveTicket = Boolean(ticket)
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -246,12 +281,18 @@ export default function StudentHomePage() {
     )
 
     const refreshOverview = React.useCallback(async () => {
-        await Promise.all([
-            loadDepartmentDisplay({ silent: false }),
-            findActiveTicket({ silent: false }),
-        ])
+        // ✅ Abuse prevention: throttle refresh (reduces display flooding)
+        const key = `qp:student:home:refresh:${departmentId || "none"}`
+        const remaining = cooldownRemainingMs(key, 2500)
+        if (remaining > 0) {
+            toast.message(`Please wait ${Math.ceil(remaining / 1000)}s before refreshing again.`)
+            return
+        }
+        writeNowTs(key)
+
+        await Promise.all([loadDepartmentDisplay({ silent: false }), findActiveTicket({ silent: false })])
         toast.success("Overview refreshed.")
-    }, [loadDepartmentDisplay, findActiveTicket])
+    }, [loadDepartmentDisplay, findActiveTicket, departmentId])
 
     React.useEffect(() => {
         void loadDepartments()
@@ -264,19 +305,19 @@ export default function StudentHomePage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-            // 1) explicit query param
+            // ✅ Student restriction: if profile dept exists, lock & prioritize it
+            if (isDepartmentLocked && has(sessionDepartmentId)) return sessionDepartmentId
+
+            // 1) explicit query param (guest / unlocked only)
             if (has(preDeptId)) return preDeptId
 
-            // 2) session profile department
-            if (has(sessionDepartmentId)) return sessionDepartmentId
-
-            // 3) keep current valid
+            // 2) keep current valid
             if (has(prev)) return prev
 
-            // 4) fallback first
+            // 3) fallback first
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId])
+    }, [departments, preDeptId, sessionDepartmentId, isDepartmentLocked])
 
     React.useEffect(() => {
         void loadDepartmentDisplay()
@@ -397,11 +438,19 @@ export default function StudentHomePage() {
                             ) : (
                                 <div className="grid gap-4 lg:grid-cols-4">
                                     <div className="space-y-2 min-w-0">
-                                        <Label>Department</Label>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <Label>Department</Label>
+                                            {isDepartmentLocked ? (
+                                                <Badge variant="secondary" className="shrink-0">
+                                                    Locked
+                                                </Badge>
+                                            ) : null}
+                                        </div>
+
                                         <Select
                                             value={departmentId}
                                             onValueChange={setDepartmentId}
-                                            disabled={!departments.length}
+                                            disabled={!departments.length || isDepartmentLocked}
                                         >
                                             <SelectTrigger className="w-full min-w-0">
                                                 <SelectValue placeholder="Select department" />
@@ -415,6 +464,12 @@ export default function StudentHomePage() {
                                                 ))}
                                             </SelectContent>
                                         </Select>
+
+                                        {isDepartmentLocked ? (
+                                            <div className="text-xs text-muted-foreground">
+                                                Your department is locked to your registered profile.
+                                            </div>
+                                        ) : null}
                                     </div>
 
                                     <div className="space-y-2 min-w-0">
@@ -453,7 +508,9 @@ export default function StudentHomePage() {
 
                             <div className="flex flex-wrap items-center gap-2">
                                 {selectedDept ? <Badge variant="secondary">Department: {selectedDept.name}</Badge> : null}
-                                {ticket ? <Badge variant={statusBadgeVariant(ticket.status) as any}>Ticket: {ticket.status}</Badge> : null}
+                                {ticket ? (
+                                    <Badge variant={statusBadgeVariant(ticket.status) as any}>Ticket: {ticket.status}</Badge>
+                                ) : null}
                                 {myPreviewPosition === 0 ? (
                                     <Badge>Now being called</Badge>
                                 ) : myPreviewPosition ? (
@@ -462,6 +519,31 @@ export default function StudentHomePage() {
                                     <Badge variant="outline">Position in preview: —</Badge>
                                 )}
                             </div>
+
+                            {hasActiveTicket ? (
+                                <div className="rounded-lg border bg-muted p-4 text-sm">
+                                    <div className="font-medium">Active queue detected</div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        Ticket generation is blocked while you have an active queue. Please use{" "}
+                                        <span className="font-medium">My Tickets</span> to monitor your status.
+                                    </div>
+                                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                        <Button asChild className="w-full" variant="secondary">
+                                            <Link to={myTicketsUrl}>Open My Tickets</Link>
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="w-full"
+                                            onClick={() => {
+                                                toast.message("Join Queue is blocked while you have an active ticket.")
+                                            }}
+                                        >
+                                            Join Queue (Blocked)
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : null}
                         </CardContent>
                     </Card>
 
@@ -480,9 +562,16 @@ export default function StudentHomePage() {
                                 <div className="rounded-lg border p-4 text-sm text-muted-foreground">
                                     Use this when you need a new ticket. Selected department and student ID are passed automatically.
                                 </div>
-                                <Button asChild className="w-full">
-                                    <Link to={joinUrl}>Go to Join Queue</Link>
-                                </Button>
+
+                                {hasActiveTicket ? (
+                                    <Button asChild className="w-full" variant="secondary">
+                                        <Link to={myTicketsUrl}>View Active Ticket</Link>
+                                    </Button>
+                                ) : (
+                                    <Button asChild className="w-full">
+                                        <Link to={joinUrl}>Go to Join Queue</Link>
+                                    </Button>
+                                )}
                             </CardContent>
                         </Card>
 
@@ -502,7 +591,9 @@ export default function StudentHomePage() {
                                         <div className="flex items-center justify-between gap-3">
                                             <div>
                                                 <div className="text-sm text-muted-foreground">Queue Number</div>
-                                                <div className="text-3xl font-semibold tracking-tight">#{ticket.queueNumber}</div>
+                                                <div className="text-3xl font-semibold tracking-tight">
+                                                    #{ticket.queueNumber}
+                                                </div>
                                             </div>
                                             <div className="flex flex-col items-end gap-2">
                                                 <Badge variant={statusBadgeVariant(ticket.status) as any}>{ticket.status}</Badge>
@@ -545,7 +636,10 @@ export default function StudentHomePage() {
                                     <div className="space-y-4">
                                         <div className="h-80 w-full">
                                             <ResponsiveContainer width="100%" height="100%">
-                                                <RechartsBarChart data={liveQueueBars} margin={{ top: 12, right: 12, left: -12, bottom: 0 }}>
+                                                <RechartsBarChart
+                                                    data={liveQueueBars}
+                                                    margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
+                                                >
                                                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                                                     <XAxis
                                                         dataKey="label"
@@ -580,7 +674,10 @@ export default function StudentHomePage() {
                                         </div>
 
                                         <div className="flex flex-wrap items-center gap-2">
-                                            <Badge variant="outline">Now Serving: {displayNowServing ? `#${displayNowServing.queueNumber}` : "—"}</Badge>
+                                            <Badge variant="outline">
+                                                Now Serving:{" "}
+                                                {displayNowServing ? `#${displayNowServing.queueNumber}` : "—"}
+                                            </Badge>
                                             <Badge variant="outline">Up Next: {waitingCount}</Badge>
                                             <Badge variant="secondary">Visible: {visibleCount}</Badge>
                                         </div>
@@ -596,7 +693,8 @@ export default function StudentHomePage() {
                                     Queue Mix
                                 </CardTitle>
                                 <CardDescription>
-                                    Recharts donut view using your app CSS color tokens from <span className="font-mono">src/index.css</span>.
+                                    Recharts donut view using your app CSS color tokens from{" "}
+                                    <span className="font-mono">src/index.css</span>.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
@@ -625,10 +723,7 @@ export default function StudentHomePage() {
                                                         }}
                                                         labelStyle={{ color: "hsl(var(--foreground))" }}
                                                     />
-                                                    <Legend
-                                                        verticalAlign="bottom"
-                                                        wrapperStyle={{ color: "hsl(var(--muted-foreground))" }}
-                                                    />
+                                                    <Legend verticalAlign="bottom" wrapperStyle={{ color: "hsl(var(--muted-foreground))" }} />
                                                     <Pie
                                                         data={queueMixData}
                                                         dataKey="value"
@@ -646,13 +741,11 @@ export default function StudentHomePage() {
                                         </div>
 
                                         {myPreviewPosition === 0 ? (
-                                            <div className="rounded-lg border p-4 text-sm">
-                                                Your ticket is currently being called.
-                                            </div>
+                                            <div className="rounded-lg border p-4 text-sm">Your ticket is currently being called.</div>
                                         ) : myPreviewPosition ? (
                                             <div className="rounded-lg border p-4 text-sm">
-                                                Your ticket appears at position <span className="font-semibold">#{myPreviewPosition}</span> in the visible
-                                                preview queue.
+                                                Your ticket appears at position{" "}
+                                                <span className="font-semibold">#{myPreviewPosition}</span> in the visible preview queue.
                                             </div>
                                         ) : (
                                             <div className="rounded-lg border p-4 text-sm text-muted-foreground">
@@ -668,9 +761,7 @@ export default function StudentHomePage() {
                     <Card className="min-w-0">
                         <CardHeader>
                             <CardTitle>Queue Board Preview</CardTitle>
-                            <CardDescription>
-                                Quick glance from home: now serving and up next tickets.
-                            </CardDescription>
+                            <CardDescription>Quick glance from home: now serving and up next tickets.</CardDescription>
                         </CardHeader>
 
                         <CardContent>
@@ -722,9 +813,7 @@ export default function StudentHomePage() {
                                             </div>
 
                                             {displayUpNext.length === 0 ? (
-                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                    No waiting tickets.
-                                                </div>
+                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">No waiting tickets.</div>
                                             ) : (
                                                 <div className="grid gap-2">
                                                     {displayUpNext.slice(0, 6).map((item, idx) => (
@@ -745,9 +834,16 @@ export default function StudentHomePage() {
                             <Separator className="my-6" />
 
                             <div className="grid gap-2 sm:grid-cols-2">
-                                <Button asChild>
-                                    <Link to={joinUrl}>Open Join Queue</Link>
-                                </Button>
+                                {hasActiveTicket ? (
+                                    <Button asChild variant="secondary">
+                                        <Link to={myTicketsUrl}>Open My Tickets</Link>
+                                    </Button>
+                                ) : (
+                                    <Button asChild>
+                                        <Link to={joinUrl}>Open Join Queue</Link>
+                                    </Button>
+                                )}
+
                                 <Button asChild variant="secondary">
                                     <Link to={myTicketsUrl}>Open My Tickets</Link>
                                 </Button>

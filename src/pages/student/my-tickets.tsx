@@ -34,6 +34,16 @@ type DepartmentDisplayResponse = {
     }>
 }
 
+type SessionParticipant = {
+    firstName?: string
+    lastName?: string
+    studentId?: string
+    tcNumber?: string
+    mobileNumber?: string
+    phone?: string
+    departmentId?: string
+}
+
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
 }
@@ -68,6 +78,31 @@ function fmtTime(v?: string | null) {
     return d.toLocaleString()
 }
 
+function readLastTs(key: string) {
+    try {
+        const raw = window.localStorage.getItem(key)
+        const n = Number(raw ?? "0")
+        return Number.isFinite(n) ? n : 0
+    } catch {
+        return 0
+    }
+}
+
+function writeNowTs(key: string) {
+    try {
+        window.localStorage.setItem(key, String(Date.now()))
+    } catch {
+        // ignore
+    }
+}
+
+function cooldownRemainingMs(key: string, intervalMs: number) {
+    const last = readLastTs(key)
+    const diff = Date.now() - last
+    if (diff >= intervalMs) return 0
+    return intervalMs - diff
+}
+
 export default function StudentMyTicketsPage() {
     const location = useLocation()
 
@@ -79,6 +114,11 @@ export default function StudentMyTicketsPage() {
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
 
+    const [loadingSession, setLoadingSession] = React.useState(true)
+    const [participant, setParticipant] = React.useState<SessionParticipant | null>(null)
+    const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
+    const [sessionStudentId, setSessionStudentId] = React.useState<string>("")
+
     const [departmentId, setDepartmentId] = React.useState<string>("")
     const [studentId, setStudentId] = React.useState<string>(preStudentId)
 
@@ -88,13 +128,52 @@ export default function StudentMyTicketsPage() {
     // Public display preview state (department display)
     const [displayLoading, setDisplayLoading] = React.useState(false)
     const [displayDateKey, setDisplayDateKey] = React.useState<string>("")
-    const [displayNowServing, setDisplayNowServing] = React.useState<DepartmentDisplayResponse["nowServing"]>(null)
+    const [displayNowServing, setDisplayNowServing] =
+        React.useState<DepartmentDisplayResponse["nowServing"]>(null)
     const [displayUpNext, setDisplayUpNext] = React.useState<DepartmentDisplayResponse["upNext"]>([])
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
         [departments, departmentId],
     )
+
+    // ✅ Student restriction: lock department after registration/profile sync (when not viewing a specific ticketId)
+    const isDepartmentLocked = React.useMemo(() => {
+        return Boolean(!ticketId && participant && pickNonEmptyString(sessionDepartmentId))
+    }, [ticketId, participant, sessionDepartmentId])
+
+    const isActiveTicket = React.useMemo(() => {
+        if (!ticket) return false
+        const s = String((ticket as any)?.status ?? "").toUpperCase()
+        return ["WAITING", "CALLED", "HOLD"].includes(s) || !s
+    }, [ticket])
+
+    const loadSession = React.useCallback(async () => {
+        setLoadingSession(true)
+        try {
+            const res = await studentApi.getSession({})
+            const p = (res.participant ?? null) as SessionParticipant | null
+            setParticipant(p)
+
+            const sid = pickNonEmptyString(p?.tcNumber) || pickNonEmptyString(p?.studentId)
+            const dept = pickNonEmptyString(p?.departmentId)
+
+            setSessionStudentId(sid)
+            setSessionDepartmentId(dept)
+
+            // Prefer profile context for normal view (not ticketId deep-link)
+            if (!ticketId) {
+                if (sid) setStudentId(sid)
+                if (dept) setDepartmentId(dept)
+            }
+        } catch {
+            setParticipant(null)
+            setSessionStudentId("")
+            setSessionDepartmentId("")
+        } finally {
+            setLoadingSession(false)
+        }
+    }, [ticketId])
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -103,6 +182,7 @@ export default function StudentMyTicketsPage() {
             const list = res.departments ?? []
             setDepartments(list)
 
+            // Initial department selection (final lock is handled by effect below)
             const canUsePre = preDeptId && list.some((d) => d._id === preDeptId)
             const next = canUsePre ? preDeptId : list[0]?._id ?? ""
             setDepartmentId((prev) => prev || next)
@@ -126,6 +206,15 @@ export default function StudentMyTicketsPage() {
                 }
                 return
             }
+
+            // ✅ Abuse prevention: throttle refresh active ticket
+            const key = `qp:student:my-tickets:refresh-ticket:${departmentId}:${sid}`
+            const remaining = cooldownRemainingMs(key, 2500)
+            if (remaining > 0) {
+                if (!silent) toast.message(`Please wait ${Math.ceil(remaining / 1000)}s before refreshing again.`)
+                return
+            }
+            writeNowTs(key)
 
             setBusy(true)
             try {
@@ -164,6 +253,15 @@ export default function StudentMyTicketsPage() {
             }
 
             const silent = Boolean(opts?.silent)
+
+            // ✅ Abuse prevention: throttle display refresh to reduce flooding
+            const key = `qp:student:my-tickets:refresh-display:${departmentId}`
+            const remaining = cooldownRemainingMs(key, 2500)
+            if (remaining > 0) {
+                if (!silent) toast.message(`Please wait ${Math.ceil(remaining / 1000)}s before refreshing again.`)
+                return
+            }
+            writeNowTs(key)
 
             if (!silent) setDisplayLoading(true)
             try {
@@ -208,15 +306,35 @@ export default function StudentMyTicketsPage() {
     }, [ticketId])
 
     React.useEffect(() => {
+        void loadSession()
         void loadDepartments()
-    }, [loadDepartments])
+    }, [loadSession, loadDepartments])
+
+    React.useEffect(() => {
+        if (!departments.length) return
+
+        const has = (id: string) => !!id && departments.some((d) => d._id === id)
+
+        // ✅ Student restriction: enforce locked profile department (normal view)
+        if (isDepartmentLocked && has(sessionDepartmentId)) {
+            setDepartmentId(sessionDepartmentId)
+            return
+        }
+
+        // otherwise keep valid current, or use preDeptId if valid, or fallback to first
+        setDepartmentId((prev) => {
+            if (has(prev)) return prev
+            if (has(preDeptId)) return preDeptId
+            return departments[0]?._id ?? ""
+        })
+    }, [departments, isDepartmentLocked, sessionDepartmentId, preDeptId])
 
     React.useEffect(() => {
         void loadTicketById()
     }, [loadTicketById])
 
     React.useEffect(() => {
-        void loadDepartmentDisplay()
+        void loadDepartmentDisplay({ silent: true })
     }, [loadDepartmentDisplay])
 
     React.useEffect(() => {
@@ -230,13 +348,16 @@ export default function StudentMyTicketsPage() {
         return deptNameFromTicketDepartment(ticket.department, selectedDept?.name)
     }, [ticket, selectedDept?.name])
 
+    const effectiveJoinDeptId = sessionDepartmentId || departmentId
+    const effectiveJoinStudentId = sessionStudentId || studentId
+
     const joinUrl = React.useMemo(() => {
         const q = new URLSearchParams()
-        if (departmentId) q.set("departmentId", departmentId)
-        if (studentId.trim()) q.set("studentId", studentId.trim())
+        if (effectiveJoinDeptId) q.set("departmentId", effectiveJoinDeptId)
+        if (effectiveJoinStudentId.trim()) q.set("studentId", effectiveJoinStudentId.trim())
         const qsStr = q.toString()
         return `/student/join${qsStr ? `?${qsStr}` : ""}`
-    }, [departmentId, studentId])
+    }, [effectiveJoinDeptId, effectiveJoinStudentId])
 
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -265,12 +386,24 @@ export default function StudentMyTicketsPage() {
                                     <CardDescription>
                                         Join queue and view the live department queue board preview.
                                     </CardDescription>
+                                    <div className="pt-2 flex flex-wrap items-center gap-2">
+                                        {loadingSession ? (
+                                            <Skeleton className="h-5 w-28" />
+                                        ) : participant ? (
+                                            <>
+                                                <Badge variant="secondary">Profile synced</Badge>
+                                                {isDepartmentLocked ? <Badge variant="secondary">Department locked</Badge> : null}
+                                            </>
+                                        ) : (
+                                            <Badge variant="outline">Guest mode</Badge>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                     <Button
                                         variant="outline"
-                                        onClick={() => void loadDepartmentDisplay()}
+                                        onClick={() => void loadDepartmentDisplay({ silent: false })}
                                         disabled={displayLoading || !departmentId || loadingDepts}
                                         className="w-full gap-2 sm:w-auto"
                                     >
@@ -294,13 +427,41 @@ export default function StudentMyTicketsPage() {
                                 <>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <Badge variant="outline">Date: {displayDateKey || "—"}</Badge>
+                                        {isDepartmentLocked && selectedDept ? (
+                                            <Badge variant="secondary">Department: {selectedDept.name}</Badge>
+                                        ) : null}
                                     </div>
 
-                                    <Button asChild className="w-full gap-2 sm:w-auto">
-                                        <Link to={joinUrl}>
-                                            <PlusCircle className="h-4 w-4" />
-                                            Join Queue
-                                        </Link>
+                                    {isActiveTicket ? (
+                                        <div className="rounded-lg border bg-muted p-4 text-sm">
+                                            <div className="font-medium">Active queue detected</div>
+                                            <div className="mt-1 text-muted-foreground">
+                                                New ticket generation is blocked while you have an active ticket.
+                                            </div>
+                                        </div>
+                                    ) : null}
+
+                                    <Button
+                                        asChild={!isActiveTicket}
+                                        className="w-full gap-2 sm:w-auto"
+                                        onClick={
+                                            isActiveTicket
+                                                ? () => toast.message("Join Queue is blocked while you have an active ticket.")
+                                                : undefined
+                                        }
+                                        {...(isActiveTicket ? { "aria-disabled": true } : {})}
+                                    >
+                                        {isActiveTicket ? (
+                                            <span className="inline-flex items-center gap-2">
+                                                <PlusCircle className="h-4 w-4" />
+                                                Join Queue (Blocked)
+                                            </span>
+                                        ) : (
+                                            <Link to={joinUrl}>
+                                                <PlusCircle className="h-4 w-4" />
+                                                Join Queue
+                                            </Link>
+                                        )}
                                     </Button>
 
                                     <Separator />
@@ -325,7 +486,6 @@ export default function StudentMyTicketsPage() {
 
                                             <CardContent>
                                                 <div className="grid gap-6 lg:grid-cols-12">
-                                                    {/* Now serving */}
                                                     <div className="lg:col-span-7">
                                                         <div className="rounded-2xl border bg-muted p-6">
                                                             <div className="flex items-center justify-between">
@@ -357,7 +517,6 @@ export default function StudentMyTicketsPage() {
                                                         </div>
                                                     </div>
 
-                                                    {/* Up next */}
                                                     <div className="lg:col-span-5">
                                                         <div className="rounded-2xl border p-6">
                                                             <div className="mb-4 flex items-center justify-between">
@@ -405,7 +564,7 @@ export default function StudentMyTicketsPage() {
 
                                     <Button
                                         variant="outline"
-                                        onClick={() => void findActive()}
+                                        onClick={() => void findActive({ silent: false })}
                                         disabled={busy || !departmentId || !studentId.trim()}
                                         className="w-full gap-2 sm:w-auto"
                                     >
@@ -455,7 +614,7 @@ export default function StudentMyTicketsPage() {
 
                                     <Button
                                         variant="outline"
-                                        onClick={() => void findActive()}
+                                        onClick={() => void findActive({ silent: false })}
                                         disabled={busy || !departmentId || !studentId.trim()}
                                         className="w-full gap-2 sm:w-auto"
                                     >
