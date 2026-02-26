@@ -228,6 +228,40 @@ function pickAssignedManager(a: StaffAssignment | null | undefined) {
     return m || ""
 }
 
+function pickAssignedWindowLabel(a: StaffAssignment | null | undefined) {
+    const raw: any = a?.assignedWindow
+    if (!raw) return ""
+
+    if (typeof raw === "object") {
+        const name = String(raw?.name ?? "").trim()
+        const num = raw?.number != null ? Number(raw.number) : NaN
+        if (name && Number.isFinite(num) && num > 0) return `${name} (Window ${num})`
+        if (name) return name
+        if (Number.isFinite(num) && num > 0) return `Window ${num}`
+        return ""
+    }
+
+    // string id fallback (avoid showing unless necessary)
+    return ""
+}
+
+function pickAssignedDepartmentLabel(a: StaffAssignment | null | undefined) {
+    const raw: any = a?.assignedDepartment
+    if (!raw) return ""
+
+    if (typeof raw === "object") {
+        const name = String(raw?.name ?? "").trim()
+        const code = String(raw?.code ?? "").trim()
+        if (name && code) return `${name} (${code})`
+        if (name) return name
+        if (code) return code
+        return ""
+    }
+
+    // string id fallback (avoid showing unless necessary)
+    return ""
+}
+
 function computeDuplicates(state: StaffQueueState | null) {
     if (!state) return []
     const active = [...(state.waiting ?? []), ...(state.hold ?? []), ...(state.called ?? [])]
@@ -438,6 +472,21 @@ export default function QueueControlCenter() {
         return () => window.removeEventListener("beforeunload", onBeforeUnload)
     }, [tabId])
 
+    const onUseAssignment = React.useCallback(() => {
+        const winId = pickAssignedWindowId(assignment)
+        const mgr = pickAssignedManager(assignment)
+
+        if (winId) setWindowId(winId)
+        if (mgr) setManagerKey(mgr)
+
+        if (!winId && !mgr) {
+            toast.message("No assignment data available to apply.")
+            return
+        }
+
+        toast.success("Applied your assignment to scope.")
+    }, [assignment])
+
     const onCallNext = React.useCallback(async () => {
         if (!windowId) {
             toast.error("Select a service window first.")
@@ -454,7 +503,9 @@ export default function QueueControlCenter() {
                 return
             }
 
-            toast.success(`Called queue #${ticket.queueNumber} — ${ticket.participant?.name || ticket.participant?.studentId}`)
+            toast.success(
+                `Called queue #${ticket.queueNumber} — ${ticket.participant?.name || ticket.participant?.studentId}`
+            )
             broadcastInvalidate()
             fetchState()
         } catch (err: any) {
@@ -545,6 +596,10 @@ export default function QueueControlCenter() {
         </div>
     )
 
+    const assignedWindowLabel = pickAssignedWindowLabel(assignment)
+    const assignedDepartmentLabel = pickAssignedDepartmentLabel(assignment)
+    const assignedManagerLabel = pickAssignedManager(assignment)
+
     return (
         <DashboardLayout
             title="Queue Control Center"
@@ -574,7 +629,10 @@ export default function QueueControlCenter() {
                                     Server: <span className="ml-1 font-medium">{formatTime(state?.serverTime)}</span>
                                 </Badge>
                                 <Badge variant="secondary">
-                                    Updated: <span className="ml-1 font-medium">{lastUpdatedAt ? `${formatSince(new Date(lastUpdatedAt).toISOString())} ago` : "—"}</span>
+                                    Updated:{" "}
+                                    <span className="ml-1 font-medium">
+                                        {lastUpdatedAt ? `${formatSince(new Date(lastUpdatedAt).toISOString())} ago` : "—"}
+                                    </span>
                                 </Badge>
                             </div>
                         </div>
@@ -589,28 +647,66 @@ export default function QueueControlCenter() {
                                         Use a window scope for “Next Queue” to guarantee race-safe centralized calls.
                                     </CardDescription>
                                 </CardHeader>
-                                <CardContent className="grid gap-3 sm:grid-cols-2">
-                                    <div className="space-y-2">
-                                        <div className="text-sm font-medium">Window ID</div>
-                                        <Input
-                                            value={windowId}
-                                            onChange={(e) => setWindowId(e.target.value)}
-                                            placeholder="Paste windowId (or auto-filled from assignment)"
-                                        />
-                                        <div className="text-xs text-muted-foreground">
-                                            Tip: This is safe to open in multiple staff tabs — updates synchronize instantly.
+                                <CardContent className="grid gap-3">
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">Window ID</div>
+                                            <Input
+                                                value={windowId}
+                                                onChange={(e) => setWindowId(e.target.value)}
+                                                placeholder="Paste windowId (or auto-filled from assignment)"
+                                            />
+                                            <div className="text-xs text-muted-foreground">
+                                                Tip: This is safe to open in multiple staff tabs — updates synchronize instantly.
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium">Manager Key (fallback view)</div>
+                                            <Input
+                                                value={managerKey}
+                                                onChange={(e) => setManagerKey(e.target.value)}
+                                                placeholder="e.g. REGISTRAR"
+                                            />
+                                            <div className="text-xs text-muted-foreground">
+                                                If no windowId is set, this page can still view centralized state via manager scope (read-only safe).
+                                            </div>
                                         </div>
                                     </div>
 
-                                    <div className="space-y-2">
-                                        <div className="text-sm font-medium">Manager Key (fallback view)</div>
-                                        <Input
-                                            value={managerKey}
-                                            onChange={(e) => setManagerKey(e.target.value)}
-                                            placeholder="e.g. REGISTRAR"
-                                        />
-                                        <div className="text-xs text-muted-foreground">
-                                            If no windowId is set, this page can still view centralized state via manager scope (read-only safe).
+                                    {/* ✅ Read assignment for UX + fixes TS unused variable warning */}
+                                    <div className="rounded-lg border bg-card p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="text-sm font-medium">My Assignment</div>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={onUseAssignment}
+                                                disabled={!assignment}
+                                            >
+                                                Use assignment
+                                            </Button>
+                                        </div>
+
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                            {assignedWindowLabel ? (
+                                                <Badge variant="secondary">Window: {assignedWindowLabel}</Badge>
+                                            ) : null}
+
+                                            {assignedDepartmentLabel ? (
+                                                <Badge variant="secondary">Department: {assignedDepartmentLabel}</Badge>
+                                            ) : null}
+
+                                            {assignedManagerLabel ? (
+                                                <Badge variant="secondary">Manager: {assignedManagerLabel}</Badge>
+                                            ) : null}
+
+                                            {!assignedWindowLabel && !assignedDepartmentLabel && !assignedManagerLabel ? (
+                                                <span className="text-xs text-muted-foreground">
+                                                    {assignment ? "Assignment loaded, but missing readable labels." : "No assignment available. You can still paste Window ID or Manager Key."}
+                                                </span>
+                                            ) : null}
                                         </div>
                                     </div>
                                 </CardContent>
@@ -625,7 +721,9 @@ export default function QueueControlCenter() {
                                     <div className="flex items-center justify-between gap-3">
                                         <div className="space-y-0.5">
                                             <div className="text-sm font-medium">Live polling</div>
-                                            <div className="text-xs text-muted-foreground">Auto-refresh from the centralized server state</div>
+                                            <div className="text-xs text-muted-foreground">
+                                                Auto-refresh from the centralized server state
+                                            </div>
                                         </div>
                                         <Switch checked={polling} onCheckedChange={setPolling} />
                                     </div>
@@ -749,10 +847,7 @@ export default function QueueControlCenter() {
                                             <span className="font-semibold">
                                                 {nowServing.participant.name || "Unknown"}
                                             </span>
-                                            <span className="text-muted-foreground">
-                                                {" "}
-                                                • {nowServing.participant.studentId}
-                                            </span>
+                                            <span className="text-muted-foreground"> • {nowServing.participant.studentId}</span>
                                         </div>
                                         {nowServing.transaction?.purpose ? (
                                             <div className="text-xs text-muted-foreground">
@@ -762,29 +857,15 @@ export default function QueueControlCenter() {
                                     </div>
 
                                     <div className="grid gap-2 sm:grid-cols-2">
-                                        <Button
-                                            onClick={onServe}
-                                            disabled={mutating != null}
-                                            className="w-full"
-                                        >
+                                        <Button onClick={onServe} disabled={mutating != null} className="w-full">
                                             Mark Served
                                         </Button>
-                                        <Button
-                                            variant="outline"
-                                            onClick={onHold}
-                                            disabled={mutating != null}
-                                            className="w-full"
-                                        >
+                                        <Button variant="outline" onClick={onHold} disabled={mutating != null} className="w-full">
                                             Hold
                                         </Button>
                                     </div>
 
-                                    <Button
-                                        variant="destructive"
-                                        onClick={onOut}
-                                        disabled={mutating != null}
-                                        className="w-full"
-                                    >
+                                    <Button variant="destructive" onClick={onOut} disabled={mutating != null} className="w-full">
                                         Mark Out
                                     </Button>
                                 </div>
@@ -807,11 +888,7 @@ export default function QueueControlCenter() {
                             <Separator />
 
                             <div className="space-y-2">
-                                <Button
-                                    onClick={onCallNext}
-                                    disabled={mutating != null || !windowId}
-                                    className="w-full"
-                                >
+                                <Button onClick={onCallNext} disabled={mutating != null || !windowId} className="w-full">
                                     Next Queue (Centralized)
                                 </Button>
                                 <div className="text-xs text-muted-foreground">
@@ -824,9 +901,7 @@ export default function QueueControlCenter() {
                     <Card className="lg:col-span-2">
                         <CardHeader className="space-y-1">
                             <CardTitle className="text-base">Queue Lists (shared & synchronized)</CardTitle>
-                            <CardDescription>
-                                Names first, IDs included only as helpful context.
-                            </CardDescription>
+                            <CardDescription>Names first, IDs included only as helpful context.</CardDescription>
                         </CardHeader>
 
                         <CardContent className="space-y-3">
@@ -839,38 +914,26 @@ export default function QueueControlCenter() {
                                 </TabsList>
 
                                 <TabsContent value="upnext" className="mt-3">
-                                    <QueueTable
-                                        rows={state?.upNext ?? []}
-                                        emptyLabel="No upcoming tickets."
-                                        compact
-                                    />
+                                    <QueueTable rows={state?.upNext ?? []} emptyLabel="No upcoming tickets." compact />
                                 </TabsContent>
 
                                 <TabsContent value="waiting" className="mt-3">
-                                    <QueueTable
-                                        rows={state?.waiting ?? []}
-                                        emptyLabel="No waiting tickets."
-                                    />
+                                    <QueueTable rows={state?.waiting ?? []} emptyLabel="No waiting tickets." />
                                 </TabsContent>
 
                                 <TabsContent value="hold" className="mt-3">
-                                    <QueueTable
-                                        rows={state?.hold ?? []}
-                                        emptyLabel="No held tickets."
-                                    />
+                                    <QueueTable rows={state?.hold ?? []} emptyLabel="No held tickets." />
                                 </TabsContent>
 
                                 <TabsContent value="called" className="mt-3">
-                                    <QueueTable
-                                        rows={state?.called ?? []}
-                                        emptyLabel="No called history yet."
-                                    />
+                                    <QueueTable rows={state?.called ?? []} emptyLabel="No called history yet." />
                                 </TabsContent>
                             </Tabs>
 
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="text-xs text-muted-foreground">
-                                    Centralized protection: {state?.settings?.disallowDuplicateActiveTickets ? (
+                                    Centralized protection:{" "}
+                                    {state?.settings?.disallowDuplicateActiveTickets ? (
                                         <span className="font-medium text-emerald-600">Duplicate active tickets blocked</span>
                                     ) : (
                                         <span className="font-medium text-amber-600">Duplicate active tickets allowed</span>
