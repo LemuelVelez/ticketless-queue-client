@@ -6,6 +6,7 @@ import {
     ArrowRight,
     BarChart3,
     Home,
+    Lock,
     Monitor,
     PieChart as PieChartIcon,
     RefreshCw,
@@ -110,6 +111,58 @@ function fmtTime(v?: string | null) {
     return d.toLocaleString()
 }
 
+function safeReadLastAction(key: string) {
+    if (typeof window === "undefined") return 0
+    const raw = window.localStorage.getItem(key)
+    const n = Number(raw ?? 0)
+    return Number.isFinite(n) ? n : 0
+}
+
+function safeWriteLastAction(key: string, value: number) {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(key, String(value))
+}
+
+function useActionCooldown(storageKey: string, cooldownMs: number) {
+    const [remainingMs, setRemainingMs] = React.useState(0)
+
+    const start = React.useCallback(() => {
+        const now = Date.now()
+        safeWriteLastAction(storageKey, now)
+        setRemainingMs(cooldownMs)
+    }, [storageKey, cooldownMs])
+
+    React.useEffect(() => {
+        const tick = () => {
+            const last = safeReadLastAction(storageKey)
+            const rem = cooldownMs - (Date.now() - last)
+            setRemainingMs(rem > 0 ? rem : 0)
+        }
+
+        tick()
+        const id = window.setInterval(tick, 250)
+        return () => window.clearInterval(id)
+    }, [storageKey, cooldownMs])
+
+    return {
+        remainingMs,
+        isCoolingDown: remainingMs > 0,
+        start,
+        remainingSec: Math.ceil(remainingMs / 1000),
+    }
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number) {
+    const [debounced, setDebounced] = React.useState<T>(value)
+
+    React.useEffect(() => {
+        const id = window.setTimeout(() => setDebounced(value), delayMs)
+        return () => window.clearTimeout(id)
+    }, [value, delayMs])
+
+    return debounced
+}
+
 export default function AlumniHomePage() {
     const location = useLocation()
 
@@ -131,6 +184,8 @@ export default function AlumniHomePage() {
     const [departmentId, setDepartmentId] = React.useState("")
     const [referenceId, setReferenceId] = React.useState(preReferenceId)
 
+    const debouncedReferenceId = useDebouncedValue(referenceId, 600)
+
     const [participant, setParticipant] = React.useState<SessionParticipant | null>(null)
     const [ticket, setTicket] = React.useState<TicketType | null>(null)
 
@@ -143,6 +198,8 @@ export default function AlumniHomePage() {
         () => departments.find((d) => d._id === departmentId) || null,
         [departments, departmentId],
     )
+
+    const isDepartmentLocked = Boolean(sessionDepartmentId && participant)
 
     const sessionDisplayName = React.useMemo(() => {
         if (!participant) return ""
@@ -158,6 +215,13 @@ export default function AlumniHomePage() {
             pickNonEmptyString(participant.phone)
         )
     }, [participant])
+
+    const cooldownKey = React.useMemo(() => {
+        const rid = debouncedReferenceId.trim() || referenceId.trim()
+        return `alumni:home:refresh:${departmentId || "none"}:${rid || "none"}`
+    }, [departmentId, debouncedReferenceId, referenceId])
+
+    const refreshCooldown = useActionCooldown(cooldownKey, 5000)
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -235,7 +299,7 @@ export default function AlumniHomePage() {
 
     const findActiveTicket = React.useCallback(
         async (opts?: { silent?: boolean }) => {
-            const rid = referenceId.trim()
+            const rid = debouncedReferenceId.trim()
             const silent = Boolean(opts?.silent)
 
             if (!departmentId || !rid) {
@@ -259,13 +323,19 @@ export default function AlumniHomePage() {
                 if (!silent) setLoadingTicket(false)
             }
         },
-        [departmentId, referenceId],
+        [departmentId, debouncedReferenceId],
     )
 
     const refreshOverview = React.useCallback(async () => {
+        if (refreshCooldown.isCoolingDown) {
+            toast.message(`Please wait ${refreshCooldown.remainingSec}s before refreshing again.`)
+            return
+        }
+
+        refreshCooldown.start()
         await Promise.all([loadDepartmentDisplay({ silent: false }), findActiveTicket({ silent: false })])
         toast.success("Overview refreshed.")
-    }, [loadDepartmentDisplay, findActiveTicket])
+    }, [loadDepartmentDisplay, findActiveTicket, refreshCooldown])
 
     React.useEffect(() => {
         void loadDepartments()
@@ -278,7 +348,10 @@ export default function AlumniHomePage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-            // 1) explicit query param
+            // 🔒 if registered/profile has department -> lock it (ignore query param)
+            if (isDepartmentLocked && has(sessionDepartmentId)) return sessionDepartmentId
+
+            // 1) explicit query param (only when not locked)
             if (has(preDeptId)) return preDeptId
 
             // 2) session profile department
@@ -290,7 +363,7 @@ export default function AlumniHomePage() {
             // 4) fallback first
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId])
+    }, [departments, preDeptId, sessionDepartmentId, isDepartmentLocked])
 
     React.useEffect(() => {
         void loadDepartmentDisplay()
@@ -365,6 +438,17 @@ export default function AlumniHomePage() {
         return null
     }, [ticket, displayNowServing, displayUpNext])
 
+    const handleDepartmentChange = React.useCallback(
+        (value: string) => {
+            if (isDepartmentLocked) {
+                toast.message("Department is locked after registration.")
+                return
+            }
+            setDepartmentId(value)
+        },
+        [isDepartmentLocked],
+    )
+
     return (
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
@@ -391,7 +475,14 @@ export default function AlumniHomePage() {
                                         Overview Context
                                     </CardTitle>
                                     <CardDescription>
-                                        This context is shared by the quick links to Join Queue and My Tickets.
+                                        {isDepartmentLocked ? (
+                                            <span className="inline-flex items-center gap-2">
+                                                <Lock className="h-4 w-4" />
+                                                Department is locked after registration.
+                                            </span>
+                                        ) : (
+                                            "This context is shared by the quick links to Join Queue and My Tickets."
+                                        )}
                                     </CardDescription>
                                 </div>
 
@@ -403,7 +494,7 @@ export default function AlumniHomePage() {
                                     disabled={loadingDisplay || loadingTicket || loadingDepts}
                                 >
                                     <RefreshCw className="h-4 w-4" />
-                                    Refresh Overview
+                                    {refreshCooldown.isCoolingDown ? `Refresh in ${refreshCooldown.remainingSec}s` : "Refresh Overview"}
                                 </Button>
                             </div>
                         </CardHeader>
@@ -420,7 +511,11 @@ export default function AlumniHomePage() {
                                 <div className="grid gap-4 lg:grid-cols-4">
                                     <div className="min-w-0 space-y-2">
                                         <Label>Department</Label>
-                                        <Select value={departmentId} onValueChange={setDepartmentId} disabled={!departments.length}>
+                                        <Select
+                                            value={departmentId}
+                                            onValueChange={handleDepartmentChange}
+                                            disabled={!departments.length || isDepartmentLocked}
+                                        >
                                             <SelectTrigger className="w-full min-w-0">
                                                 <SelectValue placeholder="Select department" />
                                             </SelectTrigger>
@@ -433,6 +528,14 @@ export default function AlumniHomePage() {
                                                 ))}
                                             </SelectContent>
                                         </Select>
+                                        {isDepartmentLocked ? (
+                                            <div className="text-xs text-muted-foreground">
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Lock className="h-3.5 w-3.5" />
+                                                    Locked to your profile.
+                                                </span>
+                                            </div>
+                                        ) : null}
                                     </div>
 
                                     <div className="min-w-0 space-y-2">
@@ -445,6 +548,9 @@ export default function AlumniHomePage() {
                                             autoComplete="off"
                                             inputMode="text"
                                         />
+                                        <div className="text-xs text-muted-foreground">
+                                            Tip: typing is debounced to reduce spam/requests.
+                                        </div>
                                     </div>
 
                                     <div className="min-w-0 space-y-2">
@@ -473,7 +579,9 @@ export default function AlumniHomePage() {
                                 {selectedDept ? <Badge variant="secondary">Department: {selectedDept.name}</Badge> : null}
                                 {ticket ? (
                                     <Badge variant={statusBadgeVariant(ticket.status) as any}>Ticket: {ticket.status}</Badge>
-                                ) : null}
+                                ) : (
+                                    <Badge variant="outline">Ticket: —</Badge>
+                                )}
                                 {myPreviewPosition === 0 ? (
                                     <Badge>Now being called</Badge>
                                 ) : myPreviewPosition ? (
@@ -482,6 +590,16 @@ export default function AlumniHomePage() {
                                     <Badge variant="outline">Position in preview: —</Badge>
                                 )}
                             </div>
+
+                            {ticket ? (
+                                <div className="rounded-lg border bg-muted p-4 text-sm">
+                                    <div className="font-medium">Abuse prevention</div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        Ticket generation is blocked while you still have an active ticket. Please use{" "}
+                                        <span className="font-medium">My Tickets</span>.
+                                    </div>
+                                </div>
+                            ) : null}
                         </CardContent>
                     </Card>
 
@@ -497,13 +615,27 @@ export default function AlumniHomePage() {
                                 </CardDescription>
                             </CardHeader>
                             <CardContent className="space-y-4">
-                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                    Use this when you need a new ticket. Selected department and your reference ID are passed
-                                    automatically.
-                                </div>
-                                <Button asChild className="w-full">
-                                    <Link to={joinUrl}>Go to Join Queue</Link>
-                                </Button>
+                                {ticket ? (
+                                    <>
+                                        <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                            You already have an active ticket today. To prevent queue spamming, new ticket generation
+                                            is blocked until your current ticket is completed.
+                                        </div>
+                                        <Button asChild variant="secondary" className="w-full">
+                                            <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                        </Button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                            Use this when you need a new ticket. Selected department and your reference ID are passed
+                                            automatically.
+                                        </div>
+                                        <Button asChild className="w-full" disabled={!departmentId || !referenceId.trim()}>
+                                            <Link to={joinUrl}>Go to Join Queue</Link>
+                                        </Button>
+                                    </>
+                                )}
                             </CardContent>
                         </Card>
 
@@ -762,12 +894,25 @@ export default function AlumniHomePage() {
                             <Separator className="my-6" />
 
                             <div className="grid gap-2 sm:grid-cols-2">
-                                <Button asChild>
-                                    <Link to={joinUrl}>Open Join Queue</Link>
-                                </Button>
-                                <Button asChild variant="secondary">
-                                    <Link to={myTicketsUrl}>Open My Tickets</Link>
-                                </Button>
+                                {ticket ? (
+                                    <>
+                                        <Button variant="outline" className="w-full" disabled>
+                                            Ticket already active
+                                        </Button>
+                                        <Button asChild variant="secondary" className="w-full">
+                                            <Link to={myTicketsUrl}>Open My Tickets</Link>
+                                        </Button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Button asChild className="w-full">
+                                            <Link to={joinUrl}>Open Join Queue</Link>
+                                        </Button>
+                                        <Button asChild variant="secondary" className="w-full">
+                                            <Link to={myTicketsUrl}>Open My Tickets</Link>
+                                        </Button>
+                                    </>
+                                )}
                             </div>
                         </CardContent>
                     </Card>

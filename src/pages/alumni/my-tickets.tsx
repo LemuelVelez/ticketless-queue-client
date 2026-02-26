@@ -2,7 +2,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { Ticket, RefreshCw, PlusCircle, Monitor } from "lucide-react"
+import { Ticket, RefreshCw, PlusCircle, Monitor, Lock } from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
@@ -106,6 +106,47 @@ async function callFirstSuccessful<T>(attempts: Array<() => Promise<T>>): Promis
     throw lastError ?? new Error("Request failed")
 }
 
+function safeReadLastAction(key: string) {
+    if (typeof window === "undefined") return 0
+    const raw = window.localStorage.getItem(key)
+    const n = Number(raw ?? 0)
+    return Number.isFinite(n) ? n : 0
+}
+
+function safeWriteLastAction(key: string, value: number) {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(key, String(value))
+}
+
+function useActionCooldown(storageKey: string, cooldownMs: number) {
+    const [remainingMs, setRemainingMs] = React.useState(0)
+
+    const start = React.useCallback(() => {
+        const now = Date.now()
+        safeWriteLastAction(storageKey, now)
+        setRemainingMs(cooldownMs)
+    }, [storageKey, cooldownMs])
+
+    React.useEffect(() => {
+        const tick = () => {
+            const last = safeReadLastAction(storageKey)
+            const rem = cooldownMs - (Date.now() - last)
+            setRemainingMs(rem > 0 ? rem : 0)
+        }
+
+        tick()
+        const id = window.setInterval(tick, 250)
+        return () => window.clearInterval(id)
+    }, [storageKey, cooldownMs])
+
+    return {
+        remainingMs,
+        isCoolingDown: remainingMs > 0,
+        start,
+        remainingSec: Math.ceil(remainingMs / 1000),
+    }
+}
+
 async function listParticipantDepartments(): Promise<{ departments: Department[] }> {
     const res = await callFirstSuccessful<any>([
         () => maybeInvoke(guestApi, "listDepartments"),
@@ -115,6 +156,13 @@ async function listParticipantDepartments(): Promise<{ departments: Department[]
     return {
         departments: Array.isArray(res?.departments) ? res.departments : [],
     }
+}
+
+async function getParticipantSession() {
+    return await callFirstSuccessful<any>([
+        () => maybeInvoke(guestApi, "getSession"),
+        () => maybeInvoke(studentApi, "getSession"),
+    ])
 }
 
 async function getParticipantTicket(ticketId: string) {
@@ -156,7 +204,10 @@ export default function AlumniMyTicketsPage() {
     const ticketId = React.useMemo(() => pickNonEmptyString(qs.get("ticketId") || qs.get("id")), [qs])
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
+    const [loadingSession, setLoadingSession] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
+
+    const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
 
     const [departmentId, setDepartmentId] = React.useState<string>("")
     const [participantId, setParticipantId] = React.useState<string>(preParticipantId)
@@ -174,6 +225,45 @@ export default function AlumniMyTicketsPage() {
         [departments, departmentId],
     )
 
+    const isDepartmentLocked = Boolean(sessionDepartmentId)
+
+    const displayCooldownKey = React.useMemo(() => {
+        return `alumni:mytickets:display:${departmentId || "none"}`
+    }, [departmentId])
+
+    const ticketCooldownKey = React.useMemo(() => {
+        const pid = participantId.trim() || "none"
+        return `alumni:mytickets:ticket:${departmentId || "none"}:${pid}`
+    }, [departmentId, participantId])
+
+    const displayCooldown = useActionCooldown(displayCooldownKey, 5000)
+    const ticketRefreshCooldown = useActionCooldown(ticketCooldownKey, 5000)
+
+    const loadSession = React.useCallback(async () => {
+        setLoadingSession(true)
+        try {
+            const res = await getParticipantSession()
+            const p = (res?.participant ?? null) as any
+            const dept = pickNonEmptyString(p?.departmentId)
+            const pid = readParticipantIdFromObject(p)
+
+            if (pid) setParticipantId((prev) => prev || pid)
+
+            // 🔒 lock department if profile has it
+            if (dept) {
+                setSessionDepartmentId(dept)
+                setDepartmentId(dept)
+            } else {
+                setSessionDepartmentId("")
+            }
+        } catch {
+            // ok - guest mode
+            setSessionDepartmentId("")
+        } finally {
+            setLoadingSession(false)
+        }
+    }, [])
+
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
         try {
@@ -181,7 +271,15 @@ export default function AlumniMyTicketsPage() {
             const list = res.departments ?? []
             setDepartments(list)
 
-            const canUsePre = preDeptId && list.some((d) => d._id === preDeptId)
+            const has = (id: string) => !!id && list.some((d) => d._id === id)
+
+            // 🔒 locked wins
+            if (sessionDepartmentId && has(sessionDepartmentId)) {
+                setDepartmentId(sessionDepartmentId)
+                return
+            }
+
+            const canUsePre = preDeptId && has(preDeptId)
             const next = canUsePre ? preDeptId : list[0]?._id ?? ""
             setDepartmentId((prev) => prev || next)
         } catch (e: any) {
@@ -191,7 +289,7 @@ export default function AlumniMyTicketsPage() {
         } finally {
             setLoadingDepts(false)
         }
-    }, [preDeptId])
+    }, [preDeptId, sessionDepartmentId])
 
     const findActive = React.useCallback(
         async (opts?: { silent?: boolean }) => {
@@ -204,6 +302,13 @@ export default function AlumniMyTicketsPage() {
                 }
                 return
             }
+
+            if (!silent && ticketRefreshCooldown.isCoolingDown) {
+                toast.message(`Please wait ${ticketRefreshCooldown.remainingSec}s before refreshing again.`)
+                return
+            }
+
+            if (!silent) ticketRefreshCooldown.start()
 
             setBusy(true)
             try {
@@ -229,7 +334,7 @@ export default function AlumniMyTicketsPage() {
                 setBusy(false)
             }
         },
-        [departmentId, participantId],
+        [departmentId, participantId, ticketRefreshCooldown],
     )
 
     const loadDepartmentDisplay = React.useCallback(
@@ -242,6 +347,13 @@ export default function AlumniMyTicketsPage() {
             }
 
             const silent = Boolean(opts?.silent)
+
+            if (!silent && displayCooldown.isCoolingDown) {
+                toast.message(`Please wait ${displayCooldown.remainingSec}s before refreshing display again.`)
+                return
+            }
+
+            if (!silent) displayCooldown.start()
 
             if (!silent) setDisplayLoading(true)
             try {
@@ -260,7 +372,7 @@ export default function AlumniMyTicketsPage() {
                 if (!silent) setDisplayLoading(false)
             }
         },
-        [departmentId],
+        [departmentId, displayCooldown],
     )
 
     const loadTicketById = React.useCallback(async () => {
@@ -274,7 +386,8 @@ export default function AlumniMyTicketsPage() {
             const deptIdFromTicket =
                 typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
 
-            if (deptIdFromTicket) setDepartmentId(deptIdFromTicket)
+            // 🔒 do not override locked department
+            if (deptIdFromTicket && !isDepartmentLocked) setDepartmentId(deptIdFromTicket)
 
             const pid = readParticipantIdFromObject(res?.ticket)
             if (pid) setParticipantId(pid)
@@ -283,18 +396,31 @@ export default function AlumniMyTicketsPage() {
         } finally {
             setBusy(false)
         }
-    }, [ticketId])
+    }, [ticketId, isDepartmentLocked])
+
+    React.useEffect(() => {
+        void loadSession()
+    }, [loadSession])
 
     React.useEffect(() => {
         void loadDepartments()
     }, [loadDepartments])
 
     React.useEffect(() => {
+        // ensure lock is applied even if session loads after departments
+        if (!departments.length) return
+        if (!sessionDepartmentId) return
+        if (departmentId === sessionDepartmentId) return
+        const has = departments.some((d) => d._id === sessionDepartmentId)
+        if (has) setDepartmentId(sessionDepartmentId)
+    }, [departments, sessionDepartmentId, departmentId])
+
+    React.useEffect(() => {
         void loadTicketById()
     }, [loadTicketById])
 
     React.useEffect(() => {
-        void loadDepartmentDisplay()
+        void loadDepartmentDisplay({ silent: true })
     }, [loadDepartmentDisplay])
 
     React.useEffect(() => {
@@ -318,6 +444,8 @@ export default function AlumniMyTicketsPage() {
         const qsStr = q.toString()
         return `/alumni/join${qsStr ? `?${qsStr}` : ""}`
     }, [departmentId, participantId])
+
+    const joinBlocked = Boolean(ticket)
 
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -344,7 +472,14 @@ export default function AlumniMyTicketsPage() {
                                         Queue Display & Join Queue
                                     </CardTitle>
                                     <CardDescription>
-                                        Join queue and view the live department queue board preview.
+                                        {isDepartmentLocked ? (
+                                            <span className="inline-flex items-center gap-2">
+                                                <Lock className="h-4 w-4" />
+                                                Department is locked after registration.
+                                            </span>
+                                        ) : (
+                                            "Join queue and view the live department queue board preview."
+                                        )}
                                     </CardDescription>
                                 </div>
 
@@ -352,18 +487,18 @@ export default function AlumniMyTicketsPage() {
                                     <Button
                                         variant="outline"
                                         onClick={() => void loadDepartmentDisplay()}
-                                        disabled={displayLoading || !departmentId || loadingDepts}
+                                        disabled={displayLoading || !departmentId || loadingDepts || displayCooldown.isCoolingDown}
                                         className="w-full gap-2 sm:w-auto"
                                     >
                                         <RefreshCw className="h-4 w-4" />
-                                        Refresh Display
+                                        {displayCooldown.isCoolingDown ? `Wait ${displayCooldown.remainingSec}s` : "Refresh Display"}
                                     </Button>
                                 </div>
                             </div>
                         </CardHeader>
 
                         <CardContent className="space-y-4">
-                            {loadingDepts ? (
+                            {loadingDepts || loadingSession ? (
                                 <div className="space-y-3">
                                     <Skeleton className="h-8 w-44" />
                                     <Skeleton className="h-10 w-36" />
@@ -375,14 +510,37 @@ export default function AlumniMyTicketsPage() {
                                 <>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <Badge variant="outline">Date: {displayDateKey || "—"}</Badge>
+                                        {isDepartmentLocked ? (
+                                            <Badge variant="secondary" className="gap-2">
+                                                <Lock className="h-3.5 w-3.5" />
+                                                Department locked
+                                            </Badge>
+                                        ) : null}
                                     </div>
 
-                                    <Button asChild className="w-full gap-2 sm:w-auto">
-                                        <Link to={joinUrl}>
+                                    {joinBlocked ? (
+                                        <div className="rounded-lg border bg-muted p-4 text-sm">
+                                            <div className="font-medium">Ticket generation blocked</div>
+                                            <div className="mt-1 text-muted-foreground">
+                                                You already have an active ticket today. To prevent queue spamming / display flooding,
+                                                generating another ticket is blocked until your current one is completed.
+                                            </div>
+                                        </div>
+                                    ) : null}
+
+                                    {joinBlocked ? (
+                                        <Button type="button" variant="outline" className="w-full gap-2 sm:w-auto" disabled>
                                             <PlusCircle className="h-4 w-4" />
-                                            Join Queue
-                                        </Link>
-                                    </Button>
+                                            Join Queue (blocked)
+                                        </Button>
+                                    ) : (
+                                        <Button asChild className="w-full gap-2 sm:w-auto">
+                                            <Link to={joinUrl}>
+                                                <PlusCircle className="h-4 w-4" />
+                                                Join Queue
+                                            </Link>
+                                        </Button>
+                                    )}
 
                                     <Separator />
 
@@ -485,11 +643,11 @@ export default function AlumniMyTicketsPage() {
                                     <Button
                                         variant="outline"
                                         onClick={() => void findActive()}
-                                        disabled={busy || !departmentId || !participantId.trim()}
+                                        disabled={busy || !departmentId || !participantId.trim() || ticketRefreshCooldown.isCoolingDown}
                                         className="w-full gap-2 sm:w-auto"
                                     >
                                         <RefreshCw className="h-4 w-4" />
-                                        Refresh Ticket
+                                        {ticketRefreshCooldown.isCoolingDown ? `Wait ${ticketRefreshCooldown.remainingSec}s` : "Refresh Ticket"}
                                     </Button>
                                 </div>
                             </CardHeader>
@@ -535,11 +693,11 @@ export default function AlumniMyTicketsPage() {
                                     <Button
                                         variant="outline"
                                         onClick={() => void findActive()}
-                                        disabled={busy || !departmentId || !participantId.trim()}
+                                        disabled={busy || !departmentId || !participantId.trim() || ticketRefreshCooldown.isCoolingDown}
                                         className="w-full gap-2 sm:w-auto"
                                     >
                                         <RefreshCw className="h-4 w-4" />
-                                        Refresh Ticket
+                                        {ticketRefreshCooldown.isCoolingDown ? `Wait ${ticketRefreshCooldown.remainingSec}s` : "Refresh Ticket"}
                                     </Button>
                                 </div>
                             </CardHeader>

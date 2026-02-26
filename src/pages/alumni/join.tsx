@@ -2,6 +2,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
+import { Lock } from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
@@ -181,6 +182,47 @@ async function callFirstSuccessful<T>(attempts: Array<() => Promise<T>>): Promis
     throw lastError ?? new Error("Request failed")
 }
 
+function safeReadLastAction(key: string) {
+    if (typeof window === "undefined") return 0
+    const raw = window.localStorage.getItem(key)
+    const n = Number(raw ?? 0)
+    return Number.isFinite(n) ? n : 0
+}
+
+function safeWriteLastAction(key: string, value: number) {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(key, String(value))
+}
+
+function useActionCooldown(storageKey: string, cooldownMs: number) {
+    const [remainingMs, setRemainingMs] = React.useState(0)
+
+    const start = React.useCallback(() => {
+        const now = Date.now()
+        safeWriteLastAction(storageKey, now)
+        setRemainingMs(cooldownMs)
+    }, [storageKey, cooldownMs])
+
+    React.useEffect(() => {
+        const tick = () => {
+            const last = safeReadLastAction(storageKey)
+            const rem = cooldownMs - (Date.now() - last)
+            setRemainingMs(rem > 0 ? rem : 0)
+        }
+
+        tick()
+        const id = window.setInterval(tick, 250)
+        return () => window.clearInterval(id)
+    }, [storageKey, cooldownMs])
+
+    return {
+        remainingMs,
+        isCoolingDown: remainingMs > 0,
+        start,
+        remainingSec: Math.ceil(remainingMs / 1000),
+    }
+}
+
 async function listParticipantDepartments(): Promise<{ departments: Department[] }> {
     const res = await callFirstSuccessful<any>([
         () => maybeInvoke(guestApi, "listDepartments"),
@@ -288,7 +330,12 @@ export default function AlumniJoinPage() {
     const [busy, setBusy] = React.useState(false)
     const [ticket, setTicket] = React.useState<Ticket | null>(null)
 
+    // ✅ active ticket state (used to block ticket generation)
+    const [activeTicket, setActiveTicket] = React.useState<Ticket | null>(null)
+    const [checkingActive, setCheckingActive] = React.useState(false)
+
     const isSessionFlow = Boolean(participant)
+    const isDepartmentLocked = Boolean(isSessionFlow && sessionDepartmentId)
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
@@ -316,10 +363,30 @@ export default function AlumniJoinPage() {
         [selectedForSubmit],
     )
 
-    const handleDepartmentChange = React.useCallback((value: string) => {
-        setDidManuallySelectDepartment(true)
-        setDepartmentId(value)
-    }, [])
+    const joinCooldownKey = React.useMemo(() => {
+        const pid = participantId.trim() || "none"
+        return `alumni:join:attempt:${departmentId || "none"}:${pid}`
+    }, [departmentId, participantId])
+
+    const findCooldownKey = React.useMemo(() => {
+        const pid = participantId.trim() || "none"
+        return `alumni:join:find:${departmentId || "none"}:${pid}`
+    }, [departmentId, participantId])
+
+    const joinCooldown = useActionCooldown(joinCooldownKey, 15000)
+    const findCooldown = useActionCooldown(findCooldownKey, 5000)
+
+    const handleDepartmentChange = React.useCallback(
+        (value: string) => {
+            if (isDepartmentLocked) {
+                toast.message("Department is locked after registration.")
+                return
+            }
+            setDidManuallySelectDepartment(true)
+            setDepartmentId(value)
+        },
+        [isDepartmentLocked],
+    )
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
@@ -359,7 +426,12 @@ export default function AlumniJoinPage() {
                 if (pid) setParticipantId((prev) => prev || pid)
                 if (mobile) setPhone((prev) => prev || mobile)
 
-                if (!opts?.preserveDepartment && dept) {
+                // 🔒 lock department if profile has departmentId
+                if (dept) {
+                    setSessionDepartmentId(dept)
+                    setDepartmentId(dept)
+                    setDidManuallySelectDepartment(false)
+                } else if (!opts?.preserveDepartment && dept) {
                     setSessionDepartmentId(dept)
                     setDepartmentId((prev) => prev || dept)
                 }
@@ -368,6 +440,7 @@ export default function AlumniJoinPage() {
                     setParticipant(null)
                     setAvailableTransactions([])
                     setSelectedTransactions([])
+                    setSessionDepartmentId("")
                 }
             } finally {
                 if (!silent) setLoadingSession(false)
@@ -388,7 +461,7 @@ export default function AlumniJoinPage() {
             const deptIdFromTicket =
                 typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
 
-            if (deptIdFromTicket) {
+            if (deptIdFromTicket && !isDepartmentLocked) {
                 setDidManuallySelectDepartment(true)
                 setDepartmentId(deptIdFromTicket)
             }
@@ -414,7 +487,37 @@ export default function AlumniJoinPage() {
         } finally {
             setBusy(false)
         }
-    }, [ticketId])
+    }, [ticketId, isDepartmentLocked])
+
+    const checkActiveTicket = React.useCallback(
+        async (opts?: { silent?: boolean }) => {
+            const pid = participantId.trim()
+            if (!departmentId || !pid) {
+                setActiveTicket(null)
+                return null
+            }
+
+            const silent = Boolean(opts?.silent)
+            if (!silent) setCheckingActive(true)
+
+            try {
+                const res = await findActiveByParticipant({ departmentId, participantId: pid })
+                const t = (res?.ticket ?? null) as Ticket | null
+                setActiveTicket(t)
+
+                // If there is an active ticket, always surface it for UX clarity
+                if (t) setTicket(t)
+
+                return t
+            } catch {
+                if (!silent) toast.error("Failed to check active ticket.")
+                return null
+            } finally {
+                if (!silent) setCheckingActive(false)
+            }
+        },
+        [departmentId, participantId],
+    )
 
     React.useEffect(() => {
         void loadDepartments()
@@ -427,13 +530,18 @@ export default function AlumniJoinPage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
+            // 🔒 locked wins
+            if (isDepartmentLocked && has(sessionDepartmentId)) return sessionDepartmentId
+
+            // preDeptId is allowed only if not locked
             if (has(preDeptId)) return preDeptId
+
             if (didManuallySelectDepartment && has(prev)) return prev
             if (has(sessionDepartmentId)) return sessionDepartmentId
             if (has(prev)) return prev
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId, didManuallySelectDepartment])
+    }, [departments, preDeptId, sessionDepartmentId, didManuallySelectDepartment, isDepartmentLocked])
 
     React.useEffect(() => {
         void loadTicketById()
@@ -461,25 +569,27 @@ export default function AlumniJoinPage() {
         })
     }, [isSessionFlow, availableTransactions])
 
+    React.useEffect(() => {
+        if (!departmentId || !participantId.trim()) return
+        void checkActiveTicket({ silent: true })
+    }, [departmentId, participantId, checkActiveTicket])
+
     async function onFindActive() {
         const pid = participantId.trim()
         if (!departmentId) return toast.error("Please select a department.")
         if (!pid) return toast.error("Please enter your Alumni/Visitor ID.")
 
-        setBusy(true)
-        try {
-            const res = await findActiveByParticipant({ departmentId, participantId: pid })
-            if (res?.ticket) {
-                setTicket(res.ticket)
-                toast.success("Active ticket found.")
-            } else {
-                setTicket(null)
-                toast.message("No active ticket found for today.")
-            }
-        } catch (e: any) {
-            toast.error(e?.message ?? "Failed to find active ticket.")
-        } finally {
-            setBusy(false)
+        if (findCooldown.isCoolingDown) {
+            toast.message(`Please wait ${findCooldown.remainingSec}s before checking again.`)
+            return
+        }
+
+        findCooldown.start()
+        const t = await checkActiveTicket({ silent: false })
+        if (t) {
+            toast.success("Active ticket found.")
+        } else {
+            toast.message("No active ticket found for today.")
         }
     }
 
@@ -490,6 +600,27 @@ export default function AlumniJoinPage() {
         if (!departmentId) return toast.error("Please select a department.")
         if (!pid) return toast.error("Alumni/Visitor ID is required.")
         if (!ph) return toast.error("Phone number is required.")
+
+        // 🔒 hard block when active exists
+        if (activeTicket) {
+            toast.message("You already have an active ticket for today.")
+            return
+        }
+
+        // spam prevention (client-side cooldown)
+        if (joinCooldown.isCoolingDown) {
+            toast.message(`Please wait ${joinCooldown.remainingSec}s before trying again.`)
+            return
+        }
+
+        // strict server check before joining (prevents repeated join calls)
+        setCheckingActive(true)
+        const existing = await checkActiveTicket({ silent: true })
+        setCheckingActive(false)
+        if (existing) {
+            toast.message("You already have an active ticket for today.")
+            return
+        }
 
         if (isSessionFlow && !availableTransactions.length) {
             return toast.error("No queue purpose is available for this account and department.")
@@ -502,6 +633,7 @@ export default function AlumniJoinPage() {
             setSelectedTransactions(selectedForSubmit)
         }
 
+        joinCooldown.start()
         setBusy(true)
         try {
             const res = await joinParticipantQueue(
@@ -519,14 +651,17 @@ export default function AlumniJoinPage() {
                     },
             )
 
-            setTicket((res?.ticket ?? null) as Ticket | null)
+            const t = (res?.ticket ?? null) as Ticket | null
+            setTicket(t)
+            setActiveTicket(t)
             toast.success("You are now in the queue.")
         } catch (e: any) {
             const status = (e as any)?.status
-            const existing = (e as any)?.data?.ticket
+            const existingTicket = (e as any)?.data?.ticket
 
-            if (status === 409 && existing) {
-                setTicket(existing as Ticket)
+            if (status === 409 && existingTicket) {
+                setTicket(existingTicket as Ticket)
+                setActiveTicket(existingTicket as Ticket)
                 toast.message("You already have an active ticket for today.")
                 return
             }
@@ -549,9 +684,12 @@ export default function AlumniJoinPage() {
     }
 
     const ticketDeptName = React.useMemo(() => {
-        if (!ticket) return "—"
-        return deptNameFromTicketDepartment(ticket.department, selectedDept?.name)
-    }, [ticket, selectedDept?.name])
+        const t = activeTicket ?? ticket
+        if (!t) return "—"
+        return deptNameFromTicketDepartment(t.department, selectedDept?.name)
+    }, [ticket, activeTicket, selectedDept?.name])
+
+    const ticketToShow = activeTicket ?? ticket
 
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -561,7 +699,9 @@ export default function AlumniJoinPage() {
                 <div className="mb-6">
                     <h1 className="text-2xl font-semibold tracking-tight">Join Queue</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Department defaults to your registered profile when available. You can change it here anytime.
+                        {isDepartmentLocked
+                            ? "Department is locked to your registered profile."
+                            : "Department defaults to your registered profile when available. You can change it here anytime."}
                     </p>
                 </div>
 
@@ -579,6 +719,12 @@ export default function AlumniJoinPage() {
                                     <div className="flex flex-wrap items-center gap-2">
                                         <Badge variant="secondary">Profile synced</Badge>
                                         <Badge variant="outline">{availableTransactions.length} purpose(s) loaded</Badge>
+                                        {isDepartmentLocked ? (
+                                            <Badge className="gap-2" variant="outline">
+                                                <Lock className="h-3.5 w-3.5" />
+                                                Department locked
+                                            </Badge>
+                                        ) : null}
                                     </div>
                                 ) : (
                                     <Badge variant="outline">Guest mode</Badge>
@@ -595,13 +741,31 @@ export default function AlumniJoinPage() {
                                 </div>
                             ) : (
                                 <>
+                                    {activeTicket ? (
+                                        <div className="rounded-lg border bg-muted p-4 text-sm">
+                                            <div className="font-medium">Ticket generation blocked</div>
+                                            <div className="mt-1 text-muted-foreground">
+                                                You already have an active ticket today. To prevent queue spamming, you can’t generate a new ticket
+                                                until your current one is completed.
+                                            </div>
+                                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                                <Button asChild variant="secondary" className="w-full">
+                                                    <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                                </Button>
+                                                <Button type="button" variant="outline" className="w-full" onClick={() => void onFindActive()} disabled={busy}>
+                                                    Refresh my ticket
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : null}
+
                                     <div className="grid gap-4 sm:grid-cols-3">
                                         <div className="min-w-0 space-y-2">
                                             <Label>Department</Label>
                                             <Select
                                                 value={departmentId}
                                                 onValueChange={handleDepartmentChange}
-                                                disabled={busy || !departments.length}
+                                                disabled={busy || !departments.length || isDepartmentLocked}
                                             >
                                                 <SelectTrigger className="w-full min-w-0">
                                                     <SelectValue placeholder="Select department" />
@@ -617,6 +781,13 @@ export default function AlumniJoinPage() {
                                             </Select>
                                             {!departments.length ? (
                                                 <div className="text-xs text-muted-foreground">No departments available.</div>
+                                            ) : isDepartmentLocked ? (
+                                                <div className="text-xs text-muted-foreground">
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <Lock className="h-3.5 w-3.5" />
+                                                        Locked to your profile.
+                                                    </span>
+                                                </div>
                                             ) : null}
                                         </div>
 
@@ -703,30 +874,47 @@ export default function AlumniJoinPage() {
                                     </div>
 
                                     <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                        <Button type="button" variant="outline" onClick={() => void onFindActive()} disabled={busy}>
-                                            Find my ticket
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => void onFindActive()}
+                                            disabled={busy || checkingActive}
+                                        >
+                                            {findCooldown.isCoolingDown ? `Wait ${findCooldown.remainingSec}s` : "Find my ticket"}
                                         </Button>
                                         <Button
                                             type="button"
                                             onClick={() => void onJoin()}
                                             disabled={
                                                 busy ||
+                                                checkingActive ||
+                                                joinCooldown.isCoolingDown ||
+                                                !!activeTicket ||
                                                 !departmentId ||
                                                 !participantId.trim() ||
                                                 !normalizeMobile(phone) ||
-                                                (isSessionFlow &&
-                                                    (!availableTransactions.length || !selectedForSubmit.length))
+                                                (isSessionFlow && (!availableTransactions.length || !selectedForSubmit.length))
                                             }
                                         >
-                                            {busy ? "Please wait…" : "Join Queue"}
+                                            {joinCooldown.isCoolingDown
+                                                ? `Try again in ${joinCooldown.remainingSec}s`
+                                                : busy || checkingActive
+                                                    ? "Please wait…"
+                                                    : activeTicket
+                                                        ? "Ticket already active"
+                                                        : "Join Queue"}
                                         </Button>
+                                    </div>
+
+                                    <div className="text-xs text-muted-foreground">
+                                        Abuse prevention: join actions have a short cooldown to reduce queue spamming.
                                     </div>
                                 </>
                             )}
                         </CardContent>
                     </Card>
 
-                    {ticket ? (
+                    {ticketToShow ? (
                         <Card className="min-w-0">
                             <CardHeader>
                                 <CardTitle>Your Ticket</CardTitle>
@@ -742,8 +930,8 @@ export default function AlumniJoinPage() {
                                         </div>
 
                                         <div className="flex items-center gap-2">
-                                            <Badge variant={statusBadgeVariant(ticket.status) as any}>{ticket.status}</Badge>
-                                            <Badge variant="secondary">{ticket.dateKey}</Badge>
+                                            <Badge variant={statusBadgeVariant(ticketToShow.status) as any}>{ticketToShow.status}</Badge>
+                                            <Badge variant="secondary">{ticketToShow.dateKey}</Badge>
                                         </div>
                                     </div>
 
@@ -752,11 +940,11 @@ export default function AlumniJoinPage() {
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                                         <div>
                                             <div className="text-sm text-muted-foreground">Queue Number</div>
-                                            <div className="mt-1 text-6xl font-semibold tracking-tight">#{ticket.queueNumber}</div>
+                                            <div className="mt-1 text-6xl font-semibold tracking-tight">#{ticketToShow.queueNumber}</div>
                                         </div>
 
                                         <div className="text-sm text-muted-foreground">
-                                            Ticket ID: <span className="font-mono">{ticket._id}</span>
+                                            Ticket ID: <span className="font-mono">{ticketToShow._id}</span>
                                         </div>
                                     </div>
                                 </div>
