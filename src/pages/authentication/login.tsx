@@ -1,5 +1,4 @@
 import * as React from "react"
-import * as Tabs from "@radix-ui/react-tabs"
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import { Eye, EyeOff } from "lucide-react"
 import { toast } from "sonner"
@@ -32,24 +31,20 @@ type LocationState = {
     }
 }
 
-type AuthTab = "staff" | "participant"
-type ParticipantTab = "student" | "alumniVisitor"
-type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
+type AppRole = "ADMIN" | "STAFF" | "STUDENT"
 
-function defaultDashboardPath(role: "ADMIN" | "STAFF") {
-    return role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
-}
-
-function defaultParticipantPath(role: ParticipantRole) {
-    return role === "STUDENT" ? "/student/home" : "/alumni/home"
-}
-
-function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
+function normalizeRole(raw: unknown): AppRole | null {
     const value = String(raw ?? "").trim().toUpperCase()
+    if (value === "ADMIN") return "ADMIN"
+    if (value === "STAFF") return "STAFF"
     if (value === "STUDENT") return "STUDENT"
-    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
-    if (value === "GUEST" || value === "VISITOR") return "GUEST"
     return null
+}
+
+function defaultDashboardPath(role: AppRole) {
+    if (role === "ADMIN") return "/admin/dashboard"
+    if (role === "STAFF") return "/staff/dashboard"
+    return "/student/home"
 }
 
 function isAuthOrResetPath(pathname: string) {
@@ -61,44 +56,20 @@ function isAuthOrResetPath(pathname: string) {
     )
 }
 
-function isParticipantPath(pathname: string) {
-    return pathname.startsWith("/student") || pathname.startsWith("/alumni")
-}
-
 /**
  * Prevent redirect loops / wrong-role redirects.
- * Important: staff/admin should never be redirected to participant-only routes.
+ * Role-based protection for /admin, /staff, /student routes.
  */
-function canRedirectTo(pathname: string | undefined, role: "ADMIN" | "STAFF") {
+function canRedirectTo(pathname: string | undefined, role: AppRole) {
     if (!pathname || typeof pathname !== "string") return false
-
-    // Never redirect back to auth/loading routes
     if (isAuthOrResetPath(pathname)) return false
 
-    // Staff/Admin should never be redirected to participant-only routes
-    if (isParticipantPath(pathname)) return false
-
-    // Role-based protection
+    // Role-based areas
     if (pathname.startsWith("/admin")) return role === "ADMIN"
     if (pathname.startsWith("/staff")) return role === "STAFF"
-
-    // Shared/public routes (e.g. /display, /home, /join) are OK
-    return true
-}
-
-function canRedirectParticipantTo(pathname: string | undefined, role: ParticipantRole) {
-    if (!pathname || typeof pathname !== "string") return false
-
-    // Never redirect back to auth/loading routes
-    if (isAuthOrResetPath(pathname)) return false
-
-    // Participant cannot go to staff/admin routes
-    if (pathname.startsWith("/admin") || pathname.startsWith("/staff")) return false
-
-    // Participant route restrictions
     if (pathname.startsWith("/student")) return role === "STUDENT"
-    if (pathname.startsWith("/alumni")) return role !== "STUDENT"
 
+    // Shared/public routes are OK
     return true
 }
 
@@ -110,12 +81,17 @@ function isFourDigitPin(pin: string) {
     return /^\d{4}$/.test(pin)
 }
 
-async function resolveParticipantRole(fallback: ParticipantRole): Promise<ParticipantRole> {
+function looksLikeEmail(value: string) {
+    const v = value.trim()
+    return v.includes("@") && v.includes(".")
+}
+
+async function resolveStudentRoleFromSession(): Promise<AppRole | null> {
     try {
         const session = await guestApi.getSession()
-        return normalizeParticipantRole(session?.participant?.type) ?? fallback
+        return normalizeRole(session?.participant?.type)
     } catch {
-        return fallback
+        return null
     }
 }
 
@@ -124,28 +100,26 @@ export default function LoginPage() {
     const location = useLocation()
     const { login, user, loading } = useSession()
 
-    const [authTab, setAuthTab] = React.useState<AuthTab>("staff")
-    const [participantTab, setParticipantTab] = React.useState<ParticipantTab>("student")
+    const [identifier, setIdentifier] = React.useState("") // email (staff/admin) OR tcNumber (student)
+    const [secret, setSecret] = React.useState("") // password OR 4-digit PIN
 
-    // Staff/Admin fields
-    const [email, setEmail] = React.useState("")
-    const [password, setPassword] = React.useState("")
     const [rememberMe, setRememberMe] = React.useState(true)
-
-    // Participant fields
-    const [tcNumber, setTcNumber] = React.useState("")
-    const [mobileNumber, setMobileNumber] = React.useState("")
-    const [participantPin, setParticipantPin] = React.useState("")
-
     const [isSubmitting, setIsSubmitting] = React.useState(false)
-    const [showPassword, setShowPassword] = React.useState(false)
+    const [showSecret, setShowSecret] = React.useState(false)
+
+    const isEmailMode = looksLikeEmail(identifier)
+    const secretLabel = isEmailMode ? "Password" : "PIN (4 digits)"
+    const secretPlaceholder = isEmailMode ? "Enter your password" : "4-digit PIN"
+    const identifierLabel = "Email or TC Number"
+    const identifierPlaceholder = "name@example.com or TC-2024-12345"
 
     // ✅ If there's an active session, redirect away from /login automatically.
     React.useEffect(() => {
         if (loading) return
 
+        // Staff/Admin (and possibly Student if your main session supports it)
         if (user) {
-            const role = user.role
+            const role = normalizeRole((user as any)?.role) ?? "STAFF"
             const home = defaultDashboardPath(role)
             const state = location.state as LocationState | null
             const fromPath = state?.from?.pathname
@@ -159,151 +133,114 @@ export default function LoginPage() {
             return
         }
 
+        // Student session (participant token)
         const participantToken = participantAuthStorage.getToken()
         if (!participantToken) return
 
         let alive = true
 
-            ; (async () => {
-                try {
-                    const session = await guestApi.getSession()
-                    if (!alive) return
+        ;(async () => {
+            try {
+                const role = await resolveStudentRoleFromSession()
+                if (!alive) return
 
-                    const role = normalizeParticipantRole(session?.participant?.type)
-                    if (!role) {
-                        participantAuthStorage.clearToken()
-                        return
-                    }
-
-                    const state = location.state as LocationState | null
-                    const fromPath = state?.from?.pathname
-
-                    if (canRedirectParticipantTo(fromPath, role)) {
-                        navigate(fromPath!, { replace: true })
-                        return
-                    }
-
-                    navigate(defaultParticipantPath(role), { replace: true })
-                } catch {
-                    if (!alive) return
+                if (role !== "STUDENT") {
                     participantAuthStorage.clearToken()
+                    return
                 }
-            })()
+
+                const state = location.state as LocationState | null
+                const fromPath = state?.from?.pathname
+
+                if (canRedirectTo(fromPath, "STUDENT")) {
+                    navigate(fromPath!, { replace: true })
+                    return
+                }
+
+                navigate(defaultDashboardPath("STUDENT"), { replace: true })
+            } catch {
+                if (!alive) return
+                participantAuthStorage.clearToken()
+            }
+        })()
 
         return () => {
             alive = false
         }
     }, [loading, user, location.state, navigate])
 
-    async function onSubmitStaff(e: React.FormEvent<HTMLFormElement>) {
+    async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault()
         if (isSubmitting) return
 
-        const cleanEmail = email.trim()
-        if (!cleanEmail || !password) {
-            toast.error("Please enter your email and password.")
+        const cleanIdentifier = identifier.trim()
+        const cleanSecret = secret.trim()
+
+        if (!cleanIdentifier || !cleanSecret) {
+            toast.error("Please enter your login details.")
             return
         }
 
         setIsSubmitting(true)
 
         try {
-            const res = await login(cleanEmail, password, rememberMe)
+            // Staff/Admin login (email + password)
+            if (looksLikeEmail(cleanIdentifier)) {
+                const res = await login(cleanIdentifier, cleanSecret, rememberMe)
 
-            // Clear stale participant session to avoid mixed-role redirect behavior.
-            participantAuthStorage.clearToken()
+                // Clear stale student session to avoid mixed-role redirect behavior.
+                participantAuthStorage.clearToken()
 
-            toast.success("Signed in successfully")
+                toast.success("Signed in successfully")
 
-            const role = res.user.role
-            const home = defaultDashboardPath(role)
+                const role = normalizeRole((res as any)?.user?.role) ?? "STAFF"
+                const home = defaultDashboardPath(role)
 
-            // If RoleGuard redirected here, it may set state.from
-            const state = location.state as LocationState | null
-            const fromPath = state?.from?.pathname
+                const state = location.state as LocationState | null
+                const fromPath = state?.from?.pathname
 
-            // ✅ Only redirect back if it matches the user's role and allowed area
-            if (canRedirectTo(fromPath, role)) {
-                navigate(fromPath!, { replace: true })
+                if (canRedirectTo(fromPath, role)) {
+                    navigate(fromPath!, { replace: true })
+                    return
+                }
+
+                navigate(home, { replace: true })
                 return
             }
 
-            navigate(home, { replace: true })
-        } catch (err) {
-            const message =
-                err instanceof ApiError
-                    ? err.message
-                    : err instanceof Error
-                        ? err.message
-                        : "Sign in failed"
-            toast.error(message)
-        } finally {
-            setIsSubmitting(false)
-        }
-    }
-
-    async function onSubmitParticipant(e: React.FormEvent<HTMLFormElement>) {
-        e.preventDefault()
-        if (isSubmitting) return
-
-        const pin = participantPin.trim()
-
-        if (!isFourDigitPin(pin)) {
-            toast.error("PIN must be exactly 4 digits.")
-            return
-        }
-
-        setIsSubmitting(true)
-
-        try {
-            if (participantTab === "student") {
-                const cleanTc = tcNumber.trim()
-
-                if (!cleanTc) {
-                    toast.error("Please enter your TC Number.")
-                    return
-                }
-
-                await guestApi.loginStudent({
-                    tcNumber: cleanTc,
-                    pin,
-                    // aliases for compatibility
-                    studentId: cleanTc,
-                    password: pin,
-                })
-            } else {
-                const cleanMobile = mobileNumber.trim()
-
-                if (!cleanMobile) {
-                    toast.error("Please enter your mobile number.")
-                    return
-                }
-
-                await guestApi.loginGuest({
-                    mobileNumber: cleanMobile,
-                    pin,
-                    // aliases for compatibility
-                    phone: cleanMobile,
-                    password: pin,
-                })
+            // Student login (TC Number + 4-digit PIN)
+            const pin = normalizePin(cleanSecret)
+            if (!isFourDigitPin(pin)) {
+                toast.error("PIN must be exactly 4 digits.")
+                return
             }
 
-            const fallbackRole: ParticipantRole =
-                participantTab === "student" ? "STUDENT" : "ALUMNI_VISITOR"
+            await guestApi.loginStudent({
+                tcNumber: cleanIdentifier,
+                pin,
+                // aliases for compatibility
+                studentId: cleanIdentifier,
+                password: pin,
+            })
 
-            const participantRole = await resolveParticipantRole(fallbackRole)
+            const role = (await resolveStudentRoleFromSession()) ?? "STUDENT"
+            if (role !== "STUDENT") {
+                participantAuthStorage.clearToken()
+                toast.error("Unauthorized role. Please contact the administrator.")
+                return
+            }
 
             toast.success("Signed in successfully")
 
             const state = location.state as LocationState | null
             const fromPath = state?.from?.pathname
 
-            if (canRedirectParticipantTo(fromPath, participantRole)) {
+            if (canRedirectTo(fromPath, "STUDENT")) {
                 navigate(fromPath!, { replace: true })
                 return
             }
 
-            navigate(defaultParticipantPath(participantRole), { replace: true })
+            navigate(defaultDashboardPath("STUDENT"), { replace: true })
         } catch (err) {
             const message =
                 err instanceof ApiError
@@ -342,209 +279,107 @@ export default function LoginPage() {
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-2xl">Sign in</CardTitle>
                                 <CardDescription>
-                                    Students and visitors must login first before joining queue.
+                                    Use your staff email or your student TC Number to continue.
                                 </CardDescription>
                             </CardHeader>
 
                             <CardContent>
-                                <Tabs.Root value={authTab} onValueChange={(v) => setAuthTab(v as AuthTab)} className="w-full">
-                                    <Tabs.List className="bg-muted grid h-10 w-full grid-cols-2 rounded-lg p-1">
-                                        <Tabs.Trigger
-                                            value="staff"
-                                            className="inline-flex items-center justify-center rounded-md px-3 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                                        >
-                                            Staff / Admin
-                                        </Tabs.Trigger>
-                                        <Tabs.Trigger
-                                            value="participant"
-                                            className="inline-flex items-center justify-center rounded-md px-3 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                                        >
-                                            Student / Visitor
-                                        </Tabs.Trigger>
-                                    </Tabs.List>
+                                <form onSubmit={onSubmit} className="space-y-4">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="identifier">{identifierLabel}</Label>
+                                        <Input
+                                            id="identifier"
+                                            placeholder={identifierPlaceholder}
+                                            autoComplete="username"
+                                            required
+                                            disabled={isSubmitting}
+                                            value={identifier}
+                                            onChange={(e) => setIdentifier(e.target.value)}
+                                        />
+                                        <p className="text-muted-foreground text-xs">
+                                            Tip: Email signs you into <span className="font-medium">Staff/Admin</span>.
+                                            TC Number signs you into <span className="font-medium">Student</span>.
+                                        </p>
+                                    </div>
 
-                                    <Tabs.Content value="staff" className="mt-4 outline-none">
-                                        <form onSubmit={onSubmitStaff} className="space-y-4">
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="email">Email</Label>
-                                                <Input
-                                                    id="email"
-                                                    type="email"
-                                                    placeholder="name@example.com"
-                                                    autoComplete="email"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={email}
-                                                    onChange={(e) => setEmail(e.target.value)}
-                                                />
-                                            </div>
+                                    <div className="grid gap-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label htmlFor="secret">{secretLabel}</Label>
 
-                                            <div className="grid gap-2">
-                                                <div className="flex items-center justify-between">
-                                                    <Label htmlFor="password">Password</Label>
-                                                    <Link
-                                                        to="/forgot-password"
-                                                        className="text-muted-foreground hover:text-foreground text-sm underline-offset-4 hover:underline"
-                                                    >
-                                                        Forgot password?
-                                                    </Link>
-                                                </div>
+                                            {isEmailMode ? (
+                                                <Link
+                                                    to="/forgot-password"
+                                                    className="text-muted-foreground hover:text-foreground text-sm underline-offset-4 hover:underline"
+                                                >
+                                                    Forgot password?
+                                                </Link>
+                                            ) : (
+                                                <span className="text-muted-foreground text-sm" />
+                                            )}
+                                        </div>
 
-                                                <div className="relative">
-                                                    <Input
-                                                        id="password"
-                                                        type={showPassword ? "text" : "password"}
-                                                        autoComplete="current-password"
-                                                        required
-                                                        disabled={isSubmitting}
-                                                        className="pr-10"
-                                                        value={password}
-                                                        onChange={(e) => setPassword(e.target.value)}
-                                                    />
-                                                    <Button
-                                                        type="button"
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        disabled={isSubmitting}
-                                                        onClick={() => setShowPassword((s) => !s)}
-                                                        aria-label={showPassword ? "Hide password" : "Show password"}
-                                                        className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
-                                                    >
-                                                        {showPassword ? (
-                                                            <EyeOff className="h-4 w-4" />
-                                                        ) : (
-                                                            <Eye className="h-4 w-4" />
-                                                        )}
-                                                    </Button>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2">
-                                                    <Checkbox
-                                                        id="remember"
-                                                        checked={rememberMe}
-                                                        onCheckedChange={(v) => setRememberMe(v === true)}
-                                                        disabled={isSubmitting}
-                                                    />
-                                                    <Label htmlFor="remember" className="text-sm font-normal">
-                                                        Remember me
-                                                    </Label>
-                                                </div>
-
-                                                <span className="text-muted-foreground text-xs">
-                                                    {rememberMe ? "Keeps you signed in" : ""}
-                                                </span>
-                                            </div>
-
-                                            <Button className="w-full" type="submit" disabled={isSubmitting}>
-                                                {isSubmitting ? "Signing in..." : "Sign in"}
+                                        <div className="relative">
+                                            <Input
+                                                id="secret"
+                                                type={showSecret ? "text" : "password"}
+                                                autoComplete={isEmailMode ? "current-password" : "current-password"}
+                                                required
+                                                disabled={isSubmitting}
+                                                className="pr-10"
+                                                value={isEmailMode ? secret : normalizePin(secret)}
+                                                onChange={(e) =>
+                                                    setSecret(isEmailMode ? e.target.value : normalizePin(e.target.value))
+                                                }
+                                                inputMode={isEmailMode ? undefined : "numeric"}
+                                                maxLength={isEmailMode ? undefined : 4}
+                                                pattern={isEmailMode ? undefined : "\\d{4}"}
+                                                placeholder={secretPlaceholder}
+                                            />
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                disabled={isSubmitting}
+                                                onClick={() => setShowSecret((s) => !s)}
+                                                aria-label={showSecret ? "Hide secret" : "Show secret"}
+                                                className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
+                                            >
+                                                {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                                             </Button>
-                                        </form>
-                                    </Tabs.Content>
+                                        </div>
+                                    </div>
 
-                                    <Tabs.Content value="participant" className="mt-4 outline-none">
-                                        <Tabs.Root
-                                            value={participantTab}
-                                            onValueChange={(v) => setParticipantTab(v as ParticipantTab)}
-                                            className="w-full"
-                                        >
-                                            <Tabs.List className="bg-muted grid h-10 w-full grid-cols-2 rounded-lg p-1">
-                                                <Tabs.Trigger
-                                                    value="student"
-                                                    className="inline-flex items-center justify-center rounded-md px-3 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                                                >
-                                                    Student
-                                                </Tabs.Trigger>
-                                                <Tabs.Trigger
-                                                    value="alumniVisitor"
-                                                    className="inline-flex items-center justify-center rounded-md px-3 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:shadow-sm"
-                                                >
-                                                    Alumni / Visitor
-                                                </Tabs.Trigger>
-                                            </Tabs.List>
+                                    {/* Remember me only matters for staff/admin sessions */}
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <Checkbox
+                                                id="remember"
+                                                checked={rememberMe}
+                                                onCheckedChange={(v) => setRememberMe(v === true)}
+                                                disabled={isSubmitting || !isEmailMode}
+                                            />
+                                            <Label
+                                                htmlFor="remember"
+                                                className="text-sm font-normal"
+                                            >
+                                                Remember me
+                                            </Label>
+                                        </div>
 
-                                            <form onSubmit={onSubmitParticipant} className="mt-4 space-y-4">
-                                                {participantTab === "student" ? (
-                                                    <div className="grid gap-2">
-                                                        <Label htmlFor="tcNumber">TC Number</Label>
-                                                        <Input
-                                                            id="tcNumber"
-                                                            placeholder="e.g. TC-2024-12345"
-                                                            autoComplete="username"
-                                                            required
-                                                            disabled={isSubmitting}
-                                                            value={tcNumber}
-                                                            onChange={(e) => setTcNumber(e.target.value)}
-                                                        />
-                                                    </div>
-                                                ) : (
-                                                    <div className="grid gap-2">
-                                                        <Label htmlFor="mobileNumber">Mobile number</Label>
-                                                        <Input
-                                                            id="mobileNumber"
-                                                            type="tel"
-                                                            placeholder="+63 9XX XXX XXXX"
-                                                            autoComplete="username"
-                                                            required
-                                                            disabled={isSubmitting}
-                                                            value={mobileNumber}
-                                                            onChange={(e) => setMobileNumber(e.target.value)}
-                                                        />
-                                                    </div>
-                                                )}
+                                        <span className="text-muted-foreground text-xs">
+                                            {isEmailMode && rememberMe ? "Keeps you signed in" : ""}
+                                        </span>
+                                    </div>
 
-                                                <div className="grid gap-2">
-                                                    <Label htmlFor="participantPin">PIN (4 digits)</Label>
-                                                    <div className="relative">
-                                                        <Input
-                                                            id="participantPin"
-                                                            type={showPassword ? "text" : "password"}
-                                                            autoComplete="current-password"
-                                                            required
-                                                            disabled={isSubmitting}
-                                                            className="pr-10"
-                                                            value={participantPin}
-                                                            onChange={(e) => setParticipantPin(normalizePin(e.target.value))}
-                                                            inputMode="numeric"
-                                                            maxLength={4}
-                                                            pattern="\d{4}"
-                                                            placeholder="4-digit PIN"
-                                                        />
-                                                        <Button
-                                                            type="button"
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            disabled={isSubmitting}
-                                                            onClick={() => setShowPassword((s) => !s)}
-                                                            aria-label={showPassword ? "Hide PIN" : "Show PIN"}
-                                                            className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
-                                                        >
-                                                            {showPassword ? (
-                                                                <EyeOff className="h-4 w-4" />
-                                                            ) : (
-                                                                <Eye className="h-4 w-4" />
-                                                            )}
-                                                        </Button>
-                                                    </div>
-                                                </div>
-
-                                                <Button className="w-full" type="submit" disabled={isSubmitting}>
-                                                    {isSubmitting
-                                                        ? "Signing in..."
-                                                        : participantTab === "student"
-                                                            ? "Sign in as student"
-                                                            : "Sign in as alumni/visitor"}
-                                                </Button>
-                                            </form>
-                                        </Tabs.Root>
-                                    </Tabs.Content>
-                                </Tabs.Root>
+                                    <Button className="w-full" type="submit" disabled={isSubmitting}>
+                                        {isSubmitting ? "Signing in..." : "Sign in"}
+                                    </Button>
+                                </form>
                             </CardContent>
 
                             <CardFooter className="flex flex-col gap-3">
                                 <p className="text-muted-foreground text-center text-sm">
-                                    Don&apos;t have an account?{" "}
+                                    Don&apos;t have a student account?{" "}
                                     <Link
                                         to="/authentication/register"
                                         className="text-foreground underline-offset-4 hover:underline"

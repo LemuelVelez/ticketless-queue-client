@@ -1,5 +1,4 @@
 import * as React from "react"
-import * as Tabs from "@radix-ui/react-tabs"
 import { Link, useNavigate } from "react-router-dom"
 import { Eye, EyeOff } from "lucide-react"
 import { toast } from "sonner"
@@ -9,7 +8,6 @@ import LoadingPage from "@/pages/loading"
 import { guestApi, participantAuthStorage, type Department } from "@/api/guest"
 import { useSession } from "@/hooks/use-session"
 import { ApiError } from "@/lib/http"
-import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -33,8 +31,7 @@ import {
 import logo from "@/assets/images/logo.svg"
 import heroImage from "@/assets/images/heroImage.svg"
 
-type RegisterTab = "student" | "alumniVisitor"
-type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
+type AppRole = "ADMIN" | "STAFF" | "STUDENT"
 
 type StudentFormState = {
     firstName: string
@@ -47,36 +44,24 @@ type StudentFormState = {
     confirmPin: string
 }
 
-type AlumniVisitorFormState = {
-    firstName: string
-    middleName: string
-    lastName: string
-    departmentId: string
-    mobileNumber: string
-    pin: string
-    confirmPin: string
-}
-
-function defaultDashboardPath(role: "ADMIN" | "STAFF") {
-    return role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
-}
-
-function defaultParticipantPath(role: ParticipantRole) {
-    return role === "STUDENT" ? "/student/home" : "/alumni/home"
-}
-
-function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
+function normalizeRole(raw: unknown): AppRole | null {
     const value = String(raw ?? "").trim().toUpperCase()
+    if (value === "ADMIN") return "ADMIN"
+    if (value === "STAFF") return "STAFF"
     if (value === "STUDENT") return "STUDENT"
-    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
-    if (value === "GUEST" || value === "VISITOR") return "GUEST"
     return null
 }
 
-async function resolveParticipantRoleFromSession(): Promise<ParticipantRole | null> {
+function defaultDashboardPath(role: AppRole) {
+    if (role === "ADMIN") return "/admin/dashboard"
+    if (role === "STAFF") return "/staff/dashboard"
+    return "/student/home"
+}
+
+async function resolveRoleFromSession(): Promise<AppRole | null> {
     try {
         const session = await guestApi.getSession()
-        return normalizeParticipantRole(session?.participant?.type)
+        return normalizeRole(session?.participant?.type)
     } catch {
         return null
     }
@@ -159,13 +144,9 @@ export default function RegisterPage() {
     const navigate = useNavigate()
     const { user, loading } = useSession()
 
-    const [tab, setTab] = React.useState<RegisterTab>("student")
     const [isSubmitting, setIsSubmitting] = React.useState(false)
-
-    const [showStudentPin, setShowStudentPin] = React.useState(false)
-    const [showStudentConfirmPin, setShowStudentConfirmPin] = React.useState(false)
-    const [showVisitorPin, setShowVisitorPin] = React.useState(false)
-    const [showVisitorConfirmPin, setShowVisitorConfirmPin] = React.useState(false)
+    const [showPin, setShowPin] = React.useState(false)
+    const [showConfirmPin, setShowConfirmPin] = React.useState(false)
 
     const [departments, setDepartments] = React.useState<Department[]>([])
     const [loadingDepartments, setLoadingDepartments] = React.useState(true)
@@ -181,21 +162,12 @@ export default function RegisterPage() {
         confirmPin: "",
     })
 
-    const [visitor, setVisitor] = React.useState<AlumniVisitorFormState>({
-        firstName: "",
-        middleName: "",
-        lastName: "",
-        departmentId: "",
-        mobileNumber: "",
-        pin: "",
-        confirmPin: "",
-    })
-
     React.useEffect(() => {
         if (loading) return
 
         if (user) {
-            navigate(defaultDashboardPath(user.role), { replace: true })
+            const role = normalizeRole((user as any)?.role) ?? "STAFF"
+            navigate(defaultDashboardPath(role), { replace: true })
             return
         }
 
@@ -204,16 +176,16 @@ export default function RegisterPage() {
 
         let alive = true
 
-        ; (async () => {
-            const role = await resolveParticipantRoleFromSession()
+        ;(async () => {
+            const role = await resolveRoleFromSession()
             if (!alive) return
 
-            if (!role) {
+            if (role !== "STUDENT") {
                 participantAuthStorage.clearToken()
                 return
             }
 
-            navigate(defaultParticipantPath(role), { replace: true })
+            navigate(defaultDashboardPath("STUDENT"), { replace: true })
         })()
 
         return () => {
@@ -224,7 +196,7 @@ export default function RegisterPage() {
     React.useEffect(() => {
         let mounted = true
 
-        ; (async () => {
+        ;(async () => {
             try {
                 const res = await guestApi.listDepartments()
                 if (!mounted) return
@@ -234,10 +206,6 @@ export default function RegisterPage() {
 
                 const firstId = list[0]?._id ?? ""
                 setStudent((prev) => ({
-                    ...prev,
-                    departmentId: prev.departmentId || firstId,
-                }))
-                setVisitor((prev) => ({
                     ...prev,
                     departmentId: prev.departmentId || firstId,
                 }))
@@ -330,90 +298,15 @@ export default function RegisterPage() {
                 password: pin,
             })
 
-            const role = (await resolveParticipantRoleFromSession()) ?? "STUDENT"
+            const role = (await resolveRoleFromSession()) ?? "STUDENT"
+            if (role !== "STUDENT") {
+                participantAuthStorage.clearToken()
+                toast.error("Unauthorized role. Please contact the administrator.")
+                return
+            }
 
             toast.success("Student account created. You are now signed in.")
-            navigate(defaultParticipantPath(role), { replace: true })
-        } catch (err) {
-            const message =
-                err instanceof ApiError
-                    ? err.message
-                    : err instanceof Error
-                        ? err.message
-                        : "Could not create account"
-            toast.error(message)
-        } finally {
-            setIsSubmitting(false)
-        }
-    }
-
-    async function submitVisitor(e: React.FormEvent<HTMLFormElement>) {
-        e.preventDefault()
-        if (isSubmitting) return
-
-        const firstName = visitor.firstName.trim()
-        const middleName = visitor.middleName.trim()
-        const lastName = visitor.lastName.trim()
-        const departmentId = visitor.departmentId.trim()
-        const mobileNumber = visitor.mobileNumber.trim()
-        const pin = visitor.pin
-        const confirmPin = visitor.confirmPin
-
-        if (!firstName) {
-            toast.error("Please enter first name.")
-            return
-        }
-
-        if (!lastName) {
-            toast.error("Please enter last name.")
-            return
-        }
-
-        if (!departmentId) {
-            toast.error("Please select department.")
-            return
-        }
-
-        if (!mobileNumber) {
-            toast.error("Please enter mobile number.")
-            return
-        }
-
-        if (!isFourDigitPin(pin)) {
-            toast.error("PIN must be exactly 4 digits.")
-            return
-        }
-
-        if (!isFourDigitPin(confirmPin)) {
-            toast.error("Confirm PIN must be exactly 4 digits.")
-            return
-        }
-
-        if (pin !== confirmPin) {
-            toast.error("PIN does not match.")
-            return
-        }
-
-        setIsSubmitting(true)
-
-        try {
-            await guestApi.signupGuest({
-                firstName,
-                middleName: normalizeOptional(middleName),
-                lastName,
-                name: composeName(firstName, middleName, lastName),
-                departmentId,
-                mobileNumber,
-                pin,
-                // aliases for compatibility
-                phone: mobileNumber,
-                password: pin,
-            })
-
-            const role = (await resolveParticipantRoleFromSession()) ?? "ALUMNI_VISITOR"
-
-            toast.success("Alumni/Visitor account created. You are now signed in.")
-            navigate(defaultParticipantPath(role), { replace: true })
+            navigate(defaultDashboardPath("STUDENT"), { replace: true })
         } catch (err) {
             const message =
                 err instanceof ApiError
@@ -449,392 +342,198 @@ export default function RegisterPage() {
                     <div className="w-full max-w-sm">
                         <Card>
                             <CardHeader className="space-y-1">
-                                <CardTitle className="text-2xl">Create account</CardTitle>
+                                <CardTitle className="text-2xl">Create student account</CardTitle>
                                 <CardDescription>
-                                    Student must sign in before joining queue. Use TC Number + 4-digit PIN.
+                                    Register once, then sign in using your TC Number + 4-digit PIN.
                                 </CardDescription>
                             </CardHeader>
 
                             <CardContent>
-                                <Tabs.Root
-                                    value={tab}
-                                    onValueChange={(value) => setTab(value as RegisterTab)}
-                                    className="w-full"
-                                >
-                                    <Tabs.List className="bg-muted grid h-10 w-full grid-cols-2 rounded-lg p-1">
-                                        <Tabs.Trigger
-                                            value="student"
-                                            className={cn(
-                                                "inline-flex items-center justify-center rounded-md px-3 text-sm font-medium transition",
-                                                "text-muted-foreground hover:text-foreground",
-                                                "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-                                            )}
+                                <form noValidate onSubmit={submitStudent} className="space-y-4">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentFirstName">First name</Label>
+                                        <Input
+                                            id="studentFirstName"
+                                            placeholder="Juan"
+                                            autoComplete="given-name"
+                                            required
+                                            disabled={isSubmitting}
+                                            value={student.firstName}
+                                            onChange={(e) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    firstName: e.target.value,
+                                                }))
+                                            }
+                                        />
+                                    </div>
+
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentMiddleName">Middle name (optional)</Label>
+                                        <Input
+                                            id="studentMiddleName"
+                                            placeholder="Santos"
+                                            autoComplete="additional-name"
+                                            disabled={isSubmitting}
+                                            value={student.middleName}
+                                            onChange={(e) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    middleName: e.target.value,
+                                                }))
+                                            }
+                                        />
+                                    </div>
+
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentLastName">Last name</Label>
+                                        <Input
+                                            id="studentLastName"
+                                            placeholder="Dela Cruz"
+                                            autoComplete="family-name"
+                                            required
+                                            disabled={isSubmitting}
+                                            value={student.lastName}
+                                            onChange={(e) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    lastName: e.target.value,
+                                                }))
+                                            }
+                                        />
+                                    </div>
+
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentTcNumber">TC Number</Label>
+                                        <Input
+                                            id="studentTcNumber"
+                                            placeholder="e.g. TC-2024-12345"
+                                            autoComplete="username"
+                                            required
+                                            disabled={isSubmitting}
+                                            value={student.tcNumber}
+                                            onChange={(e) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    tcNumber: e.target.value,
+                                                }))
+                                            }
+                                        />
+                                    </div>
+
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentDepartment">Department</Label>
+                                        <Select
+                                            value={student.departmentId}
+                                            onValueChange={(value) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    departmentId: value,
+                                                }))
+                                            }
+                                            disabled={isSubmitting || loadingDepartments || departments.length === 0}
                                         >
-                                            Student
-                                        </Tabs.Trigger>
-                                        <Tabs.Trigger
-                                            value="alumniVisitor"
-                                            className={cn(
-                                                "inline-flex items-center justify-center rounded-md px-3 text-sm font-medium transition",
-                                                "text-muted-foreground hover:text-foreground",
-                                                "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-                                            )}
-                                        >
-                                            Alumni / Visitor
-                                        </Tabs.Trigger>
-                                    </Tabs.List>
-
-                                    <Tabs.Content value="student" className="mt-4 outline-none">
-                                        <form noValidate onSubmit={submitStudent} className="space-y-4">
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentFirstName">First name</Label>
-                                                <Input
-                                                    id="studentFirstName"
-                                                    placeholder="Juan"
-                                                    autoComplete="given-name"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={student.firstName}
-                                                    onChange={(e) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            firstName: e.target.value,
-                                                        }))
+                                            <SelectTrigger id="studentDepartment">
+                                                <SelectValue
+                                                    placeholder={
+                                                        loadingDepartments
+                                                            ? "Loading departments..."
+                                                            : "Select department"
                                                     }
                                                 />
-                                            </div>
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {loadingDepartments ? (
+                                                    <SelectItem value="__loading_departments" disabled>
+                                                        Loading departments...
+                                                    </SelectItem>
+                                                ) : departments.length === 0 ? (
+                                                    <SelectItem value="__no_departments" disabled>
+                                                        No departments available
+                                                    </SelectItem>
+                                                ) : (
+                                                    departments.map((d) => (
+                                                        <SelectItem key={d._id} value={d._id}>
+                                                            {d.code ? `${d.code} - ${d.name}` : d.name}
+                                                        </SelectItem>
+                                                    ))
+                                                )}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
 
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentMiddleName">Middle name (optional)</Label>
-                                                <Input
-                                                    id="studentMiddleName"
-                                                    placeholder="Santos"
-                                                    autoComplete="additional-name"
-                                                    disabled={isSubmitting}
-                                                    value={student.middleName}
-                                                    onChange={(e) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            middleName: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentMobile">Mobile number</Label>
+                                        <Input
+                                            id="studentMobile"
+                                            type="tel"
+                                            placeholder="+63 9XX XXX XXXX"
+                                            autoComplete="tel"
+                                            required
+                                            disabled={isSubmitting}
+                                            value={student.mobileNumber}
+                                            onChange={(e) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    mobileNumber: e.target.value,
+                                                }))
+                                            }
+                                        />
+                                    </div>
 
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentLastName">Last name</Label>
-                                                <Input
-                                                    id="studentLastName"
-                                                    placeholder="Dela Cruz"
-                                                    autoComplete="family-name"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={student.lastName}
-                                                    onChange={(e) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            lastName: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentPin">PIN (4 digits)</Label>
+                                        <PasswordInput
+                                            id="studentPin"
+                                            value={student.pin}
+                                            disabled={isSubmitting}
+                                            autoComplete="new-password"
+                                            placeholder="4-digit PIN"
+                                            show={showPin}
+                                            onToggleShow={() => setShowPin((s) => !s)}
+                                            inputMode="numeric"
+                                            maxLength={4}
+                                            onChange={(value) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    pin: normalizePin(value),
+                                                }))
+                                            }
+                                        />
+                                    </div>
 
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentTcNumber">TC Number</Label>
-                                                <Input
-                                                    id="studentTcNumber"
-                                                    placeholder="e.g. TC-2024-12345"
-                                                    autoComplete="username"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={student.tcNumber}
-                                                    onChange={(e) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            tcNumber: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="studentConfirmPin">Confirm PIN</Label>
+                                        <PasswordInput
+                                            id="studentConfirmPin"
+                                            value={student.confirmPin}
+                                            disabled={isSubmitting}
+                                            autoComplete="new-password"
+                                            placeholder="Repeat 4-digit PIN"
+                                            show={showConfirmPin}
+                                            onToggleShow={() => setShowConfirmPin((s) => !s)}
+                                            inputMode="numeric"
+                                            maxLength={4}
+                                            onChange={(value) =>
+                                                setStudent((prev) => ({
+                                                    ...prev,
+                                                    confirmPin: normalizePin(value),
+                                                }))
+                                            }
+                                        />
+                                    </div>
 
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentDepartment">Department</Label>
-                                                <Select
-                                                    value={student.departmentId}
-                                                    onValueChange={(value) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            departmentId: value,
-                                                        }))
-                                                    }
-                                                    disabled={isSubmitting || loadingDepartments || departments.length === 0}
-                                                >
-                                                    <SelectTrigger id="studentDepartment">
-                                                        <SelectValue
-                                                            placeholder={
-                                                                loadingDepartments
-                                                                    ? "Loading departments..."
-                                                                    : "Select department"
-                                                            }
-                                                        />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        {loadingDepartments ? (
-                                                            <SelectItem value="__loading_departments" disabled>
-                                                                Loading departments...
-                                                            </SelectItem>
-                                                        ) : departments.length === 0 ? (
-                                                            <SelectItem value="__no_departments" disabled>
-                                                                No departments available
-                                                            </SelectItem>
-                                                        ) : (
-                                                            departments.map((d) => (
-                                                                <SelectItem key={d._id} value={d._id}>
-                                                                    {d.code ? `${d.code} - ${d.name}` : d.name}
-                                                                </SelectItem>
-                                                            ))
-                                                        )}
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentMobile">Mobile number</Label>
-                                                <Input
-                                                    id="studentMobile"
-                                                    type="tel"
-                                                    placeholder="+63 9XX XXX XXXX"
-                                                    autoComplete="tel"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={student.mobileNumber}
-                                                    onChange={(e) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            mobileNumber: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentPin">PIN (4 digits)</Label>
-                                                <PasswordInput
-                                                    id="studentPin"
-                                                    value={student.pin}
-                                                    disabled={isSubmitting}
-                                                    autoComplete="new-password"
-                                                    placeholder="4-digit PIN"
-                                                    show={showStudentPin}
-                                                    onToggleShow={() => setShowStudentPin((s) => !s)}
-                                                    inputMode="numeric"
-                                                    maxLength={4}
-                                                    onChange={(value) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            pin: normalizePin(value),
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="studentConfirmPin">Confirm PIN</Label>
-                                                <PasswordInput
-                                                    id="studentConfirmPin"
-                                                    value={student.confirmPin}
-                                                    disabled={isSubmitting}
-                                                    autoComplete="new-password"
-                                                    placeholder="Repeat 4-digit PIN"
-                                                    show={showStudentConfirmPin}
-                                                    onToggleShow={() => setShowStudentConfirmPin((s) => !s)}
-                                                    inputMode="numeric"
-                                                    maxLength={4}
-                                                    onChange={(value) =>
-                                                        setStudent((prev) => ({
-                                                            ...prev,
-                                                            confirmPin: normalizePin(value),
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <Button className="w-full" type="submit" disabled={isSubmitting}>
-                                                {isSubmitting ? "Creating account..." : "Create student account"}
-                                            </Button>
-                                        </form>
-                                    </Tabs.Content>
-
-                                    <Tabs.Content value="alumniVisitor" className="mt-4 outline-none">
-                                        <form noValidate onSubmit={submitVisitor} className="space-y-4">
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="visitorFirstName">First name</Label>
-                                                <Input
-                                                    id="visitorFirstName"
-                                                    placeholder="Maria"
-                                                    autoComplete="given-name"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={visitor.firstName}
-                                                    onChange={(e) =>
-                                                        setVisitor((prev) => ({
-                                                            ...prev,
-                                                            firstName: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="visitorMiddleName">Middle name (optional)</Label>
-                                                <Input
-                                                    id="visitorMiddleName"
-                                                    placeholder="Reyes"
-                                                    autoComplete="additional-name"
-                                                    disabled={isSubmitting}
-                                                    value={visitor.middleName}
-                                                    onChange={(e) =>
-                                                        setVisitor((prev) => ({
-                                                            ...prev,
-                                                            middleName: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="visitorLastName">Last name</Label>
-                                                <Input
-                                                    id="visitorLastName"
-                                                    placeholder="Santos"
-                                                    autoComplete="family-name"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={visitor.lastName}
-                                                    onChange={(e) =>
-                                                        setVisitor((prev) => ({
-                                                            ...prev,
-                                                            lastName: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="visitorDepartment">Department</Label>
-                                                <Select
-                                                    value={visitor.departmentId}
-                                                    onValueChange={(value) =>
-                                                        setVisitor((prev) => ({
-                                                            ...prev,
-                                                            departmentId: value,
-                                                        }))
-                                                    }
-                                                    disabled={isSubmitting || loadingDepartments || departments.length === 0}
-                                                >
-                                                    <SelectTrigger id="visitorDepartment">
-                                                        <SelectValue
-                                                            placeholder={
-                                                                loadingDepartments
-                                                                    ? "Loading departments..."
-                                                                    : "Select department"
-                                                            }
-                                                        />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        {loadingDepartments ? (
-                                                            <SelectItem value="__loading_departments" disabled>
-                                                                Loading departments...
-                                                            </SelectItem>
-                                                        ) : departments.length === 0 ? (
-                                                            <SelectItem value="__no_departments" disabled>
-                                                                No departments available
-                                                            </SelectItem>
-                                                        ) : (
-                                                            departments.map((d) => (
-                                                                <SelectItem key={d._id} value={d._id}>
-                                                                    {d.code ? `${d.code} - ${d.name}` : d.name}
-                                                                </SelectItem>
-                                                            ))
-                                                        )}
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="visitorMobile">Mobile number</Label>
-                                                <Input
-                                                    id="visitorMobile"
-                                                    type="tel"
-                                                    placeholder="+63 9XX XXX XXXX"
-                                                    autoComplete="tel"
-                                                    required
-                                                    disabled={isSubmitting}
-                                                    value={visitor.mobileNumber}
-                                                    onChange={(e) =>
-                                                        setVisitor((prev) => ({
-                                                            ...prev,
-                                                            mobileNumber: e.target.value,
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="visitorPin">PIN (4 digits)</Label>
-                                                <PasswordInput
-                                                    id="visitorPin"
-                                                    value={visitor.pin}
-                                                    disabled={isSubmitting}
-                                                    autoComplete="new-password"
-                                                    placeholder="4-digit PIN"
-                                                    show={showVisitorPin}
-                                                    onToggleShow={() => setShowVisitorPin((s) => !s)}
-                                                    inputMode="numeric"
-                                                    maxLength={4}
-                                                    onChange={(value) =>
-                                                        setVisitor((prev) => ({
-                                                            ...prev,
-                                                            pin: normalizePin(value),
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="visitorConfirmPin">Confirm PIN</Label>
-                                                <PasswordInput
-                                                    id="visitorConfirmPin"
-                                                    value={visitor.confirmPin}
-                                                    disabled={isSubmitting}
-                                                    autoComplete="new-password"
-                                                    placeholder="Repeat 4-digit PIN"
-                                                    show={showVisitorConfirmPin}
-                                                    onToggleShow={() => setShowVisitorConfirmPin((s) => !s)}
-                                                    inputMode="numeric"
-                                                    maxLength={4}
-                                                    onChange={(value) =>
-                                                        setVisitor((prev) => ({
-                                                            ...prev,
-                                                            confirmPin: normalizePin(value),
-                                                        }))
-                                                    }
-                                                />
-                                            </div>
-
-                                            <Button className="w-full" type="submit" disabled={isSubmitting}>
-                                                {isSubmitting ? "Creating account..." : "Create alumni/visitor account"}
-                                            </Button>
-                                        </form>
-                                    </Tabs.Content>
-                                </Tabs.Root>
+                                    <Button className="w-full" type="submit" disabled={isSubmitting}>
+                                        {isSubmitting ? "Creating account..." : "Create account"}
+                                    </Button>
+                                </form>
                             </CardContent>
 
                             <CardFooter className="flex flex-col gap-3">
                                 <p className="text-muted-foreground text-center text-sm">
-                                    Need a staff/admin account?{" "}
+                                    Already have an account?{" "}
                                     <Link to="/login" className="text-foreground underline-offset-4 hover:underline">
-                                        Sign in here
+                                        Sign in
                                     </Link>
                                 </p>
 
