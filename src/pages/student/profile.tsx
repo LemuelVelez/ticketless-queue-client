@@ -279,8 +279,10 @@ export default function StudentProfilePage() {
             const headers = getParticipantAuthHeaders()
             if (!headers) throw new Error("Not logged in. Please login again.")
 
-            // ✅ Single source of truth: backend participant profile endpoint
-            const candidates = ["/public/auth/me", "/public/auth/profile"]
+            // ✅ Prefer the always-mounted session route:
+            // Frontend base "/api" + "/public/auth/session" => "/api/public/auth/session"
+            // (also works when mounted as /api -> /public router)
+            const candidates = ["/public/auth/session", "/public/auth/me", "/public/auth/profile"]
 
             let lastErr: unknown = null
 
