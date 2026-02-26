@@ -46,9 +46,11 @@ export type PublicDisplayState = {
 
 type ApiEnvelope<T> = { ok: boolean; data?: T; error?: { code: string; message: string } }
 
-// ✅ Adjust this if your backend mounted the controller in a different base path.
-// Examples: "/api/queue", "/api/queue-management", "/queue", etc.
-const QUEUE_BASE = "/api/queue"
+// ✅ IMPORTANT:
+// Your `api` client is already prefixed with "/api" (baseURL), so using "/api/queue" here
+// becomes "/api/api/queue" and causes 404.
+// With QUEUE_BASE="/queue", requests become: "/api/queue/..."
+const QUEUE_BASE = "/queue"
 
 function isApiEnvelope<T>(v: unknown): v is ApiEnvelope<T> {
     if (!v || typeof v !== "object") return false
@@ -65,8 +67,7 @@ function isApiEnvelope<T>(v: unknown): v is ApiEnvelope<T> {
  * So we accept unknown and normalize safely with type guards.
  */
 function unwrap<T>(res: unknown): T {
-    const payload =
-        res && typeof res === "object" && "data" in (res as any) ? (res as any).data : res
+    const payload = res && typeof res === "object" && "data" in (res as any) ? (res as any).data : res
 
     if (isApiEnvelope<T>(payload)) {
         if (!payload.ok) {
