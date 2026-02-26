@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
@@ -158,7 +158,7 @@ function DisplayBoard({
                             </Button>
                         ) : (
                             <Button variant="destructive" size="sm" onClick={onCloseFullscreen}>
-                                <X className="mr-2 h-4 w-4" />
+                                <X className="h-4 w-4" />
                                 Exit
                             </Button>
                         )}
@@ -668,15 +668,6 @@ export default function PublicDisplaySection() {
                                 <Badge variant="outline" className="hidden sm:inline-flex">
                                     Landscape recommended on mobile
                                 </Badge>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                                <DialogClose asChild>
-                                    <Button variant="outline" size="sm" onClick={() => void closeFullscreen()}>
-                                        <X className="mr-2 h-4 w-4" />
-                                        Close
-                                    </Button>
-                                </DialogClose>
                             </div>
                         </div>
 
