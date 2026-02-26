@@ -3,6 +3,7 @@ import Footer from "@/components/Footer"
 import Hero from "@/components/Hero"
 import WhyThisExist from "@/components/WhyThisExist"
 import HowThisWorks from "@/components/HowThisWorks"
+import PublicDisplaySection from "@/components/PublicDisplay"
 import Features from "@/components/Features"
 import Roles from "@/components/Roles"
 import FAQ from "@/components/FAQ"
@@ -24,6 +25,10 @@ export default function LandingPage() {
                 <Separator className="my-12" />
 
                 <HowThisWorks />
+
+                <Separator className="my-12" />
+
+                <PublicDisplaySection />
 
                 <Separator className="my-12" />
 

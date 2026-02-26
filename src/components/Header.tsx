@@ -32,6 +32,7 @@ type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 const navItems: Array<{ label: string; href: string }> = [
     { label: "Why", href: "#why" },
     { label: "How it works", href: "#how" },
+    { label: "Public Display", href: "#public-display" },
     { label: "Features", href: "#features" },
     { label: "Roles", href: "#roles" },
     { label: "FAQ", href: "#faq" },

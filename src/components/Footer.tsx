@@ -23,6 +23,7 @@ type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 const exploreItems: Array<{ label: string; href: string }> = [
     { label: "Why this exists", href: "#why" },
     { label: "How it works", href: "#how" },
+    { label: "Public Display", href: "#public-display" },
     { label: "Features", href: "#features" },
     { label: "Roles", href: "#roles" },
     { label: "FAQ", href: "#faq" },
