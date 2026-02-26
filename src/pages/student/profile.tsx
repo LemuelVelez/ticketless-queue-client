@@ -106,6 +106,11 @@ function clearDraftStorage() {
 export default function StudentProfilePage() {
     const navigate = useNavigate()
 
+    const diagnosticsShownRef = React.useRef({
+        depts404: false,
+        session404: false,
+    })
+
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
@@ -152,7 +157,15 @@ export default function StudentProfilePage() {
             const res = await studentApi.listDepartments()
             setDepartments(res.departments ?? [])
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to load departments.")
+            // ✅ show the real 404 issue (route missing / wrong API base)
+            if (e instanceof ApiError && e.status === 404 && !diagnosticsShownRef.current.depts404) {
+                diagnosticsShownRef.current.depts404 = true
+                toast.error("Departments endpoint not found (404).", {
+                    description: e.message,
+                })
+            } else {
+                toast.error(e?.message ?? "Failed to load departments.")
+            }
             setDepartments([])
         } finally {
             setLoadingDepts(false)
@@ -209,7 +222,15 @@ export default function StudentProfilePage() {
             } else {
                 setLockedDepartmentId("")
             }
-        } catch {
+        } catch (err) {
+            // ✅ show the real 404 issue (route missing / wrong API base)
+            if (err instanceof ApiError && err.status === 404 && !diagnosticsShownRef.current.session404) {
+                diagnosticsShownRef.current.session404 = true
+                toast.error("Session endpoint not found (404).", {
+                    description: err.message,
+                })
+            }
+
             setHasSession(false)
             setLockedDepartmentId("")
         } finally {
@@ -281,7 +302,6 @@ export default function StudentProfilePage() {
 
             // ✅ Prefer the always-mounted session route:
             // Frontend base "/api" + "/public/auth/session" => "/api/public/auth/session"
-            // (also works when mounted as /api -> /public router)
             const candidates = ["/public/auth/session", "/public/auth/me", "/public/auth/profile"]
 
             let lastErr: unknown = null
@@ -299,7 +319,18 @@ export default function StudentProfilePage() {
                 }
             }
 
-            throw lastErr ?? new Error("Profile update endpoint not found.")
+            // ✅ Give a clear actionable error instead of a vague "Not Found"
+            const tried = candidates.join(", ")
+            if (lastErr instanceof ApiError && lastErr.status === 404) {
+                throw new ApiError(
+                    `All profile update endpoints returned 404. Tried: ${tried}. Most likely your backend publicRoutes router is mounted differently than your frontend API base. Make sure Express exposes PATCH on /api/public/auth/session (or add route aliases). Last: ${lastErr.message}`,
+                    404,
+                    { tried: candidates, last: lastErr.data },
+                    { method: "PATCH", path: candidates[candidates.length - 1], url: lastErr.url }
+                )
+            }
+
+            throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
         },
         [getParticipantAuthHeaders],
     )
@@ -345,11 +376,15 @@ export default function StudentProfilePage() {
 
             toast.success("Profile saved online.", { id: toastId })
         } catch (error) {
-            const msg =
-                error instanceof ApiError && error.status === 404
-                    ? "Profile save endpoint not found on the server."
-                    : getErrorMessage(error, "Failed to save profile online.")
-            toast.error(msg, { id: toastId })
+            // ✅ show the REAL reason for 404 with full endpoint + method (from ApiError)
+            if (error instanceof ApiError && error.status === 404) {
+                toast.error("Profile save failed: API endpoint not found (404).", {
+                    id: toastId,
+                    description: error.message,
+                })
+            } else {
+                toast.error(getErrorMessage(error, "Failed to save profile online."), { id: toastId })
+            }
         } finally {
             setBusySaveOnline(false)
         }
@@ -405,7 +440,8 @@ export default function StudentProfilePage() {
 
                     <h1 className="mt-3 text-2xl font-semibold tracking-tight">My Profile</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Manage your profile details. Department is locked after registration to prevent abuse/spam and ensure correct routing.
+                        Manage your profile details. Department is locked after registration to prevent abuse/spam and
+                        ensure correct routing.
                     </p>
                 </div>
 
@@ -420,17 +456,32 @@ export default function StudentProfilePage() {
                             <div className="grid gap-4 sm:grid-cols-3">
                                 <div className="space-y-2">
                                     <Label htmlFor="firstName">First Name</Label>
-                                    <Input id="firstName" value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" />
+                                    <Input
+                                        id="firstName"
+                                        value={firstName}
+                                        onChange={(e) => setFirstName(e.target.value)}
+                                        placeholder="First name"
+                                    />
                                 </div>
 
                                 <div className="space-y-2">
                                     <Label htmlFor="middleName">Middle Name</Label>
-                                    <Input id="middleName" value={middleName} onChange={(e) => setMiddleName(e.target.value)} placeholder="Middle name" />
+                                    <Input
+                                        id="middleName"
+                                        value={middleName}
+                                        onChange={(e) => setMiddleName(e.target.value)}
+                                        placeholder="Middle name"
+                                    />
                                 </div>
 
                                 <div className="space-y-2">
                                     <Label htmlFor="lastName">Last Name</Label>
-                                    <Input id="lastName" value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name" />
+                                    <Input
+                                        id="lastName"
+                                        value={lastName}
+                                        onChange={(e) => setLastName(e.target.value)}
+                                        placeholder="Last name"
+                                    />
                                 </div>
                             </div>
 

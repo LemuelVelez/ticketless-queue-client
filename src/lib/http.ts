@@ -8,12 +8,23 @@ export type RequestAuthMode = boolean | "staff" | "participant" | "auto"
 export class ApiError extends Error {
     status: number
     data?: unknown
+    method?: HttpMethod
+    url?: string
+    path?: string
 
-    constructor(message: string, status: number, data?: unknown) {
+    constructor(
+        message: string,
+        status: number,
+        data?: unknown,
+        meta?: { method?: HttpMethod; url?: string; path?: string }
+    ) {
         super(message)
         this.name = "ApiError"
         this.status = status
         this.data = data
+        this.method = meta?.method
+        this.url = meta?.url
+        this.path = meta?.path
     }
 }
 
@@ -85,12 +96,6 @@ function hasHeader(headers: Record<string, string>, key: string) {
     return Object.keys(headers).some((k) => k.toLowerCase() === target)
 }
 
-function getHeader(headers: Record<string, string>, key: string): string | undefined {
-    const target = key.toLowerCase()
-    const foundKey = Object.keys(headers).find((k) => k.toLowerCase() === target)
-    return foundKey ? headers[foundKey] : undefined
-}
-
 function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
     const mode: RequestAuthMode = auth === undefined ? true : auth
 
@@ -138,6 +143,13 @@ function isBodyInitLike(body: unknown): body is BodyInit {
     return false
 }
 
+function snippet(val: unknown, max = 220) {
+    if (typeof val !== "string") return ""
+    const s = val.replace(/\s+/g, " ").trim()
+    if (!s) return ""
+    return s.length > max ? `${s.slice(0, max)}…` : s
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = "GET", body, headers = {}, auth = true, signal } = options
 
@@ -166,10 +178,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     } else if (body !== undefined) {
         if (isBodyInitLike(body)) {
             finalBody = body
-            if (
-                typeof body === "string" &&
-                !hasHeader(finalHeaders, "Content-Type")
-            ) {
+            if (typeof body === "string" && !hasHeader(finalHeaders, "Content-Type")) {
                 finalHeaders["Content-Type"] = "text/plain;charset=UTF-8"
             }
         } else {
@@ -195,20 +204,32 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         throw new ApiError(
             `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`,
             0,
-            err
+            err,
+            { method, url, path }
         )
     }
 
     const data = await parseResponseSafe(res)
 
     if (!res.ok) {
-        const message =
-            (data as any)?.message ||
-            getHeader(finalHeaders, "X-Error-Message") ||
-            res.statusText ||
-            "Request failed"
+        const responseHeaderMsg = res.headers.get("x-error-message") || res.headers.get("X-Error-Message") || ""
+        const serverMsg = (data as any)?.message
 
-        throw new ApiError(message, res.status, data)
+        const default404 = `Endpoint not found (404): ${method} ${url}. This usually means the backend route is missing or the API base URL is wrong.`
+        const baseMessage =
+            serverMsg ||
+            responseHeaderMsg ||
+            (res.status === 404 ? default404 : res.statusText || "Request failed")
+
+        // Add a tiny hint if server returned an HTML 404 page
+        const bodyHint =
+            typeof data === "string" && data.includes("<html")
+                ? ` Server returned an HTML error page: "${snippet(data)}"`
+                : typeof data === "string"
+                  ? ` Response: "${snippet(data)}"`
+                  : ""
+
+        throw new ApiError(`${baseMessage}${bodyHint}`, res.status, data, { method, url, path })
     }
 
     return data as T

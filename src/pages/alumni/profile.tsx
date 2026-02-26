@@ -106,6 +106,11 @@ function clearDraftStorage() {
 export default function AlumniProfilePage() {
     const navigate = useNavigate()
 
+    const diagnosticsShownRef = React.useRef({
+        depts404: false,
+        session404: false,
+    })
+
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
@@ -150,7 +155,14 @@ export default function AlumniProfilePage() {
             const res = await studentApi.listDepartments()
             setDepartments(res.departments ?? [])
         } catch (error) {
-            toast.error(getErrorMessage(error, "Failed to load departments."))
+            if (error instanceof ApiError && error.status === 404 && !diagnosticsShownRef.current.depts404) {
+                diagnosticsShownRef.current.depts404 = true
+                toast.error("Departments endpoint not found (404).", {
+                    description: error.message,
+                })
+            } else {
+                toast.error(getErrorMessage(error, "Failed to load departments."))
+            }
             setDepartments([])
         } finally {
             setLoadingDepts(false)
@@ -205,7 +217,14 @@ export default function AlumniProfilePage() {
             if (typeof (p as any).smsUpdates === "boolean") {
                 setSmsUpdates(Boolean((p as any).smsUpdates))
             }
-        } catch {
+        } catch (error) {
+            if (error instanceof ApiError && error.status === 404 && !diagnosticsShownRef.current.session404) {
+                diagnosticsShownRef.current.session404 = true
+                toast.error("Session endpoint not found (404).", {
+                    description: error.message,
+                })
+            }
+
             setHasSession(false)
             setLockedDepartmentId("")
         } finally {
@@ -274,7 +293,6 @@ export default function AlumniProfilePage() {
             const headers = getParticipantAuthHeaders()
             if (!headers) throw new Error("Not logged in. Please login again.")
 
-            // ✅ Prefer the always-mounted session route first.
             const candidates = ["/public/auth/session", "/public/auth/me", "/public/auth/profile"]
 
             let lastErr: unknown = null
@@ -292,7 +310,17 @@ export default function AlumniProfilePage() {
                 }
             }
 
-            throw lastErr ?? new Error("Profile update endpoint not found.")
+            const tried = candidates.join(", ")
+            if (lastErr instanceof ApiError && lastErr.status === 404) {
+                throw new ApiError(
+                    `All profile update endpoints returned 404. Tried: ${tried}. Most likely your backend publicRoutes router is mounted differently than your frontend API base. Make sure Express exposes PATCH on /api/public/auth/session (or add route aliases). Last: ${lastErr.message}`,
+                    404,
+                    { tried: candidates, last: lastErr.data },
+                    { method: "PATCH", path: candidates[candidates.length - 1], url: lastErr.url }
+                )
+            }
+
+            throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
         },
         [getParticipantAuthHeaders],
     )
@@ -334,11 +362,14 @@ export default function AlumniProfilePage() {
 
             toast.success("Profile saved online.", { id: toastId })
         } catch (error) {
-            const msg =
-                error instanceof ApiError && error.status === 404
-                    ? "Profile save endpoint not found on the server."
-                    : getErrorMessage(error, "Failed to save profile online.")
-            toast.error(msg, { id: toastId })
+            if (error instanceof ApiError && error.status === 404) {
+                toast.error("Profile save failed: API endpoint not found (404).", {
+                    id: toastId,
+                    description: error.message,
+                })
+            } else {
+                toast.error(getErrorMessage(error, "Failed to save profile online."), { id: toastId })
+            }
         } finally {
             setBusySaveOnline(false)
         }
