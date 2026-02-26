@@ -274,17 +274,8 @@ export default function AlumniProfilePage() {
             const headers = getParticipantAuthHeaders()
             if (!headers) throw new Error("Not logged in. Please login again.")
 
-            // Try common endpoints (keeps frontend resilient across backend route names)
-            const candidates = [
-                "/guest/me",
-                "/guest/profile",
-                "/guest/session",
-                "/guest/session/profile",
-                "/participant/me",
-                "/participant/profile",
-                "/participants/me",
-                "/participants/profile",
-            ]
+            // ✅ Single source of truth: backend participant profile endpoint
+            const candidates = ["/public/auth/me", "/public/auth/profile"]
 
             let lastErr: unknown = null
 

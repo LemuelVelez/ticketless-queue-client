@@ -279,18 +279,8 @@ export default function StudentProfilePage() {
             const headers = getParticipantAuthHeaders()
             if (!headers) throw new Error("Not logged in. Please login again.")
 
-            const candidates = [
-                "/guest/me",
-                "/guest/profile",
-                "/guest/session",
-                "/guest/session/profile",
-                "/student/me",
-                "/student/profile",
-                "/participant/me",
-                "/participant/profile",
-                "/participants/me",
-                "/participants/profile",
-            ]
+            // ✅ Single source of truth: backend participant profile endpoint
+            const candidates = ["/public/auth/me", "/public/auth/profile"]
 
             let lastErr: unknown = null
 
