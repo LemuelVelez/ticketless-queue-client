@@ -656,7 +656,7 @@ export default function PublicDisplaySection() {
                     else setFullscreenOpen(true)
                 }}
             >
-                <DialogContent className="h-screen w-screen max-w-none rounded-none p-0">
+                <DialogContent fullscreen showCloseButton={false} className="p-0">
                     <DialogHeader className="sr-only">
                         <DialogTitle>Public Display Fullscreen</DialogTitle>
                     </DialogHeader>
@@ -680,7 +680,7 @@ export default function PublicDisplaySection() {
                             </div>
                         </div>
 
-                        <div className="min-h-0 flex-1">
+                        <div className="flex-1">
                             <DisplayBoard
                                 manager={manager}
                                 managers={managers}
