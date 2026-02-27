@@ -289,8 +289,8 @@ function normalizeWindowPayload(windowRaw: any): ServiceWindow | null {
     const departmentIds = Array.isArray(windowRaw?.departmentIds)
         ? uniqueIds(windowRaw.departmentIds)
         : department
-            ? [department]
-            : undefined
+          ? [department]
+          : undefined
 
     return {
         _id: id,
@@ -319,8 +319,7 @@ function normalizeDepartmentList(raw: any): DepartmentAssignment[] | undefined {
                 id,
                 name: typeof d?.name === "string" ? d.name : undefined,
                 code: typeof d?.code === "string" ? d.code : null,
-                transactionManager:
-                    typeof d?.transactionManager === "string" ? d.transactionManager : null,
+                transactionManager: typeof d?.transactionManager === "string" ? d.transactionManager : null,
                 enabled: d?.enabled !== false,
             } satisfies DepartmentAssignment
         })
@@ -377,10 +376,9 @@ function isLikelyHumanName(label: unknown, identifier?: string) {
 function normalizeTicketParticipant(t: Ticket): Ticket {
     const studentId = String(t?.studentId ?? "").trim()
 
-    const selectionName =
-        Array.isArray(t?.transactionSelections)
-            ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
-            : ""
+    const selectionName = Array.isArray(t?.transactionSelections)
+        ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
+        : ""
 
     const label = String(t?.participantLabel ?? "").trim()
 
@@ -431,28 +429,34 @@ function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnaps
         ...res,
         nowServing: res.nowServing
             ? {
-                ...res.nowServing,
-                participantFullName: normalizeName(res.nowServing.participantFullName, res.nowServing.participantLabel),
-            }
+                  ...res.nowServing,
+                  participantFullName: normalizeName(
+                      res.nowServing.participantFullName,
+                      res.nowServing.participantLabel
+                  ),
+              }
             : null,
         upNext: Array.isArray(res.upNext)
             ? res.upNext.map((x) => ({
-                ...x,
-                participantFullName: normalizeName(x.participantFullName, x.participantLabel),
-            }))
+                  ...x,
+                  participantFullName: normalizeName(x.participantFullName, x.participantLabel),
+              }))
             : [],
         board: {
             ...(res.board as any),
             windows: Array.isArray(res?.board?.windows)
                 ? res.board.windows.map((w) => ({
-                    ...w,
-                    nowServing: w.nowServing
-                        ? {
-                            ...w.nowServing,
-                            participantFullName: normalizeName(w.nowServing.participantFullName, w.nowServing.participantLabel),
-                        }
-                        : null,
-                }))
+                      ...w,
+                      nowServing: w.nowServing
+                          ? {
+                                ...w.nowServing,
+                                participantFullName: normalizeName(
+                                    w.nowServing.participantFullName,
+                                    w.nowServing.participantLabel
+                                ),
+                            }
+                          : null,
+                  }))
                 : [],
         },
     }
@@ -557,6 +561,15 @@ export type StaffSendTicketStatusSmsRequest = StaffSendTicketSmsBaseRequest & {
     status: StaffTicketSmsStatus
 }
 
+/**
+ * ✅ Unified endpoint payload (/staff/tickets/:id/sms)
+ * - message?: custom override
+ * - status?: CALLED|HOLD|OUT|SERVED (defaults to CALLED when omitted and message is omitted)
+ */
+export type StaffSendTicketSmsRequest = StaffSendTicketSmsBaseRequest & {
+    status?: StaffTicketSmsStatus
+}
+
 export type StaffSmsResponse = {
     ok: boolean
     provider?: string
@@ -575,72 +588,103 @@ export type StaffSmsResponse = {
     error?: string
 }
 
+const STAFF_AUTH = { auth: "staff" as const }
+
 export const staffApi = {
     myAssignment: () =>
         api
-            .getData<MyAssignmentResponse>("/staff/me/assignment")
+            .getData<MyAssignmentResponse>("/staff/me/assignment", STAFF_AUTH)
             .then((res) => normalizeMyAssignmentPayload(res)),
 
     // ✅ Dedicated backend snapshot for staff presentation/monitor pages
     getDisplaySnapshot: () =>
         api
-            .getData<StaffDisplaySnapshotResponse>("/staff/display/snapshot-full")
+            .getData<StaffDisplaySnapshotResponse>("/staff/display/snapshot-full", STAFF_AUTH)
             .then((res) => normalizeSnapshot(res)),
 
     listWaiting: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/waiting${toQuery(opts as any)}`)
+            .getData<ListTicketsResponse & { context?: any }>(
+                `/staff/queue/waiting${toQuery(opts as any)}`,
+                STAFF_AUTH
+            )
             .then((res) => normalizeTicketsResponse(res)),
 
     listHold: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/hold${toQuery(opts as any)}`)
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/hold${toQuery(opts as any)}`, STAFF_AUTH)
             .then((res) => normalizeTicketsResponse(res)),
 
     listOut: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/out${toQuery(opts as any)}`)
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/out${toQuery(opts as any)}`, STAFF_AUTH)
             .then((res) => normalizeTicketsResponse(res)),
 
     // ✅ mine=true => only tickets for this staff's assigned window
     listHistory: (opts?: { limit?: number; mine?: boolean }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/history${toQuery(opts as any)}`)
+            .getData<ListTicketsResponse & { context?: any }>(
+                `/staff/queue/history${toQuery(opts as any)}`,
+                STAFF_AUTH
+            )
             .then((res) => normalizeTicketsResponse(res)),
 
     callNext: () =>
-        api.postData<TicketResponse>("/staff/queue/call-next").then((res) => normalizeTicketResponse(res)),
+        api
+            .postData<TicketResponse>("/staff/queue/call-next", undefined, STAFF_AUTH)
+            .then((res) => normalizeTicketResponse(res)),
 
     currentCalledForWindow: () =>
         api
-            .getData<CurrentCalledResponse>("/staff/queue/current-called")
+            .getData<CurrentCalledResponse>("/staff/queue/current-called", STAFF_AUTH)
             .then((res) => normalizeCurrentCalledResponse(res)),
 
     markServed: (ticketId: string) =>
-        api.postData<TicketResponse>(`/staff/tickets/${ticketId}/served`).then((res) => normalizeTicketResponse(res)),
+        api
+            .postData<TicketResponse>(`/staff/tickets/${ticketId}/served`, undefined, STAFF_AUTH)
+            .then((res) => normalizeTicketResponse(res)),
 
     holdNoShow: (ticketId: string) =>
-        api.postData<TicketResponse>(`/staff/tickets/${ticketId}/hold`).then((res) => normalizeTicketResponse(res)),
+        api
+            .postData<TicketResponse>(`/staff/tickets/${ticketId}/hold`, undefined, STAFF_AUTH)
+            .then((res) => normalizeTicketResponse(res)),
 
     returnFromHold: (ticketId: string) =>
-        api.postData<TicketResponse>(`/staff/tickets/${ticketId}/return`).then((res) => normalizeTicketResponse(res)),
+        api
+            .postData<TicketResponse>(`/staff/tickets/${ticketId}/return`, undefined, STAFF_AUTH)
+            .then((res) => normalizeTicketResponse(res)),
 
     // ✅ SMS endpoints
-    sendSms: (payload: StaffSendSmsRequest) =>
-        api.postData<StaffSmsResponse>("/staff/sms/send", payload),
+    sendSms: (payload: StaffSendSmsRequest) => api.postData<StaffSmsResponse>("/staff/sms/send", payload, STAFF_AUTH),
 
     // Legacy alias: sends CALLED status (or custom message if provided)
     sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketSmsBaseRequest) =>
-        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}),
+        api.postData<StaffSmsResponse>(
+            `/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`,
+            payload ?? {},
+            STAFF_AUTH
+        ),
 
     // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED) + optional custom message override
     sendTicketStatusSms: (ticketId: string, payload: StaffSendTicketStatusSmsRequest) =>
-        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload),
+        api.postData<StaffSmsResponse>(
+            `/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`,
+            payload,
+            STAFF_AUTH
+        ),
+
+    // ✅ Best DX: unified alias (status OR custom message, defaults to CALLED if none)
+    sendTicketSms: (ticketId: string, payload?: StaffSendTicketSmsRequest) =>
+        api.postData<StaffSmsResponse>(
+            `/staff/tickets/${encodeURIComponent(ticketId)}/sms`,
+            payload ?? {},
+            STAFF_AUTH
+        ),
 
     // ✅ Staff reports (scoped to assigned department on backend)
     getReportsSummary: (opts?: { from?: string; to?: string }) =>
-        api.getData<ReportsSummaryResponse>(`/staff/reports/summary${toQuery(opts as any)}`),
+        api.getData<ReportsSummaryResponse>(`/staff/reports/summary${toQuery(opts as any)}`, STAFF_AUTH),
 
     getReportsTimeseries: (opts?: { from?: string; to?: string }) =>
-        api.getData<ReportsTimeseriesResponse>(`/staff/reports/timeseries${toQuery(opts as any)}`),
+        api.getData<ReportsTimeseriesResponse>(`/staff/reports/timeseries${toQuery(opts as any)}`, STAFF_AUTH),
 }

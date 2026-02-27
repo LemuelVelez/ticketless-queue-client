@@ -30,12 +30,41 @@ export class ApiError extends Error {
 
 type QueryParamValue = string | number | boolean | null | undefined
 
-export type ApiData<T> = T | { data: T }
+/**
+ * ✅ Supports:
+ * - Plain payload: T
+ * - Wrapped payload: { data: T }
+ * - Wrapped payload with extra fields: { data: T, context: ..., meta: ..., ok: ... }
+ */
+export type ApiData<T> = T | ({ data: T } & Record<string, unknown>)
 
+/**
+ * ✅ Smart unwrap:
+ * - If response is exactly `{ data: T }`, returns `T`
+ * - If response is `{ data: T, ...extras }`, merges into one object:
+ *   `{ ...extras, ...data }` (keeps context/meta while still unwrapping)
+ */
 export function unwrapApiData<T>(value: ApiData<T>): T {
     if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
-        return (value as { data: T }).data
+        const wrapper = value as { data: unknown } & Record<string, unknown>
+        const data = wrapper.data
+
+        const { data: _data, ...rest } = wrapper
+        const hasExtras = Object.keys(rest).length > 0
+
+        // Plain wrapper: { data: T }
+        if (!hasExtras) return data as T
+
+        // Wrapper with extras: { data: T, context/meta/... }
+        // If `data` is an object, merge extras + data (do not lose context/meta).
+        if (data && typeof data === "object" && !Array.isArray(data)) {
+            return { ...rest, ...(data as Record<string, unknown>) } as T
+        }
+
+        // If data is primitive/array, return it (extras are not mergeable)
+        return data as T
     }
+
     return value as T
 }
 
@@ -359,8 +388,8 @@ export const api = {
 
     /**
      * ✅ Convenience methods:
-     * Some backends respond with `{ data: ... }`. These helpers unwrap automatically
-     * so participantFullName (and other enriched fields) always reach the UI.
+     * Some backends respond with `{ data: ... }` (sometimes with extra fields like `{ context: ... }`).
+     * These helpers unwrap smartly so we don't lose `context/meta` while keeping DX clean.
      */
     getData: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<ApiData<T>>(path, { ...opts, method: "GET" }).then((res) => unwrapApiData<T>(res)),
