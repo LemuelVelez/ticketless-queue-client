@@ -222,10 +222,26 @@ function composeName(parts: unknown[]) {
         .trim()
 }
 
+/**
+ * ✅ Prefer enriched backend field: participantFullName
+ * (supports Student / Alumni-Visitor / Guest). Falls back to legacy fields.
+ */
 function getStudentFullName(ticket: any): string {
     const t = ticket as any
 
+    const selectionName =
+        Array.isArray(t?.transactionSelections)
+            ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
+            : ""
+
     const direct = firstNonEmptyText([
+        // ✅ new/enriched fields (best UX)
+        t?.participantFullName,
+        t?.transactions?.participantFullName,
+        selectionName,
+        t?.meta?.participantFullName,
+
+        // legacy/other payload shapes
         t?.studentName,
         t?.participantName,
         t?.participant?.fullName,
@@ -251,9 +267,19 @@ function getStudentFullName(ticket: any): string {
     return composed || ""
 }
 
+/**
+ * ✅ Generic identifier (studentId / tcNumber / phone)
+ * Used as fallback for non-student participant types.
+ */
 function getStudentId(ticket: any): string {
     const t = ticket as any
-    return String(t?.studentId ?? t?.participant?.studentId ?? t?.tcNumber ?? "").trim()
+    return firstNonEmptyText([
+        t?.studentId,
+        t?.participant?.studentId,
+        t?.tcNumber,
+        t?.phone,
+        t?.participant?.phone,
+    ])
 }
 
 function safeErrorMessage(err: any, fallback: string) {
@@ -979,7 +1005,7 @@ export default function StaffServingPage() {
     }, [applyRemoteServingState])
 
     React.useEffect(() => {
-        ; (async () => {
+        ;(async () => {
             setLoading(true)
             try {
                 await refresh({ broadcast: true, tickTs: Date.now() })
@@ -1544,10 +1570,10 @@ export default function StaffServingPage() {
                                 const currentName = currentForThisWindow ? getStudentFullName(currentForThisWindow as any) : ""
                                 const currentSid = currentForThisWindow ? getStudentId(currentForThisWindow as any) : ""
 
-                                const studentLabel =
+                                const participantLabel =
                                     nowServingName ||
                                     currentName ||
-                                    (nowServingSid ? `Student ID: ${nowServingSid}` : currentSid ? `Student ID: ${currentSid}` : "")
+                                    (nowServingSid ? `ID/Phone: ${nowServingSid}` : currentSid ? `ID/Phone: ${currentSid}` : "")
 
                                 return (
                                     <Card key={row.id || `window-${idx}`} className="min-h-95">
@@ -1566,7 +1592,7 @@ export default function StaffServingPage() {
                                                 </div>
 
                                                 <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide whitespace-normal wrap-break-word leading-snug">
-                                                    {studentLabel || "—"}
+                                                    {participantLabel || "—"}
                                                 </div>
 
                                                 <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
@@ -2120,16 +2146,16 @@ export default function StaffServingPage() {
                                                                 #{current.queueNumber}
                                                             </div>
 
-                                                            {/* ✅ Full name first (user-friendly) */}
+                                                            {/* ✅ Full name first (Participant-friendly) */}
                                                             <div className="mt-3 text-sm text-muted-foreground">
-                                                                Student:{" "}
+                                                                Participant:{" "}
                                                                 <span className="font-medium text-foreground whitespace-normal wrap-break-word">
                                                                     {getStudentFullName(current) || "—"}
                                                                 </span>
                                                             </div>
 
                                                             <div className="text-sm text-muted-foreground">
-                                                                Student ID:{" "}
+                                                                ID/Phone:{" "}
                                                                 <span className="tabular-nums">{getStudentId(current) || "—"}</span>
                                                             </div>
 
@@ -2215,7 +2241,7 @@ export default function StaffServingPage() {
                                                                         {name || "—"}
                                                                     </div>
                                                                     <div className="mt-1 text-xs text-muted-foreground">
-                                                                        Student ID: <span className="tabular-nums">{sid || "—"}</span>
+                                                                        ID/Phone: <span className="tabular-nums">{sid || "—"}</span>
                                                                     </div>
                                                                 </div>
 
@@ -2255,7 +2281,7 @@ export default function StaffServingPage() {
                                             Manager multi-window preview
                                         </CardTitle>
                                         <CardDescription>
-                                            Queue display layout mirrors window cards: big number + student label + up next + on hold.
+                                            Queue display layout mirrors window cards: big number + participant label + up next + on hold.
                                         </CardDescription>
                                     </CardHeader>
 
@@ -2280,10 +2306,10 @@ export default function StaffServingPage() {
                                                     const currentName = currentForThisWindow ? getStudentFullName(currentForThisWindow as any) : ""
                                                     const currentSid = currentForThisWindow ? getStudentId(currentForThisWindow as any) : ""
 
-                                                    const studentLabel =
+                                                    const participantLabel =
                                                         nowServingName ||
                                                         currentName ||
-                                                        (nowServingSid ? `Student ID: ${nowServingSid}` : currentSid ? `Student ID: ${currentSid}` : "")
+                                                        (nowServingSid ? `ID/Phone: ${nowServingSid}` : currentSid ? `ID/Phone: ${currentSid}` : "")
 
                                                     return (
                                                         <div key={w.id} className="rounded-xl border p-4">
@@ -2295,7 +2321,7 @@ export default function StaffServingPage() {
                                                                 {queueNumberLabel(w.nowServing?.queueNumber)}
                                                             </div>
                                                             <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide whitespace-normal wrap-break-word leading-snug">
-                                                                {studentLabel || "—"}
+                                                                {participantLabel || "—"}
                                                             </div>
 
                                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
