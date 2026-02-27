@@ -356,6 +356,109 @@ function normalizeMyAssignmentPayload(payload: any): MyAssignmentResponse {
 }
 
 /** =========================
+ * PARTICIPANT DISPLAY NORMALIZATION
+ * ========================= */
+
+function isLikelyHumanName(label: unknown, identifier?: string) {
+    const s = String(label ?? "").trim()
+    if (!s) return false
+    if (identifier && s === String(identifier).trim()) return false
+
+    const lower = s.toLowerCase()
+    const reject = new Set(["student", "alumni / visitor", "alumni/visitor", "guest", "participant"])
+    if (reject.has(lower)) return false
+
+    if (/^\+?\d[\d\s()-]{6,}$/.test(s)) return false
+    if (!/[a-z]/i.test(s)) return false
+
+    return true
+}
+
+function normalizeTicketParticipant(t: Ticket): Ticket {
+    const studentId = String(t?.studentId ?? "").trim()
+
+    const selectionName =
+        Array.isArray(t?.transactionSelections)
+            ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
+            : ""
+
+    const label = String(t?.participantLabel ?? "").trim()
+
+    const participantFullName =
+        String(t?.participantFullName ?? "").trim() ||
+        (selectionName ? selectionName : "") ||
+        (isLikelyHumanName(label, studentId) ? label : "")
+
+    const finalFullName = participantFullName ? participantFullName : null
+
+    return {
+        ...t,
+        participantFullName: finalFullName,
+        // Keep label, but prefer full name for best UX
+        participantLabel: finalFullName || (t.participantLabel ?? null),
+    }
+}
+
+function normalizeTicketsResponse(res: ListTicketsResponse): ListTicketsResponse {
+    return {
+        ...res,
+        tickets: Array.isArray(res?.tickets) ? res.tickets.map((t) => normalizeTicketParticipant(t)) : [],
+    }
+}
+
+function normalizeTicketResponse(res: TicketResponse): TicketResponse {
+    return {
+        ...res,
+        ticket: res?.ticket ? normalizeTicketParticipant(res.ticket) : (res.ticket as any),
+    }
+}
+
+function normalizeCurrentCalledResponse(res: CurrentCalledResponse): CurrentCalledResponse {
+    return {
+        ...res,
+        ticket: res?.ticket ? normalizeTicketParticipant(res.ticket) : null,
+    }
+}
+
+function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnapshotResponse {
+    const normalizeName = (full: string | null, label: string | null) => {
+        if (full && String(full).trim()) return full
+        if (label && isLikelyHumanName(label)) return label
+        return null
+    }
+
+    return {
+        ...res,
+        nowServing: res.nowServing
+            ? {
+                ...res.nowServing,
+                participantFullName: normalizeName(res.nowServing.participantFullName, res.nowServing.participantLabel),
+            }
+            : null,
+        upNext: Array.isArray(res.upNext)
+            ? res.upNext.map((x) => ({
+                ...x,
+                participantFullName: normalizeName(x.participantFullName, x.participantLabel),
+            }))
+            : [],
+        board: {
+            ...(res.board as any),
+            windows: Array.isArray(res?.board?.windows)
+                ? res.board.windows.map((w) => ({
+                    ...w,
+                    nowServing: w.nowServing
+                        ? {
+                            ...w.nowServing,
+                            participantFullName: normalizeName(w.nowServing.participantFullName, w.nowServing.participantLabel),
+                        }
+                        : null,
+                }))
+                : [],
+        },
+    }
+}
+
+/** =========================
  * REPORTS TYPES (STAFF-SCOPED)
  * ========================= */
 
@@ -482,30 +585,42 @@ export const staffApi = {
     getDisplaySnapshot: () =>
         api
             .get<StaffDisplaySnapshotResponse | { data: StaffDisplaySnapshotResponse }>("/staff/display/snapshot-full")
-            .then((res) => unwrapApiData(res)),
+            .then((res) => normalizeSnapshot(unwrapApiData(res))),
 
     listWaiting: (opts?: { limit?: number }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/waiting${toQuery(opts as any)}`),
+        api
+            .get<ListTicketsResponse>(`/staff/queue/waiting${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
     listHold: (opts?: { limit?: number }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/hold${toQuery(opts as any)}`),
+        api
+            .get<ListTicketsResponse>(`/staff/queue/hold${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
     listOut: (opts?: { limit?: number }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/out${toQuery(opts as any)}`),
+        api
+            .get<ListTicketsResponse>(`/staff/queue/out${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
     // ✅ mine=true => only tickets for this staff's assigned window
     listHistory: (opts?: { limit?: number; mine?: boolean }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/history${toQuery(opts as any)}`),
+        api
+            .get<ListTicketsResponse>(`/staff/queue/history${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
-    callNext: () => api.post<TicketResponse>("/staff/queue/call-next"),
+    callNext: () => api.post<TicketResponse>("/staff/queue/call-next").then((res) => normalizeTicketResponse(res)),
 
-    currentCalledForWindow: () => api.get<CurrentCalledResponse>("/staff/queue/current-called"),
+    currentCalledForWindow: () =>
+        api.get<CurrentCalledResponse>("/staff/queue/current-called").then((res) => normalizeCurrentCalledResponse(res)),
 
-    markServed: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/served`),
+    markServed: (ticketId: string) =>
+        api.post<TicketResponse>(`/staff/tickets/${ticketId}/served`).then((res) => normalizeTicketResponse(res)),
 
-    holdNoShow: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/hold`),
+    holdNoShow: (ticketId: string) =>
+        api.post<TicketResponse>(`/staff/tickets/${ticketId}/hold`).then((res) => normalizeTicketResponse(res)),
 
-    returnFromHold: (ticketId: string) => api.post<TicketResponse>(`/staff/tickets/${ticketId}/return`),
+    returnFromHold: (ticketId: string) =>
+        api.post<TicketResponse>(`/staff/tickets/${ticketId}/return`).then((res) => normalizeTicketResponse(res)),
 
     // ✅ SMS endpoints
     sendSms: (payload: StaffSendSmsRequest) =>

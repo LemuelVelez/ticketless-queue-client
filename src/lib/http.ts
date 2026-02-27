@@ -45,9 +45,9 @@ type RequestOptions = {
     headers?: Record<string, string>
     /**
      * auth modes:
-     * - true / "staff": use staff/admin token (default)
+     * - "auto": prefer staff token, fallback to participant token (default)
+     * - true / "staff": use staff/admin token
      * - "participant": use participant token
-     * - "auto": prefer staff token, fallback to participant token
      * - false: no token
      */
     auth?: RequestAuthMode
@@ -126,7 +126,7 @@ function getHeaderValue(headers: Record<string, string>, key: string) {
 }
 
 function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
-    const mode: RequestAuthMode = auth === undefined ? true : auth
+    const mode: RequestAuthMode = auth === undefined ? "auto" : auth
 
     if (mode === false) return null
     if (mode === true || mode === "staff") return getAuthToken()
@@ -246,7 +246,7 @@ function resolveCredentials(url: string, explicit?: RequestCredentials): Request
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = "GET", body, headers = {}, auth = true, params, credentials, signal } = options
+    const { method = "GET", body, headers = {}, auth = "auto", params, credentials, signal } = options
 
     const finalHeaders: Record<string, string> = {
         Accept: "application/json",
