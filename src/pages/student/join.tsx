@@ -2,35 +2,19 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import {
-    ArrowRight,
-    BarChart3,
-    Home,
-    Monitor,
-    PieChart as PieChartIcon,
-    RefreshCw,
-    Ticket,
-} from "lucide-react"
-import {
-    Bar,
-    BarChart as RechartsBarChart,
-    CartesianGrid,
-    Cell,
-    Legend,
-    Pie,
-    PieChart as RechartsPieChart,
-    ResponsiveContainer,
-    Tooltip,
-    XAxis,
-    YAxis,
-} from "recharts"
+import { Lock, RefreshCw, Ticket as TicketIcon } from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
 import { guestApi } from "@/api/guest"
-import { studentApi, type Department, type Ticket as TicketType, participantAuthStorage } from "@/api/student"
-import { api } from "@/lib/http"
+import {
+    studentApi,
+    type Department,
+    type ParticipantTransaction,
+    type Ticket,
+    participantAuthStorage,
+} from "@/api/student"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -41,64 +25,100 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 
-type DepartmentDisplayResponse = {
-    dateKey: string
-    department: {
-        id: string
-        name: string
-    }
-    nowServing: {
-        id: string
-        queueNumber: number
-        windowNumber?: number | null
-        calledAt?: string | null
-    } | null
-    upNext: Array<{
-        id: string
-        queueNumber: number
-    }>
-}
-
-type SessionParticipant = {
-    firstName?: string
-    lastName?: string
-    studentId?: string
-    tcNumber?: string
-    mobileNumber?: string
-    phone?: string
-    departmentId?: string
-    department?: any
-}
-
 const LOCK_SENTINEL = "__LOCKED__"
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
 }
 
-function pickDepartmentIdFromParticipant(p: any) {
-    const direct = pickNonEmptyString(p?.departmentId)
-    if (direct) return direct
+function normalizeMobile(value: string) {
+    return value.replace(/[^\d+]/g, "").trim()
+}
 
-    const dept = p?.department
-    if (typeof dept === "string") return pickNonEmptyString(dept)
-    if (dept && typeof dept === "object") {
-        return pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
+function normalizeTransactionKey(value: unknown) {
+    const raw = String(value ?? "").trim().toLowerCase()
+    if (!raw) return ""
+    return raw.replace(/[_\s]+/g, "-")
+}
+
+function readTransactionKey(tx: any) {
+    const candidates = [tx?.key, tx?.transactionKey, tx?.transaction_key, tx?.code, tx?.id]
+    for (const c of candidates) {
+        const v = pickNonEmptyString(c)
+        if (v) return v
     }
-
     return ""
 }
 
-function getErrorMessage(error: unknown, fallback: string) {
-    if (
-        typeof error === "object" &&
-        error !== null &&
-        "message" in error &&
-        typeof (error as { message?: unknown }).message === "string"
-    ) {
-        return (error as { message: string }).message
+function readTransactionLabel(tx: any, fallbackKey: string) {
+    const candidates = [tx?.label, tx?.transactionLabel, tx?.transaction_label, tx?.name, tx?.title, tx?.purpose]
+    for (const c of candidates) {
+        const v = pickNonEmptyString(c)
+        if (v) return v
     }
-    return fallback
+    return fallbackKey || "Unnamed transaction"
+}
+
+function normalizeAvailableTransactions(list: Array<ParticipantTransaction | Record<string, unknown>>) {
+    const out: ParticipantTransaction[] = []
+    const seen = new Set<string>()
+
+    for (const raw of list) {
+        const tx = (raw ?? {}) as Record<string, unknown>
+        const rawKey = readTransactionKey(tx)
+        const normalized = normalizeTransactionKey(rawKey)
+
+        if (!rawKey || !normalized || seen.has(normalized)) continue
+        seen.add(normalized)
+
+        out.push({
+            ...(tx as any),
+            key: rawKey,
+            label: readTransactionLabel(tx, rawKey),
+        })
+    }
+
+    return out
+}
+
+function mapSelectionToAvailableKeys(keys: string[], availableTransactions: ParticipantTransaction[]): string[] {
+    const normalizedToExact = new Map<string, string>()
+
+    for (const tx of availableTransactions) {
+        const rawKey = readTransactionKey(tx)
+        const normalized = normalizeTransactionKey(rawKey)
+        if (!rawKey || !normalized || normalizedToExact.has(normalized)) continue
+        normalizedToExact.set(normalized, rawKey)
+    }
+
+    const out: string[] = []
+    const seen = new Set<string>()
+
+    for (const key of keys) {
+        const normalized = normalizeTransactionKey(key)
+        if (!normalized) continue
+
+        const exact = normalizedToExact.get(normalized)
+        if (!exact || seen.has(exact)) continue
+
+        seen.add(exact)
+        out.push(exact)
+    }
+
+    return out
+}
+
+function sameStringArray(a: string[], b: string[]) {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false
+    }
+    return true
+}
+
+function toggleKey(keys: string[], key: string) {
+    if (keys.includes(key)) return keys.filter((k) => k !== key)
+    return [...keys, key]
 }
 
 function statusBadgeVariant(status?: string) {
@@ -118,100 +138,134 @@ function statusBadgeVariant(status?: string) {
     }
 }
 
-function fmtTime(v?: string | null) {
-    if (!v) return "—"
-    const d = new Date(v)
-    if (Number.isNaN(d.getTime())) return "—"
-    return d.toLocaleString()
+function deptNameFromTicketDepartment(dept: any, fallback?: string) {
+    if (!dept) return fallback ?? "—"
+    if (typeof dept === "string") return fallback ?? "—"
+    return pickNonEmptyString(dept?.name) || fallback || "—"
 }
 
-function readLastTs(key: string) {
-    try {
-        const raw = window.localStorage.getItem(key)
-        const n = Number(raw ?? "0")
-        return Number.isFinite(n) ? n : 0
-    } catch {
-        return 0
+function safeReadLastAction(key: string) {
+    if (typeof window === "undefined") return 0
+    const raw = window.localStorage.getItem(key)
+    const n = Number(raw ?? 0)
+    return Number.isFinite(n) ? n : 0
+}
+
+function safeWriteLastAction(key: string, value: number) {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(key, String(value))
+}
+
+function useActionCooldown(storageKey: string, cooldownMs: number) {
+    const [remainingMs, setRemainingMs] = React.useState(0)
+
+    const start = React.useCallback(() => {
+        const now = Date.now()
+        safeWriteLastAction(storageKey, now)
+        setRemainingMs(cooldownMs)
+    }, [storageKey, cooldownMs])
+
+    React.useEffect(() => {
+        const tick = () => {
+            const last = safeReadLastAction(storageKey)
+            const rem = cooldownMs - (Date.now() - last)
+            setRemainingMs(rem > 0 ? rem : 0)
+        }
+
+        tick()
+        const id = window.setInterval(tick, 250)
+        return () => window.clearInterval(id)
+    }, [storageKey, cooldownMs])
+
+    return {
+        remainingMs,
+        isCoolingDown: remainingMs > 0,
+        start,
+        remainingSec: Math.ceil(remainingMs / 1000),
     }
 }
 
-function writeNowTs(key: string) {
-    try {
-        window.localStorage.setItem(key, String(Date.now()))
-    } catch {
-        // ignore
-    }
-}
-
-function cooldownRemainingMs(key: string, intervalMs: number) {
-    const last = readLastTs(key)
-    const diff = Date.now() - last
-    if (diff >= intervalMs) return 0
-    return intervalMs - diff
-}
-
-export default function StudentHomePage() {
+export default function StudentJoinPage() {
     const location = useLocation()
 
     const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
     const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
-    const preStudentId = React.useMemo(() => pickNonEmptyString(qs.get("studentId")), [qs])
-
-    // 🔒 lock immediately from storage to prevent brief “editable” state
-    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
+    const preStudentId = React.useMemo(() => pickNonEmptyString(qs.get("studentId") || qs.get("tcNumber")), [qs])
+    const ticketId = React.useMemo(() => pickNonEmptyString(qs.get("ticketId") || qs.get("id")), [qs])
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
-    const [loadingDisplay, setLoadingDisplay] = React.useState(false)
-    const [loadingTicket, setLoadingTicket] = React.useState(false)
 
     const [departments, setDepartments] = React.useState<Department[]>([])
-    const [sessionDepartmentId, setSessionDepartmentId] = React.useState(initialLockedDept)
+
+    // 🔒 lock department immediately from storage (prevents “editable flicker”)
+    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
     const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
-    const [departmentId, setDepartmentId] = React.useState(initialLockedDept)
-    const [studentId, setStudentId] = React.useState(preStudentId)
 
-    const [participant, setParticipant] = React.useState<SessionParticipant | null>(null)
-    const [ticket, setTicket] = React.useState<TicketType | null>(null)
+    const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
+    const [departmentId, setDepartmentId] = React.useState<string>(initialLockedDept || "")
+    const [didManuallySelectDepartment, setDidManuallySelectDepartment] = React.useState(false)
 
-    const [displayDateKey, setDisplayDateKey] = React.useState("")
-    const [displayNowServing, setDisplayNowServing] =
-        React.useState<DepartmentDisplayResponse["nowServing"]>(null)
-    const [displayUpNext, setDisplayUpNext] = React.useState<DepartmentDisplayResponse["upNext"]>([])
+    const [studentId, setStudentId] = React.useState<string>(preStudentId)
+    const [phone, setPhone] = React.useState<string>("")
+
+    const [participant, setParticipant] = React.useState<any | null>(null)
+    const [availableTransactions, setAvailableTransactions] = React.useState<ParticipantTransaction[]>([])
+    const [selectedTransactions, setSelectedTransactions] = React.useState<string[]>([])
+
+    const [busy, setBusy] = React.useState(false)
+    const [ticket, setTicket] = React.useState<Ticket | null>(null)
+
+    // ✅ active ticket state (used to block ticket generation)
+    const [activeTicket, setActiveTicket] = React.useState<Ticket | null>(null)
+    const [checkingActive, setCheckingActive] = React.useState(false)
+
+    const isSessionFlow = Boolean(participant)
+    const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
         [departments, departmentId],
     )
 
-    const sessionDisplayName = React.useMemo(() => {
-        if (!participant) return ""
-        const full = [participant.firstName, participant.lastName]
-            .map(pickNonEmptyString)
-            .filter(Boolean)
-            .join(" ")
-        if (full) return full
-        return pickNonEmptyString(participant.studentId) || pickNonEmptyString(participant.tcNumber)
-    }, [participant])
+    const myTicketsUrl = React.useMemo(() => {
+        const q = new URLSearchParams()
+        if (departmentId) q.set("departmentId", departmentId)
+        if (studentId.trim()) q.set("studentId", studentId.trim())
+        const qsStr = q.toString()
+        return `/student/my-tickets${qsStr ? `?${qsStr}` : ""}`
+    }, [departmentId, studentId])
 
-    const effectiveLockedDeptId = React.useMemo(() => {
-        if (!lockedDepartmentId) return ""
-        if (lockedDepartmentId !== LOCK_SENTINEL) return lockedDepartmentId
-        return participantAuthStorage.getDepartmentId() || sessionDepartmentId || ""
-    }, [lockedDepartmentId, sessionDepartmentId])
+    const selectedForSubmit = React.useMemo(
+        () => mapSelectionToAvailableKeys(selectedTransactions, availableTransactions),
+        [selectedTransactions, availableTransactions],
+    )
 
-    // ✅ lock department after registration/profile sync (student/alumni/guest)
-    const isDepartmentLocked = Boolean(lockedDepartmentId)
+    const selectedTransactionSet = React.useMemo(
+        () => new Set(selectedForSubmit),
+        [selectedForSubmit],
+    )
 
-    const hasActiveTicket = Boolean(ticket)
+    const joinCooldownKey = React.useMemo(() => {
+        const sid = studentId.trim() || "none"
+        return `student:join:attempt:${departmentId || "none"}:${sid}`
+    }, [departmentId, studentId])
+
+    const findCooldownKey = React.useMemo(() => {
+        const sid = studentId.trim() || "none"
+        return `student:join:find:${departmentId || "none"}:${sid}`
+    }, [departmentId, studentId])
+
+    const joinCooldown = useActionCooldown(joinCooldownKey, 15000)
+    const findCooldown = useActionCooldown(findCooldownKey, 5000)
 
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
         try {
             const res = await studentApi.listDepartments()
             setDepartments(res.departments ?? [])
-        } catch (error) {
-            toast.error(getErrorMessage(error, "Failed to load departments."))
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to load departments.")
             setDepartments([])
             setDepartmentId("")
         } finally {
@@ -222,50 +276,135 @@ export default function StudentHomePage() {
     const loadSession = React.useCallback(async () => {
         setLoadingSession(true)
         try {
-            // Use guestApi (public session) so alumni/guest/student all get the same “registered dept” lock behavior
             const res = await guestApi.getSession()
-            const p = (res?.participant ?? null) as SessionParticipant | null
+            const p = (res?.participant ?? null) as any | null
+            const tx = normalizeAvailableTransactions((res?.availableTransactions ?? []) as any[])
 
             setParticipant(p)
+            setAvailableTransactions(tx)
+            setSelectedTransactions((prev) => mapSelectionToAvailableKeys(prev, tx))
+
+            if (!p) {
+                setSessionDepartmentId("")
+                setLockedDepartmentId("")
+                participantAuthStorage.clearDepartmentId()
+                return
+            }
 
             const sid =
-                pickNonEmptyString((p as any)?.tcNumber) ||
-                pickNonEmptyString((p as any)?.studentId)
-            const deptFromProfile = p ? pickDepartmentIdFromParticipant(p) : ""
+                pickNonEmptyString(p?.tcNumber) ||
+                pickNonEmptyString(p?.studentId) ||
+                pickNonEmptyString(p?.idNumber)
+
+            const mobile =
+                pickNonEmptyString(p?.mobileNumber) ||
+                pickNonEmptyString(p?.phone)
+
+            const dept = pickNonEmptyString(p?.departmentId)
 
             if (sid) setStudentId((prev) => prev || sid)
+            if (mobile) setPhone((prev) => prev || mobile)
 
+            // 🔒 lock department after registration/profile sync
             const storedLock = participantAuthStorage.getDepartmentId() || ""
             const deptLockedFlag = Boolean((res as any)?.departmentLocked)
-            const shouldLock = deptLockedFlag || Boolean(deptFromProfile) || Boolean(storedLock)
+            const shouldLock = deptLockedFlag || Boolean(dept) || Boolean(storedLock)
+            const effective = dept || storedLock
 
-            const effective = deptFromProfile || storedLock
-
-            if (deptFromProfile) {
-                setSessionDepartmentId(deptFromProfile)
-                participantAuthStorage.setDepartmentId(deptFromProfile)
+            if (dept) {
+                setSessionDepartmentId(dept)
+                participantAuthStorage.setDepartmentId(dept)
             } else if (storedLock) {
                 setSessionDepartmentId(storedLock)
             }
 
             if (shouldLock) {
                 setLockedDepartmentId(effective || LOCK_SENTINEL)
-                if (effective) setDepartmentId(effective)
+                if (effective) {
+                    setDepartmentId(effective)
+                    setDidManuallySelectDepartment(false)
+                }
             } else {
                 setLockedDepartmentId("")
                 setSessionDepartmentId("")
                 participantAuthStorage.clearDepartmentId()
             }
         } catch {
-            // Guest mode without session is valid here.
             setParticipant(null)
-            setLockedDepartmentId("")
+            setAvailableTransactions([])
+            setSelectedTransactions([])
             setSessionDepartmentId("")
+            setLockedDepartmentId("")
             participantAuthStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
     }, [])
+
+    const loadTicketById = React.useCallback(async () => {
+        if (!ticketId) return
+        setBusy(true)
+        try {
+            const res = await studentApi.getTicket(ticketId)
+            const t = (res?.ticket ?? null) as Ticket | null
+            setTicket(t)
+
+            // If ticket contains transaction keys, keep them in selection (best-effort)
+            const txKeysRaw = [
+                ...(Array.isArray(res?.transactions?.transactionKeys) ? res.transactions!.transactionKeys! : []),
+                ...(Array.isArray((t as any)?.transactionKeys) ? ((t as any).transactionKeys as string[]) : []),
+            ]
+            const txKeys = txKeysRaw.map((k) => pickNonEmptyString(k)).filter(Boolean)
+            if (txKeys.length) setSelectedTransactions(txKeys)
+
+            // Do not override locked department
+            const dept = (t as any)?.department
+            const deptIdFromTicket =
+                typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
+
+            if (deptIdFromTicket && !isDepartmentLocked) {
+                setDidManuallySelectDepartment(true)
+                setDepartmentId(deptIdFromTicket)
+            }
+
+            const sid = pickNonEmptyString((t as any)?.studentId)
+            if (sid) setStudentId((prev) => prev || sid)
+
+            const ph = pickNonEmptyString((t as any)?.phone)
+            if (ph) setPhone((prev) => prev || ph)
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to load ticket.")
+        } finally {
+            setBusy(false)
+        }
+    }, [ticketId, isDepartmentLocked])
+
+    const checkActiveTicket = React.useCallback(
+        async (opts?: { silent?: boolean }) => {
+            const sid = studentId.trim()
+            if (!departmentId || !sid) {
+                setActiveTicket(null)
+                return null
+            }
+
+            const silent = Boolean(opts?.silent)
+            if (!silent) setCheckingActive(true)
+
+            try {
+                const res = await studentApi.findActiveByStudent({ departmentId, studentId: sid })
+                const t = (res?.ticket ?? null) as Ticket | null
+                setActiveTicket(t)
+                if (t) setTicket(t)
+                return t
+            } catch {
+                if (!silent) toast.error("Failed to check active ticket.")
+                return null
+            } finally {
+                if (!silent) setCheckingActive(false)
+            }
+        },
+        [departmentId, studentId],
+    )
 
     const handleDepartmentChange = React.useCallback(
         (value: string) => {
@@ -277,83 +416,11 @@ export default function StudentHomePage() {
                 toast.message("Department is locked to your registered profile.")
                 return
             }
+            setDidManuallySelectDepartment(true)
             setDepartmentId(value)
         },
         [isDepartmentLocked, loadingSession],
     )
-
-    const loadDepartmentDisplay = React.useCallback(
-        async (opts?: { silent?: boolean }) => {
-            if (!departmentId) {
-                setDisplayDateKey("")
-                setDisplayNowServing(null)
-                setDisplayUpNext([])
-                return
-            }
-
-            const silent = Boolean(opts?.silent)
-            if (!silent) setLoadingDisplay(true)
-
-            try {
-                const res = await api.get<DepartmentDisplayResponse>(`/display/${encodeURIComponent(departmentId)}`, {
-                    auth: false,
-                })
-
-                setDisplayDateKey(pickNonEmptyString(res?.dateKey))
-                setDisplayNowServing(res?.nowServing ?? null)
-                setDisplayUpNext(Array.isArray(res?.upNext) ? res.upNext : [])
-            } catch (error) {
-                if (!silent) {
-                    toast.error(getErrorMessage(error, "Failed to load department overview."))
-                }
-            } finally {
-                if (!silent) setLoadingDisplay(false)
-            }
-        },
-        [departmentId],
-    )
-
-    const findActiveTicket = React.useCallback(
-        async (opts?: { silent?: boolean }) => {
-            const sid = studentId.trim()
-            const silent = Boolean(opts?.silent)
-
-            if (!departmentId || !sid) {
-                setTicket(null)
-                return
-            }
-
-            if (!silent) setLoadingTicket(true)
-
-            try {
-                const res = await studentApi.findActiveByStudent({
-                    departmentId,
-                    studentId: sid,
-                })
-                setTicket(res.ticket ?? null)
-            } catch (error) {
-                if (!silent) {
-                    toast.error(getErrorMessage(error, "Failed to load active ticket."))
-                }
-            } finally {
-                if (!silent) setLoadingTicket(false)
-            }
-        },
-        [departmentId, studentId],
-    )
-
-    const refreshOverview = React.useCallback(async () => {
-        const key = `qp:student:home:refresh:${departmentId || "none"}`
-        const remaining = cooldownRemainingMs(key, 2500)
-        if (remaining > 0) {
-            toast.message(`Please wait ${Math.ceil(remaining / 1000)}s before refreshing again.`)
-            return
-        }
-        writeNowTs(key)
-
-        await Promise.all([loadDepartmentDisplay({ silent: false }), findActiveTicket({ silent: false })])
-        toast.success("Overview refreshed.")
-    }, [loadDepartmentDisplay, findActiveTicket, departmentId])
 
     React.useEffect(() => {
         void loadDepartments()
@@ -366,84 +433,147 @@ export default function StudentHomePage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-            // ✅ If locked, always force the registered dept (ignore URL params)
-            if (isDepartmentLocked && has(effectiveLockedDeptId)) return effectiveLockedDeptId
+            if (isDepartmentLocked && has(lockedDepartmentId)) return lockedDepartmentId
 
-            // 1) explicit query param (guest / unlocked only)
             if (has(preDeptId)) return preDeptId
 
-            // 2) keep current valid
+            if (didManuallySelectDepartment && has(prev)) return prev
+            if (has(sessionDepartmentId)) return sessionDepartmentId
             if (has(prev)) return prev
-
-            // 3) fallback first
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, isDepartmentLocked, effectiveLockedDeptId])
+    }, [departments, preDeptId, sessionDepartmentId, didManuallySelectDepartment, isDepartmentLocked, lockedDepartmentId])
 
     React.useEffect(() => {
-        void loadDepartmentDisplay()
-    }, [loadDepartmentDisplay])
+        void loadTicketById()
+    }, [loadTicketById])
 
     React.useEffect(() => {
-        void findActiveTicket({ silent: true })
-    }, [findActiveTicket])
+        if (!departmentId || !studentId.trim()) return
+        void checkActiveTicket({ silent: true })
+    }, [departmentId, studentId, checkActiveTicket])
 
-    const joinUrl = React.useMemo(() => {
-        const q = new URLSearchParams()
-        if (departmentId) q.set("departmentId", departmentId)
-        if (studentId.trim()) q.set("studentId", studentId.trim())
-        const qStr = q.toString()
-        return `/student/join${qStr ? `?${qStr}` : ""}`
-    }, [departmentId, studentId])
+    async function onFindActive() {
+        const sid = studentId.trim()
+        if (!departmentId) return toast.error("Please select a department.")
+        if (!sid) return toast.error("Please enter your Student ID.")
 
-    const myTicketsUrl = React.useMemo(() => {
-        const q = new URLSearchParams()
-        if (departmentId) q.set("departmentId", departmentId)
-        if (studentId.trim()) q.set("studentId", studentId.trim())
-        const qStr = q.toString()
-        return `/student/my-tickets${qStr ? `?${qStr}` : ""}`
-    }, [departmentId, studentId])
-
-    const waitingCount = displayUpNext.length
-    const nowServingCount = displayNowServing ? 1 : 0
-    const visibleCount = nowServingCount + waitingCount
-
-    const liveQueueBars = React.useMemo(
-        () => [
-            { label: "Now Serving", count: nowServingCount, fill: "hsl(var(--primary))" },
-            { label: "Up Next", count: waitingCount, fill: "hsl(var(--secondary))" },
-            { label: "Visible Queue", count: visibleCount, fill: "hsl(var(--accent))" },
-        ],
-        [nowServingCount, waitingCount, visibleCount],
-    )
-
-    const queueMixData = React.useMemo(
-        () => [
-            { name: "Called", value: nowServingCount, fill: "hsl(var(--primary))" },
-            { name: "Waiting", value: waitingCount, fill: "hsl(var(--secondary))" },
-        ],
-        [nowServingCount, waitingCount],
-    )
-
-    const hasQueueMix = queueMixData.some((item) => item.value > 0)
-
-    const myPreviewPosition = React.useMemo(() => {
-        if (!ticket) return null
-
-        if (
-            displayNowServing &&
-            (displayNowServing.id === ticket._id || displayNowServing.queueNumber === ticket.queueNumber)
-        ) {
-            return 0
+        if (findCooldown.isCoolingDown) {
+            toast.message(`Please wait ${findCooldown.remainingSec}s before checking again.`)
+            return
         }
 
-        const index = displayUpNext.findIndex(
-            (item) => item.id === ticket._id || item.queueNumber === ticket.queueNumber,
-        )
+        findCooldown.start()
+        const t = await checkActiveTicket({ silent: false })
+        if (t) toast.success("Active ticket found.")
+        else toast.message("No active ticket found for today.")
+    }
 
-        if (index >= 0) return index + 1
-        return null
-    }, [ticket, displayNowServing, displayUpNext])
+    async function onJoin() {
+        const sid = studentId.trim()
+        const ph = normalizeMobile(phone)
+
+        if (!departmentId) return toast.error("Please select a department.")
+        if (!sid) return toast.error("Student ID is required.")
+
+        // 🔒 hard block when active exists
+        if (activeTicket) {
+            toast.message("You already have an active ticket for today.")
+            return
+        }
+
+        if (joinCooldown.isCoolingDown) {
+            toast.message(`Please wait ${joinCooldown.remainingSec}s before trying again.`)
+            return
+        }
+
+        // strict server check before joining
+        setCheckingActive(true)
+        const existing = await checkActiveTicket({ silent: true })
+        setCheckingActive(false)
+        if (existing) {
+            toast.message("You already have an active ticket for today.")
+            return
+        }
+
+        // session-flow requires transactions (best UX + matches backend)
+        if (isSessionFlow) {
+            if (!availableTransactions.length) {
+                return toast.error("No queue purpose is available for this account and department.")
+            }
+            if (!selectedForSubmit.length) {
+                return toast.error("Please select at least one queue purpose.")
+            }
+            if (!sameStringArray(selectedTransactions, selectedForSubmit)) {
+                setSelectedTransactions(selectedForSubmit)
+            }
+        }
+
+        joinCooldown.start()
+        setBusy(true)
+        try {
+            // ✅ Transactions are included when available (session-flow).
+            // Guest/unregistered fallback still works (legacy join without transactions).
+            const payload = isSessionFlow
+                ? {
+                      departmentId,
+                      studentId: sid,
+                      phone: ph || undefined,
+                      transactionKeys: selectedForSubmit,
+                  }
+                : {
+                      departmentId,
+                      studentId: sid,
+                      phone: ph || undefined,
+                  }
+
+            const res = await studentApi.joinQueue(payload as any)
+            const t = (res?.ticket ?? null) as Ticket | null
+            setTicket(t)
+            setActiveTicket(t)
+            toast.success("You are now in the queue.")
+        } catch (e: any) {
+            const status = (e as any)?.status
+            const existingTicket = (e as any)?.data?.ticket
+
+            if (status === 409 && existingTicket) {
+                setTicket(existingTicket as Ticket)
+                setActiveTicket(existingTicket as Ticket)
+                toast.message("You already have an active ticket for today.")
+                return
+            }
+
+            const msg = String(e?.message ?? "")
+            if (msg.toLowerCase().includes("invalid transaction selection")) {
+                await loadSession()
+                toast.error("Selected queue purpose is not available. Please reselect and try again.")
+                return
+            }
+
+            toast.error(e?.message ?? "Failed to join queue.")
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    const ticketDeptName = React.useMemo(() => {
+        const t = activeTicket ?? ticket
+        if (!t) return "—"
+        return deptNameFromTicketDepartment(t.department, selectedDept?.name)
+    }, [ticket, activeTicket, selectedDept?.name])
+
+    const ticketToShow = activeTicket ?? ticket
+
+    const selectedTransactionLabels = React.useMemo(() => {
+        if (!selectedForSubmit.length) return []
+        const map = new Map<string, string>()
+        for (const tx of availableTransactions) {
+            const k = readTransactionKey(tx)
+            if (!k) continue
+            map.set(k, readTransactionLabel(tx, k))
+        }
+        return selectedForSubmit.map((k) => map.get(k) || k)
+    }, [selectedForSubmit, availableTransactions])
 
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -451,466 +581,302 @@ export default function StudentHomePage() {
 
             <main className="mx-auto w-full px-4 py-10">
                 <div className="mb-6">
-                    <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-                        <Home className="h-6 w-6" />
-                        Student Home
-                    </h1>
+                    <h1 className="text-2xl font-semibold tracking-tight">Join Queue</h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Overview for <span className="font-medium">Join Queue</span> and{" "}
-                        <span className="font-medium">My Tickets</span> with live queue insights.
+                        Select your department, choose a queue purpose (transaction), then generate your ticket.
                     </p>
                 </div>
 
                 <div className="grid gap-6">
                     <Card className="min-w-0">
                         <CardHeader>
-                            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                                <div className="min-w-0">
-                                    <CardTitle className="flex items-center gap-2">
-                                        <BarChart3 className="h-5 w-5" />
-                                        Overview Context
-                                    </CardTitle>
-                                    <CardDescription>
-                                        This context is shared by the quick links to Join Queue and My Tickets.
-                                    </CardDescription>
-                                </div>
+                            <CardTitle>Queue Entry</CardTitle>
+                            <CardDescription>
+                                When logged in, your available queue purposes are loaded from your profile and the department is locked.
+                            </CardDescription>
 
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    className="w-full gap-2 lg:w-auto"
-                                    onClick={() => void refreshOverview()}
-                                    disabled={loadingDisplay || loadingTicket || loadingDepts}
-                                >
-                                    <RefreshCw className="h-4 w-4" />
-                                    Refresh Overview
-                                </Button>
+                            <div className="pt-1">
+                                {loadingSession ? (
+                                    <Skeleton className="h-5 w-48" />
+                                ) : participant ? (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Badge variant="secondary">Profile synced</Badge>
+                                        <Badge variant="outline">{availableTransactions.length} purpose(s) loaded</Badge>
+                                        {isDepartmentLocked ? (
+                                            <Badge className="gap-2" variant="outline">
+                                                <Lock className="h-3.5 w-3.5" />
+                                                Department locked
+                                            </Badge>
+                                        ) : null}
+                                    </div>
+                                ) : (
+                                    <Badge variant="outline">Guest mode</Badge>
+                                )}
                             </div>
                         </CardHeader>
 
-                        <CardContent className="space-y-4">
+                        <CardContent className="space-y-5">
                             {loadingDepts ? (
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                    <Skeleton className="h-10 w-full" />
+                                <div className="space-y-3">
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                     <Skeleton className="h-10 w-full" />
                                 </div>
                             ) : (
-                                <div className="grid gap-4 lg:grid-cols-4">
-                                    <div className="space-y-2 min-w-0">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <Label>Department</Label>
-                                            {isDepartmentLocked ? (
-                                                <Badge variant="secondary" className="shrink-0">
-                                                    Locked
-                                                </Badge>
+                                <>
+                                    {activeTicket ? (
+                                        <div className="rounded-lg border bg-muted p-4 text-sm">
+                                            <div className="font-medium">Ticket generation blocked</div>
+                                            <div className="mt-1 text-muted-foreground">
+                                                You already have an active ticket today. To prevent queue spamming, you can’t generate a new ticket
+                                                until your current one is completed.
+                                            </div>
+                                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                                <Button asChild variant="secondary" className="w-full">
+                                                    <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                                </Button>
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    className="w-full"
+                                                    onClick={() => void onFindActive()}
+                                                    disabled={busy}
+                                                >
+                                                    <RefreshCw className="mr-2 h-4 w-4" />
+                                                    Refresh my ticket
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : null}
+
+                                    <div className="grid gap-4 sm:grid-cols-3">
+                                        <div className="min-w-0 space-y-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <Label>Department</Label>
+                                                {isDepartmentLocked ? (
+                                                    <Badge variant="secondary" className="shrink-0">
+                                                        Locked
+                                                    </Badge>
+                                                ) : null}
+                                            </div>
+
+                                            <Select
+                                                value={departmentId}
+                                                onValueChange={handleDepartmentChange}
+                                                disabled={busy || !departments.length || isDepartmentLocked}
+                                            >
+                                                <SelectTrigger className="w-full min-w-0">
+                                                    <SelectValue placeholder="Select department" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {departments.map((d) => (
+                                                        <SelectItem key={d._id} value={d._id}>
+                                                            {d.name}
+                                                            {d.code ? ` (${d.code})` : ""}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+
+                                            {!departments.length ? (
+                                                <div className="text-xs text-muted-foreground">No departments available.</div>
+                                            ) : isDepartmentLocked ? (
+                                                <div className="text-xs text-muted-foreground">
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <Lock className="h-3.5 w-3.5" />
+                                                        Locked to your profile.
+                                                    </span>
+                                                </div>
                                             ) : null}
                                         </div>
 
-                                        <Select
-                                            value={departmentId}
-                                            onValueChange={handleDepartmentChange}
-                                            disabled={!departments.length || isDepartmentLocked}
-                                        >
-                                            <SelectTrigger className="w-full min-w-0">
-                                                <SelectValue placeholder={loadingSession ? "Loading session..." : "Select department"} />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {departments.map((d) => (
-                                                    <SelectItem key={d._id} value={d._id}>
-                                                        {d.name}
-                                                        {d.code ? ` (${d.code})` : ""}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
+                                        <div className="min-w-0 space-y-2">
+                                            <Label htmlFor="studentId">Student ID</Label>
+                                            <Input
+                                                id="studentId"
+                                                value={studentId}
+                                                onChange={(e) => setStudentId(e.target.value)}
+                                                placeholder="e.g. TC-20-A-00001"
+                                                autoComplete="off"
+                                                inputMode="text"
+                                                disabled={busy}
+                                            />
+                                        </div>
 
-                                        {isDepartmentLocked ? (
-                                            <div className="text-xs text-muted-foreground">
-                                                Your department is locked to your registered profile.
+                                        <div className="min-w-0 space-y-2">
+                                            <Label htmlFor="phone">Phone Number (optional)</Label>
+                                            <Input
+                                                id="phone"
+                                                value={phone}
+                                                onChange={(e) => setPhone(e.target.value)}
+                                                placeholder="e.g. 09xxxxxxxxx or +639xxxxxxxxx"
+                                                autoComplete="tel"
+                                                inputMode="tel"
+                                                disabled={busy}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <Label>Purpose of Queue (Transaction)</Label>
+                                            {selectedForSubmit.length ? (
+                                                <Badge variant="secondary">{selectedForSubmit.length} selected</Badge>
+                                            ) : null}
+                                        </div>
+
+                                        {loadingSession ? (
+                                            <div className="space-y-2">
+                                                <Skeleton className="h-9 w-full" />
+                                                <Skeleton className="h-9 w-full" />
                                             </div>
-                                        ) : null}
-                                    </div>
+                                        ) : participant ? (
+                                            availableTransactions.length ? (
+                                                <div className="grid gap-2 sm:grid-cols-2">
+                                                    {availableTransactions.map((tx) => {
+                                                        const txKey = readTransactionKey(tx)
+                                                        if (!txKey) return null
+                                                        const active = selectedTransactionSet.has(txKey)
 
-                                    <div className="space-y-2 min-w-0">
-                                        <Label htmlFor="student-id">Student ID</Label>
-                                        <Input
-                                            id="student-id"
-                                            value={studentId}
-                                            onChange={(e) => setStudentId(e.target.value)}
-                                            placeholder="e.g. TC-20-A-00001"
-                                            autoComplete="off"
-                                            inputMode="text"
-                                        />
-                                    </div>
-
-                                    <div className="space-y-2 min-w-0">
-                                        <Label>Session</Label>
-                                        <div className="flex h-10 items-center rounded-md border px-3">
-                                            {loadingSession ? (
-                                                <Skeleton className="h-4 w-24" />
-                                            ) : sessionDisplayName ? (
-                                                <span className="truncate text-sm">{sessionDisplayName}</span>
-                                            ) : (
-                                                <span className="text-sm text-muted-foreground">Guest mode</span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-2 min-w-0">
-                                        <Label>Date Key</Label>
-                                        <div className="flex h-10 items-center rounded-md border px-3">
-                                            <span className="text-sm">{displayDateKey || "—"}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            <div className="flex flex-wrap items-center gap-2">
-                                {selectedDept ? <Badge variant="secondary">Department: {selectedDept.name}</Badge> : null}
-                                {ticket ? (
-                                    <Badge variant={statusBadgeVariant(ticket.status) as any}>Ticket: {ticket.status}</Badge>
-                                ) : null}
-                                {myPreviewPosition === 0 ? (
-                                    <Badge>Now being called</Badge>
-                                ) : myPreviewPosition ? (
-                                    <Badge variant="outline">Position in preview: #{myPreviewPosition}</Badge>
-                                ) : (
-                                    <Badge variant="outline">Position in preview: —</Badge>
-                                )}
-                            </div>
-
-                            {hasActiveTicket ? (
-                                <div className="rounded-lg border bg-muted p-4 text-sm">
-                                    <div className="font-medium">Active queue detected</div>
-                                    <div className="mt-1 text-muted-foreground">
-                                        Ticket generation is blocked while you have an active queue. Please use{" "}
-                                        <span className="font-medium">My Tickets</span> to monitor your status.
-                                    </div>
-                                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                                        <Button asChild className="w-full" variant="secondary">
-                                            <Link to={myTicketsUrl}>Open My Tickets</Link>
-                                        </Button>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            className="w-full"
-                                            onClick={() => {
-                                                toast.message("Join Queue is blocked while you have an active ticket.")
-                                            }}
-                                        >
-                                            Join Queue (Blocked)
-                                        </Button>
-                                    </div>
-                                </div>
-                            ) : null}
-                        </CardContent>
-                    </Card>
-
-                    <div className="grid gap-6 lg:grid-cols-2">
-                        <Card className="min-w-0">
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2">
-                                    <ArrowRight className="h-5 w-5" />
-                                    Join Queue
-                                </CardTitle>
-                                <CardDescription>
-                                    Start a queue transaction with your current department and student context.
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                    Use this when you need a new ticket. Selected department and student ID are passed automatically.
-                                </div>
-
-                                {hasActiveTicket ? (
-                                    <Button asChild className="w-full" variant="secondary">
-                                        <Link to={myTicketsUrl}>View Active Ticket</Link>
-                                    </Button>
-                                ) : (
-                                    <Button asChild className="w-full">
-                                        <Link to={joinUrl}>Go to Join Queue</Link>
-                                    </Button>
-                                )}
-                            </CardContent>
-                        </Card>
-
-                        <Card className="min-w-0">
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2">
-                                    <Ticket className="h-5 w-5" />
-                                    My Tickets
-                                </CardTitle>
-                                <CardDescription>
-                                    Check your active ticket, live queue board preview, and refresh your current status.
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                {ticket ? (
-                                    <div className="rounded-lg border p-4">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div>
-                                                <div className="text-sm text-muted-foreground">Queue Number</div>
-                                                <div className="text-3xl font-semibold tracking-tight">
-                                                    #{ticket.queueNumber}
+                                                        return (
+                                                            <Button
+                                                                key={txKey}
+                                                                type="button"
+                                                                variant={active ? "default" : "outline"}
+                                                                className="h-auto justify-start whitespace-normal text-left"
+                                                                onClick={() =>
+                                                                    setSelectedTransactions((prev) =>
+                                                                        toggleKey(
+                                                                            mapSelectionToAvailableKeys(prev, availableTransactions),
+                                                                            txKey,
+                                                                        ),
+                                                                    )
+                                                                }
+                                                                disabled={busy}
+                                                            >
+                                                                {readTransactionLabel(tx, txKey)}
+                                                            </Button>
+                                                        )
+                                                    })}
                                                 </div>
-                                            </div>
-                                            <div className="flex flex-col items-end gap-2">
-                                                <Badge variant={statusBadgeVariant(ticket.status) as any}>{ticket.status}</Badge>
-                                                <Badge variant="outline">{ticket.dateKey}</Badge>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                        No active ticket found for the current context.
-                                    </div>
-                                )}
-
-                                <Button asChild variant="secondary" className="w-full">
-                                    <Link to={myTicketsUrl}>Go to My Tickets</Link>
-                                </Button>
-                            </CardContent>
-                        </Card>
-                    </div>
-
-                    <div className="grid gap-6 lg:grid-cols-2">
-                        <Card className="min-w-0">
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2">
-                                    <Monitor className="h-5 w-5" />
-                                    Live Queue Snapshot
-                                </CardTitle>
-                                <CardDescription>
-                                    Recharts bar view of now serving, up next, and visible queue count.
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent>
-                                {!departmentId ? (
-                                    <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                        Select a department to view queue insights.
-                                    </div>
-                                ) : loadingDisplay ? (
-                                    <Skeleton className="h-80 w-full" />
-                                ) : (
-                                    <div className="space-y-4">
-                                        <div className="h-80 w-full">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <RechartsBarChart
-                                                    data={liveQueueBars}
-                                                    margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
-                                                >
-                                                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                                                    <XAxis
-                                                        dataKey="label"
-                                                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                                                        axisLine={{ stroke: "hsl(var(--border))" }}
-                                                        tickLine={{ stroke: "hsl(var(--border))" }}
-                                                    />
-                                                    <YAxis
-                                                        allowDecimals={false}
-                                                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                                                        axisLine={{ stroke: "hsl(var(--border))" }}
-                                                        tickLine={{ stroke: "hsl(var(--border))" }}
-                                                    />
-                                                    <Tooltip
-                                                        formatter={(value: number | string | undefined) => [value ?? "—", "Count"]}
-                                                        contentStyle={{
-                                                            background: "hsl(var(--background))",
-                                                            border: "1px solid hsl(var(--border))",
-                                                            borderRadius: "0.75rem",
-                                                            color: "hsl(var(--foreground))",
-                                                        }}
-                                                        labelStyle={{ color: "hsl(var(--foreground))" }}
-                                                        cursor={{ fill: "hsl(var(--muted))" }}
-                                                    />
-                                                    <Bar dataKey="count" radius={[8, 8, 0, 0]}>
-                                                        {liveQueueBars.map((entry) => (
-                                                            <Cell key={entry.label} fill={entry.fill} />
-                                                        ))}
-                                                    </Bar>
-                                                </RechartsBarChart>
-                                            </ResponsiveContainer>
-                                        </div>
-
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <Badge variant="outline">
-                                                Now Serving:{" "}
-                                                {displayNowServing ? `#${displayNowServing.queueNumber}` : "—"}
-                                            </Badge>
-                                            <Badge variant="outline">Up Next: {waitingCount}</Badge>
-                                            <Badge variant="secondary">Visible: {visibleCount}</Badge>
-                                        </div>
-                                    </div>
-                                )}
-                            </CardContent>
-                        </Card>
-
-                        <Card className="min-w-0">
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2">
-                                    <PieChartIcon className="h-5 w-5" />
-                                    Queue Mix
-                                </CardTitle>
-                                <CardDescription>
-                                    Recharts donut view using your app CSS color tokens from{" "}
-                                    <span className="font-mono">src/index.css</span>.
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent>
-                                {!departmentId ? (
-                                    <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                        Select a department to view queue distribution.
-                                    </div>
-                                ) : loadingDisplay ? (
-                                    <Skeleton className="h-80 w-full" />
-                                ) : !hasQueueMix ? (
-                                    <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                        No queue data available yet for this department.
-                                    </div>
-                                ) : (
-                                    <div className="space-y-4">
-                                        <div className="h-80 w-full">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <RechartsPieChart>
-                                                    <Tooltip
-                                                        formatter={(value: number | string | undefined) => [value ?? "—", "Tickets"]}
-                                                        contentStyle={{
-                                                            background: "hsl(var(--background))",
-                                                            border: "1px solid hsl(var(--border))",
-                                                            borderRadius: "0.75rem",
-                                                            color: "hsl(var(--foreground))",
-                                                        }}
-                                                        labelStyle={{ color: "hsl(var(--foreground))" }}
-                                                    />
-                                                    <Legend verticalAlign="bottom" wrapperStyle={{ color: "hsl(var(--muted-foreground))" }} />
-                                                    <Pie
-                                                        data={queueMixData}
-                                                        dataKey="value"
-                                                        nameKey="name"
-                                                        innerRadius={72}
-                                                        outerRadius={108}
-                                                        paddingAngle={3}
-                                                    >
-                                                        {queueMixData.map((entry) => (
-                                                            <Cell key={entry.name} fill={entry.fill} />
-                                                        ))}
-                                                    </Pie>
-                                                </RechartsPieChart>
-                                            </ResponsiveContainer>
-                                        </div>
-
-                                        {myPreviewPosition === 0 ? (
-                                            <div className="rounded-lg border p-4 text-sm">Your ticket is currently being called.</div>
-                                        ) : myPreviewPosition ? (
-                                            <div className="rounded-lg border p-4 text-sm">
-                                                Your ticket appears at position{" "}
-                                                <span className="font-semibold">#{myPreviewPosition}</span> in the visible preview queue.
-                                            </div>
+                                            ) : (
+                                                <div className="text-sm text-muted-foreground">
+                                                    No transaction options are available for your account in this department.
+                                                </div>
+                                            )
                                         ) : (
-                                            <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                Your ticket is not visible in the current board preview list.
+                                            <div className="text-sm text-muted-foreground">
+                                                Login first to select queue purpose. Guest mode supports basic joining only.
                                             </div>
                                         )}
                                     </div>
-                                )}
-                            </CardContent>
-                        </Card>
-                    </div>
 
-                    <Card className="min-w-0">
-                        <CardHeader>
-                            <CardTitle>Queue Board Preview</CardTitle>
-                            <CardDescription>Quick glance from home: now serving and up next tickets.</CardDescription>
-                        </CardHeader>
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => void onFindActive()}
+                                            disabled={busy || checkingActive}
+                                        >
+                                            {findCooldown.isCoolingDown ? `Wait ${findCooldown.remainingSec}s` : "Find my ticket"}
+                                        </Button>
 
-                        <CardContent>
-                            {!departmentId ? (
-                                <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                    Select a department to preview the queue board.
-                                </div>
-                            ) : loadingDisplay ? (
-                                <div className="space-y-3">
-                                    <Skeleton className="h-24 w-full" />
-                                    <Skeleton className="h-40 w-full" />
-                                </div>
-                            ) : (
-                                <div className="grid gap-4 lg:grid-cols-12">
-                                    <div className="lg:col-span-7">
-                                        <div className="rounded-2xl border bg-muted p-6">
-                                            <div className="flex items-center justify-between">
-                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">Now serving</div>
-                                                {displayNowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
-                                            </div>
-
-                                            <div className="mt-4">
-                                                {displayNowServing ? (
-                                                    <>
-                                                        <div className="text-[clamp(3rem,10vw,7rem)] font-semibold leading-none tracking-tight">
-                                                            #{displayNowServing.queueNumber}
-                                                        </div>
-                                                        <div className="mt-3 text-sm text-muted-foreground">
-                                                            Window: {displayNowServing.windowNumber ? `#${displayNowServing.windowNumber}` : "—"}
-                                                        </div>
-                                                        <div className="text-sm text-muted-foreground">
-                                                            Called at: {fmtTime(displayNowServing.calledAt)}
-                                                        </div>
-                                                    </>
-                                                ) : (
-                                                    <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
-                                                        No ticket is currently being called.
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
+                                        <Button
+                                            type="button"
+                                            onClick={() => void onJoin()}
+                                            disabled={
+                                                busy ||
+                                                checkingActive ||
+                                                joinCooldown.isCoolingDown ||
+                                                !!activeTicket ||
+                                                !departmentId ||
+                                                !studentId.trim() ||
+                                                (isSessionFlow && (!availableTransactions.length || !selectedForSubmit.length))
+                                            }
+                                        >
+                                            {joinCooldown.isCoolingDown
+                                                ? `Try again in ${joinCooldown.remainingSec}s`
+                                                : busy || checkingActive
+                                                  ? "Please wait…"
+                                                  : activeTicket
+                                                    ? "Ticket already active"
+                                                    : "Join Queue"}
+                                        </Button>
                                     </div>
 
-                                    <div className="lg:col-span-5">
-                                        <div className="rounded-2xl border p-6">
-                                            <div className="mb-4 flex items-center justify-between">
-                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">Up next</div>
-                                                <Badge variant="secondary">{displayUpNext.length}</Badge>
-                                            </div>
-
-                                            {displayUpNext.length === 0 ? (
-                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">No waiting tickets.</div>
-                                            ) : (
-                                                <div className="grid gap-2">
-                                                    {displayUpNext.slice(0, 6).map((item, idx) => (
-                                                        <div key={item.id} className="flex items-center justify-between rounded-xl border p-3">
-                                                            <div className="text-xl font-semibold">#{item.queueNumber}</div>
-                                                            <Badge variant={idx === 0 ? "default" : "secondary"}>
-                                                                {idx === 0 ? "Next" : "Waiting"}
-                                                            </Badge>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
+                                    <div className="text-xs text-muted-foreground">
+                                        Abuse prevention: join actions have a short cooldown to reduce queue spamming.
                                     </div>
-                                </div>
+                                </>
                             )}
-
-                            <Separator className="my-6" />
-
-                            <div className="grid gap-2 sm:grid-cols-2">
-                                {hasActiveTicket ? (
-                                    <Button asChild variant="secondary">
-                                        <Link to={myTicketsUrl}>Open My Tickets</Link>
-                                    </Button>
-                                ) : (
-                                    <Button asChild>
-                                        <Link to={joinUrl}>Open Join Queue</Link>
-                                    </Button>
-                                )}
-
-                                <Button asChild variant="secondary">
-                                    <Link to={myTicketsUrl}>Open My Tickets</Link>
-                                </Button>
-                            </div>
                         </CardContent>
                     </Card>
+
+                    {ticketToShow ? (
+                        <Card className="min-w-0">
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    <TicketIcon className="h-5 w-5" />
+                                    Your Ticket
+                                </CardTitle>
+                                <CardDescription>Keep this page open or take a screenshot.</CardDescription>
+                            </CardHeader>
+
+                            <CardContent className="space-y-4">
+                                <div className="rounded-2xl border bg-muted p-6">
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <div className="min-w-0">
+                                            <div className="text-sm text-muted-foreground">Department</div>
+                                            <div className="truncate text-lg font-medium">{ticketDeptName}</div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                            <Badge variant={statusBadgeVariant(ticketToShow.status) as any}>{ticketToShow.status}</Badge>
+                                            <Badge variant="secondary">{ticketToShow.dateKey}</Badge>
+                                        </div>
+                                    </div>
+
+                                    {selectedTransactionLabels.length ? (
+                                        <>
+                                            <Separator className="my-5" />
+                                            <div className="space-y-2">
+                                                <div className="text-sm text-muted-foreground">Purpose(s)</div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {selectedTransactionLabels.map((label) => (
+                                                        <Badge key={label} variant="outline">
+                                                            {label}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </>
+                                    ) : null}
+
+                                    <Separator className="my-5" />
+
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                                        <div>
+                                            <div className="text-sm text-muted-foreground">Queue Number</div>
+                                            <div className="mt-1 text-6xl font-semibold tracking-tight">#{ticketToShow.queueNumber}</div>
+                                        </div>
+
+                                        <div className="text-xs text-muted-foreground">
+                                            Ticket reference: <span className="font-mono">{ticketToShow._id}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <Button asChild variant="secondary" className="w-full">
+                                        <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                    </Button>
+                                    <Button type="button" variant="outline" className="w-full" onClick={() => void onFindActive()}>
+                                        Refresh status
+                                    </Button>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ) : null}
                 </div>
             </main>
 
