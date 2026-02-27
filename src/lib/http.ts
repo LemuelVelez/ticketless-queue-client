@@ -246,8 +246,11 @@ function withQuery(path: string, params?: Record<string, QueryParamValue>) {
 async function parseResponseSafe(res: Response) {
     if (res.status === 204) return null
 
-    const text = await res.text()
-    if (!text) return null
+    const textRaw = await res.text()
+    if (!textRaw) return null
+
+    // ✅ Some proxies/server runtimes can prepend a UTF-8 BOM; strip it to avoid JSON.parse failures.
+    const text = textRaw.replace(/^\uFEFF/, "")
 
     const contentType = String(res.headers.get("content-type") || "").toLowerCase()
     const looksJson = contentType.includes("application/json") || contentType.includes("+json")

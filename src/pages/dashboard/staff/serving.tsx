@@ -9,7 +9,6 @@ import {
     Megaphone,
     MessageSquare,
     Monitor,
-    MoreHorizontal,
     PauseCircle,
     RefreshCw,
     Send,
@@ -31,8 +30,6 @@ import {
     type Ticket as TicketType,
 } from "@/api/staff"
 
-import { ApiError } from "@/lib/http"
-
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -52,27 +49,12 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuLabel,
-    DropdownMenuSeparator,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 
 function fmtTime(v?: string | null) {
     if (!v) return "—"
     const d = new Date(v)
     if (Number.isNaN(d.getTime())) return "—"
     return d.toLocaleString()
-}
-
-function shortTime(v?: string | null) {
-    if (!v) return "—"
-    const d = new Date(v)
-    if (Number.isNaN(d.getTime())) return "—"
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
 function parseBool(v: unknown): boolean {
@@ -90,7 +72,11 @@ function parsePanelCount(search: string, fallback = 3) {
 }
 
 function isSpeechSupported() {
-    return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
+    return (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        "SpeechSynthesisUtterance" in window
+    )
 }
 
 type MonitorOption = {
@@ -180,118 +166,6 @@ const MAN_VOICE_HINTS = [
     "william",
 ]
 
-/**
- * ✅ Reliability check tokens (per request)
- * Requirement: confirm supported networks (Globe / Smart).
- * NOTE: Semaphore may return variants/casing; backend already matches loosely.
- */
-const SMS_SUPPORTED_NETWORK_TOKENS = ["GLOBE", "SMART"]
-
-/**
- * ✅ Staff Panel / Queue Dashboard requirements:
- * - Auto-refresh (AJAX polling every 2–3 seconds)
- * - Sync across all open windows (leader election + BroadcastChannel/localStorage)
- */
-const POLL_MS = 2500 // 2.5s loop
-const LEADER_TTL_MS = 10_000
-
-const SERVING_POLL_LEADER_KEY = "queuepass:staff:serving_poll_leader_v1"
-const SERVING_SYNC_CHANNEL = "queuepass:staff:serving_state_sync_v1"
-const SERVING_SYNC_SNAPSHOT_KEY = "queuepass:staff:serving_state_snapshot_v1"
-
-function canUseBroadcastChannel() {
-    return typeof window !== "undefined" && typeof (window as any).BroadcastChannel !== "undefined"
-}
-
-function firstNonEmptyText(candidates: unknown[]) {
-    for (const c of candidates) {
-        const s = String(c ?? "").trim()
-        if (s) return s
-    }
-    return ""
-}
-
-function composeName(parts: unknown[]) {
-    return parts
-        .map((p) => String(p ?? "").trim())
-        .filter(Boolean)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim()
-}
-
-/**
- * ✅ Prefer enriched backend field: participantFullName
- * (supports Student / Alumni-Visitor / Guest). Falls back to legacy fields.
- */
-function getStudentFullName(ticket: any): string {
-    const t = ticket as any
-
-    const selectionName = Array.isArray(t?.transactionSelections)
-        ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
-        : ""
-
-    const direct = firstNonEmptyText([
-        // ✅ new/enriched fields (best UX)
-        t?.participantFullName,
-        t?.transactions?.participantFullName,
-        selectionName,
-        t?.meta?.participantFullName,
-
-        // legacy/other payload shapes
-        t?.studentName,
-        t?.participantName,
-        t?.participant?.fullName,
-        t?.participant?.name,
-        t?.user?.name,
-        t?.name,
-        t?.meta?.participantName,
-    ])
-    if (direct) return direct
-
-    const composed = composeName([
-        t?.participant?.firstName,
-        t?.participant?.middleName,
-        t?.participant?.lastName,
-        t?.user?.firstName,
-        t?.user?.middleName,
-        t?.user?.lastName,
-        t?.firstName,
-        t?.middleName,
-        t?.lastName,
-    ])
-
-    return composed || ""
-}
-
-/**
- * ✅ Generic identifier (studentId / tcNumber / phone)
- * Used as fallback for non-student participant types.
- */
-function getStudentId(ticket: any): string {
-    const t = ticket as any
-    return firstNonEmptyText([t?.studentId, t?.participant?.studentId, t?.tcNumber, t?.phone, t?.participant?.phone])
-}
-
-function safeErrorMessage(err: any, fallback: string) {
-    if (!err) return fallback
-
-    const data =
-        err instanceof ApiError
-            ? err.data
-            : (err?.data ?? err?.response?.data) // keep compatibility if any legacy axios errors exist
-
-    const fromData =
-        typeof data === "string"
-            ? data
-            : data && typeof data === "object"
-              ? String((data as any)?.message || (data as any)?.error || (data as any)?.detail || (data as any)?.title || "")
-              : ""
-
-    const msg = String(err?.message || "").trim() || String(fromData || "").trim()
-    return msg || fallback
-}
-
 function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
     return {
         _id: row.id,
@@ -335,17 +209,21 @@ function containsAnyHint(text: string, hints: string[]) {
 
 function isLikelyWomanVoice(v: SpeechSynthesisVoice) {
     const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
-    return containsAnyHint(blob, WOMAN_VOICE_HINTS) || /(?:^|[-_ ])f(?:$|[-_ 0-9])/i.test(blob)
+    return (
+        containsAnyHint(blob, WOMAN_VOICE_HINTS) ||
+        /(?:^|[-_ ])f(?:$|[-_ 0-9])/i.test(blob)
+    )
 }
 
 function isLikelyManVoice(v: SpeechSynthesisVoice) {
     const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
-    return containsAnyHint(blob, MAN_VOICE_HINTS) || /(?:^|[-_ ])m(?:$|[-_ 0-9])/i.test(blob)
+    return (
+        containsAnyHint(blob, MAN_VOICE_HINTS) ||
+        /(?:^|[-_ ])m(?:$|[-_ 0-9])/i.test(blob)
+    )
 }
 
-function resolveGenderedEnglishVoices(
-    list: SpeechSynthesisVoice[]
-): {
+function resolveGenderedEnglishVoices(list: SpeechSynthesisVoice[]): {
     english: SpeechSynthesisVoice[]
     woman?: SpeechSynthesisVoice
     man?: SpeechSynthesisVoice
@@ -399,7 +277,8 @@ function uniqueDepartmentAssignments(list?: DepartmentAssignment[] | null): Depa
             id,
             name: typeof item?.name === "string" ? item.name : undefined,
             code: typeof item?.code === "string" ? item.code : null,
-            transactionManager: typeof item?.transactionManager === "string" ? item.transactionManager : null,
+            transactionManager:
+                typeof item?.transactionManager === "string" ? item.transactionManager : null,
             enabled: item?.enabled !== false,
         })
     }
@@ -415,184 +294,9 @@ function departmentLabel(dep?: Partial<DepartmentAssignment> | null) {
     return name || code || "—"
 }
 
-function buildCalledSmsMessage(args: { departmentLabel: string; queueNumber: number; windowNumber?: number }) {
-    const dept = args.departmentLabel || "your office"
-    const q = args.queueNumber
-    const w = args.windowNumber
-    if (typeof w === "number") {
-        return `Queue Update (${dept}): You are now being called. Ticket #${q}. Please proceed to Window ${w}.`
-    }
-    return `Queue Update (${dept}): You are now being called. Ticket #${q}. Please proceed to the service window.`
-}
-
-function buildAdvanceNoticeSmsMessage(args: { departmentLabel: string; queueNumber: number }) {
-    const dept = args.departmentLabel || "your office"
-    const q = args.queueNumber
-    return `Queue Update (${dept}): Advance notice — you're next. Ticket #${q}. Please be ready.`
-}
-
-function pickNextWaitingTicket(afterQueueNumber: number, list: TicketType[]) {
-    const candidates = (Array.isArray(list) ? list : [])
-        .filter((t) => Number.isFinite(Number(t?.queueNumber)) && Number(t.queueNumber) > afterQueueNumber)
-        .slice()
-        .sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber))
-
-    return candidates[0] ?? null
-}
-
-function safeJson(value: unknown) {
-    try {
-        return JSON.stringify(value, null, 2)
-    } catch {
-        return String(value)
-    }
-}
-
-function summarizeReliability(result: any): {
-    statusLabel: "sent" | "skipped" | "failed" | "unknown"
-    deliveryStatus?: string
-    providerNetwork?: string
-    supportedNetwork?: boolean | null
-    providerMessageId?: number
-    reason?: string
-} {
-    if (!result) return { statusLabel: "unknown" }
-
-    if (result?.skipped) {
-        return {
-            statusLabel: "skipped",
-            reason: String(result?.reason || "skipped"),
-        }
-    }
-
-    const reliability = result?.reliability
-    const deliveryStatus = reliability?.deliveryStatus ? String(reliability.deliveryStatus) : undefined
-    const providerNetwork = reliability?.providerNetwork ? String(reliability.providerNetwork) : undefined
-    const supportedNetwork =
-        typeof reliability?.supportedNetwork === "boolean" || reliability?.supportedNetwork === null
-            ? (reliability.supportedNetwork as boolean | null)
-            : undefined
-    const providerMessageId = Number.isFinite(Number(reliability?.providerMessageId))
-        ? Number(reliability.providerMessageId)
-        : undefined
-
-    const statusLabel = deliveryStatus === "FAILED" ? "failed" : deliveryStatus ? "sent" : "unknown"
-
-    return {
-        statusLabel,
-        deliveryStatus,
-        providerNetwork,
-        supportedNetwork,
-        providerMessageId,
-    }
-}
-
-/**
- * ✅ Updated API alignment:
- * staffApi SMS methods use { throwOnError:false }, so provider failures return JSON
- * instead of throwing. This helper converts both new semantic fields and legacy
- * reliability payloads into a single outcome label for UI decisions.
- */
-type SmsOutcomeLabel = "sent" | "skipped" | "failed" | "unknown"
-
-function resolveSmsOutcome(res: any): { label: SmsOutcomeLabel; reason?: string } {
-    const raw = String(res?.outcome ?? "").trim().toLowerCase()
-    if (raw === "sent" || raw === "skipped" || raw === "failed" || raw === "unknown") {
-        const reason = String(res?.reason || res?.error || res?.message || "").trim()
-        return { label: raw as SmsOutcomeLabel, ...(reason ? { reason } : {}) }
-    }
-
-    const sum = summarizeReliability(res?.result)
-    const reason = String(res?.reason || res?.error || res?.message || sum?.reason || "").trim()
-    return { label: sum.statusLabel, ...(reason ? { reason } : {}) }
-}
-
-function shouldTreatSmsAsFailure(res: any, outcome: SmsOutcomeLabel) {
-    // If backend explicitly says failed => fail.
-    if (outcome === "failed") return true
-    // If backend says skipped => not a failure (opt-out / policy).
-    if (outcome === "skipped") return false
-    // If backend provides ok=false without a "skipped" outcome => treat as failure.
-    if (res && typeof res === "object" && res.ok === false) return true
-    return false
-}
-
-/**
- * ✅ Updated API alignment:
- * Prefer the centralized, pollable queue state endpoint:
- *   GET /staff/queue/state-full
- * It may return data at root OR inside { state: ... }.
- */
-function isTicketLikeLocal(value: any): value is TicketType {
-    if (!value || typeof value !== "object") return false
-    const id = value?._id ?? value?.id
-    const hasId = typeof id === "string" || (id && typeof id === "object")
-    const hasQueueNumber = typeof value?.queueNumber === "number" || typeof value?.queueNumber === "string"
-    const hasStatus = typeof value?.status === "string"
-    return Boolean(hasId && hasQueueNumber && hasStatus)
-}
-
-function normalizeTicketArrayLocal(value: any): TicketType[] {
-    if (!Array.isArray(value)) return []
-    return value.filter((x) => isTicketLikeLocal(x)).map((x) => x as TicketType)
-}
-
-function extractQueueStateTickets(payload: any): { current: TicketType | null; upNext: TicketType[]; hold: TicketType[] } {
-    const root = payload && typeof payload === "object" ? payload : {}
-    const state = root?.state && typeof root.state === "object" ? root.state : root
-
-    const currentRaw = state?.nowServing ?? state?.current ?? null
-    const current = isTicketLikeLocal(currentRaw) ? (currentRaw as TicketType) : null
-
-    const upNextRaw = Array.isArray(state?.upNext) ? state.upNext : Array.isArray(state?.waiting) ? state.waiting : []
-    const holdRaw = Array.isArray(state?.hold) ? state.hold : []
-
-    return {
-        current,
-        upNext: normalizeTicketArrayLocal(upNextRaw),
-        hold: normalizeTicketArrayLocal(holdRaw),
-    }
-}
-
-type SmsLog = {
-    at: string
-    current: {
-        ticketId: string
-        queueNumber: number
-        message: string
-        ok: boolean
-        apiResponse?: any
-        error?: string
-        reliabilitySummary?: ReturnType<typeof summarizeReliability>
-        outcomeLabel?: SmsOutcomeLabel
-        outcomeReason?: string
-    }
-    advance?: {
-        enabled: boolean
-        attempted: boolean
-        nextTicketId?: string
-        nextQueueNumber?: number
-        message?: string
-        ok?: boolean
-        apiResponse?: any
-        error?: string
-        reliabilitySummary?: ReturnType<typeof summarizeReliability>
-        outcomeLabel?: SmsOutcomeLabel
-        outcomeReason?: string
-    }
-}
-
-type ServingSyncPayload = {
-    ts: number
-    windowId: string
-    departmentId: string | null
-    windowInfo: { id: string; name: string; number: number } | null
-    assignedDepartments: DepartmentAssignment[]
-    handledDepartments: DepartmentAssignment[]
-    snapshot: StaffDisplaySnapshotResponse | null
-    current: TicketType | null
-    upNext: TicketType[]
-    holdTickets: TicketType[]
+function defaultSmsCalledMessage(queueNumber: number, windowNumber?: number) {
+    const windowText = typeof windowNumber === "number" ? ` at Window ${windowNumber}` : ""
+    return `Queue update: Your ticket #${queueNumber} is now being served${windowText}.`
 }
 
 export default function StaffServingPage() {
@@ -615,7 +319,6 @@ export default function StaffServingPage() {
     }, [location.search])
 
     const [loading, setLoading] = React.useState(true)
-    const [stateLoading, setStateLoading] = React.useState(false)
     const [busy, setBusy] = React.useState(false)
 
     const [departmentId, setDepartmentId] = React.useState<string | null>(null)
@@ -628,25 +331,7 @@ export default function StaffServingPage() {
     const [holdTickets, setHoldTickets] = React.useState<TicketType[]>([])
     const [snapshot, setSnapshot] = React.useState<StaffDisplaySnapshotResponse | null>(null)
 
-    // ✅ Auto-refresh ON by default; 2.5s polling + cross-window sync
     const [autoRefresh, setAutoRefresh] = React.useState(true)
-    const [isServingLeader, setIsServingLeader] = React.useState(false)
-    const lastAppliedStateTsRef = React.useRef<number>(0)
-    const lastToastSyncErrorAtRef = React.useRef<number>(0)
-    const bcRef = React.useRef<BroadcastChannel | null>(null)
-    const [lastSyncedAtIso, setLastSyncedAtIso] = React.useState<string>("")
-
-    const tabIdRef = React.useRef<string>("")
-    if (!tabIdRef.current) {
-        try {
-            tabIdRef.current =
-                typeof crypto !== "undefined" && "randomUUID" in crypto
-                    ? crypto.randomUUID()
-                    : `tab_${Date.now()}_${Math.random()}`
-        } catch {
-            tabIdRef.current = `tab_${Date.now()}_${Math.random()}`
-        }
-    }
 
     const [panelCount, setPanelCount] = React.useState<number>(() => parsePanelCount(location.search, 3))
 
@@ -659,11 +344,11 @@ export default function StaffServingPage() {
 
     const assignedDepartmentItems = React.useMemo(
         () => uniqueDepartmentAssignments(assignedDepartments),
-        [assignedDepartments]
+        [assignedDepartments],
     )
     const handledDepartmentItems = React.useMemo(
         () => uniqueDepartmentAssignments(handledDepartments),
-        [handledDepartments]
+        [handledDepartments],
     )
 
     const assignedOk = Boolean(departmentId && windowInfo?.id)
@@ -678,26 +363,11 @@ export default function StaffServingPage() {
 
     // -------- SMS states --------
     const [autoSmsOnCall, setAutoSmsOnCall] = React.useState(false)
-    const [smsAdvanceNoticeEnabled, setSmsAdvanceNoticeEnabled] = React.useState(false)
     const [smsDialogOpen, setSmsDialogOpen] = React.useState(false)
-    const [smsLogDialogOpen, setSmsLogDialogOpen] = React.useState(false)
     const [smsBusy, setSmsBusy] = React.useState(false)
     const [smsUseDefaultMessage, setSmsUseDefaultMessage] = React.useState(true)
     const [smsCustomMessage, setSmsCustomMessage] = React.useState("")
     const [smsSenderName, setSmsSenderName] = React.useState("")
-    const [lastSmsLog, setLastSmsLog] = React.useState<SmsLog | null>(null)
-
-    const smsDepartmentLabel = React.useMemo(() => {
-        const snapName = String(snapshot?.department?.name || "").trim()
-        if (snapName) return snapName
-
-        const pools = [...assignedDepartmentItems, ...handledDepartmentItems]
-        const dep = pools.find((d) => String(d.id) === String(departmentId || ""))
-        const name = String(dep?.name || "").trim()
-        const code = String(dep?.code || "").trim()
-
-        return name || code || "your office"
-    }, [assignedDepartmentItems, handledDepartmentItems, departmentId, snapshot?.department?.name])
 
     const { voices } = useVoices()
     const { speak: speakWithPackage, stop: stopSpeech } = useSpeak({
@@ -710,7 +380,7 @@ export default function StaffServingPage() {
 
     const resolvedEnglishVoices = React.useMemo(
         () => resolveGenderedEnglishVoices(Array.isArray(voices) ? voices : []),
-        [voices]
+        [voices],
     )
 
     React.useEffect(() => {
@@ -737,36 +407,42 @@ export default function StaffServingPage() {
         toast.message("No English TTS voice was found. Browser default voice will be used.")
     }, [resolvedEnglishVoices.english.length, voiceSupported, voices])
 
-    const speak = React.useCallback(
-        (text: string) => {
-            if (!voiceSupported) return
+    const speak = React.useCallback((text: string) => {
+        if (!voiceSupported) return
 
-            const preferred = selectedVoiceType === "woman" ? resolvedEnglishVoices.woman : resolvedEnglishVoices.man
-            const fallback = selectedVoiceType === "woman" ? resolvedEnglishVoices.man : resolvedEnglishVoices.woman
+        const preferred =
+            selectedVoiceType === "woman"
+                ? resolvedEnglishVoices.woman
+                : resolvedEnglishVoices.man
 
-            const voiceURI = preferred?.voiceURI || fallback?.voiceURI || resolvedEnglishVoices.english[0]?.voiceURI
+        const fallback =
+            selectedVoiceType === "woman"
+                ? resolvedEnglishVoices.man
+                : resolvedEnglishVoices.woman
 
-            try {
-                stopSpeech()
-            } catch {
-                // ignore
-            }
+        const voiceURI =
+            preferred?.voiceURI ||
+            fallback?.voiceURI ||
+            resolvedEnglishVoices.english[0]?.voiceURI
 
-            try {
-                speakWithPackage(text, {
-                    lang: "en-US",
-                    rate: 1,
-                    pitch: 1,
-                    volume: 1,
-                    ...(voiceURI ? { voiceURI } : {}),
-                })
-            } catch {
-                // ignore
-            }
-        },
-        // ✅ FIX: dependency array must list variables only (no "stop: stopSpeech" annotations)
-        [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported]
-    )
+        try {
+            stopSpeech()
+        } catch {
+            // ignore
+        }
+
+        try {
+            speakWithPackage(text, {
+                lang: "en-US",
+                rate: 1,
+                pitch: 1,
+                volume: 1,
+                ...(voiceURI ? { voiceURI } : {}),
+            })
+        } catch {
+            // ignore
+        }
+    }, [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported])
 
     const announceCall = React.useCallback(
         (queueNumber: number) => {
@@ -782,11 +458,13 @@ export default function StaffServingPage() {
             }
 
             const win = windowInfo?.number
-            const text = win ? `Number ${queueNumber}, please proceed to window ${win}.` : `Number ${queueNumber}.`
+            const text = win
+                ? `Number ${queueNumber}, please proceed to window ${win}.`
+                : `Number ${queueNumber}.`
 
             speak(text)
         },
-        [speak, voiceEnabled, voiceSupported, windowInfo?.number]
+        [speak, voiceEnabled, voiceSupported, windowInfo?.number],
     )
 
     const onRecallVoice = React.useCallback(() => {
@@ -794,6 +472,70 @@ export default function StaffServingPage() {
         if (!n) return toast.message("No ticket to announce.")
         announceCall(n)
     }, [announceCall, current?.queueNumber])
+
+    const sendCalledSms = React.useCallback(
+        async (
+            ticket: TicketType,
+            opts?: { message?: string; senderName?: string; toastOnSuccess?: boolean },
+        ) => {
+            if (!ticket?._id) {
+                toast.error("No active ticket selected for SMS.")
+                return false
+            }
+
+            setSmsBusy(true)
+            try {
+                const message = String(opts?.message ?? "").trim()
+                const senderName = String(opts?.senderName ?? "").trim()
+
+                const payload = {
+                    ...(message ? { message } : {}),
+                    ...(senderName ? { senderName } : {}),
+                }
+
+                const res = await staffApi.sendTicketCalledSms(ticket._id, payload)
+
+                if (opts?.toastOnSuccess !== false) {
+                    toast.success(
+                        `SMS sent for #${ticket.queueNumber}${res?.number ? ` to ${res.number}` : ""}.`,
+                    )
+                }
+
+                return true
+            } catch (e: any) {
+                toast.error(e?.message ?? "Failed to send SMS.")
+                return false
+            } finally {
+                setSmsBusy(false)
+            }
+        },
+        [],
+    )
+
+    const onSendSmsFromDialog = React.useCallback(async () => {
+        if (!current?._id) {
+            toast.message("No active ticket selected for SMS.")
+            return
+        }
+
+        const custom = smsUseDefaultMessage ? "" : smsCustomMessage.trim()
+        if (!smsUseDefaultMessage && !custom) {
+            toast.error("Custom message is required.")
+            return
+        }
+
+        const ok = await sendCalledSms(current, {
+            message: custom || undefined,
+            senderName: smsSenderName.trim() || undefined,
+            toastOnSuccess: true,
+        })
+
+        if (!ok) return
+
+        setSmsDialogOpen(false)
+        setSmsUseDefaultMessage(true)
+        setSmsCustomMessage("")
+    }, [current, sendCalledSms, smsCustomMessage, smsSenderName, smsUseDefaultMessage])
 
     const loadMonitorOptions = React.useCallback(async (silent = false) => {
         if (typeof window === "undefined") return
@@ -874,194 +616,57 @@ export default function StaffServingPage() {
         }
     }, [])
 
-    const broadcastServingState = React.useCallback((payload: ServingSyncPayload) => {
-        if (typeof window === "undefined") return
-
-        if (canUseBroadcastChannel()) {
-            try {
-                bcRef.current?.postMessage({ type: "SERVING_STATE", ...payload })
-                return
-            } catch {
-                // fallback below
-            }
-        }
-
+    const refresh = React.useCallback(async () => {
         try {
-            localStorage.setItem(SERVING_SYNC_SNAPSHOT_KEY, JSON.stringify({ type: "SERVING_STATE", ...payload }))
-        } catch {
-            // ignore
+            const a = await staffApi.myAssignment()
+            setDepartmentId(a.departmentId ?? null)
+            setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
+
+            const normalizedAssigned = uniqueDepartmentAssignments(a.assignedDepartments)
+            const normalizedHandled = uniqueDepartmentAssignments(a.handledDepartments)
+
+            setAssignedDepartments(normalizedAssigned)
+            setHandledDepartments(normalizedHandled.length ? normalizedHandled : normalizedAssigned)
+
+            const [snapshotResult, currentResult, waitingResult, holdResult] = await Promise.all([
+                staffApi.getDisplaySnapshot().catch(() => null),
+                a.departmentId && a.window?._id
+                    ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null }))
+                    : Promise.resolve({ ticket: null }),
+                a.departmentId && a.window?._id
+                    ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] }))
+                    : Promise.resolve({ tickets: [] }),
+                a.departmentId && a.window?._id
+                    ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] }))
+                    : Promise.resolve({ tickets: [] }),
+            ])
+
+            const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
+            if (!normalizedHandled.length && snapshotHandled.length) {
+                setHandledDepartments(snapshotHandled)
+            }
+            if (!normalizedAssigned.length && snapshotHandled.length) {
+                setAssignedDepartments(snapshotHandled)
+            }
+
+            setSnapshot(snapshotResult ?? null)
+            setCurrent(currentResult.ticket ?? null)
+
+            // Prefer explicit queue list for operator mode, but fallback to snapshot upNext if needed.
+            const explicit = waitingResult.tickets ?? []
+            if (explicit.length) {
+                setUpNext(explicit)
+            } else if (snapshotResult?.upNext?.length) {
+                setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
+            } else {
+                setUpNext([])
+            }
+
+            setHoldTickets(holdResult.tickets ?? [])
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to load now serving.")
         }
     }, [])
-
-    const applyRemoteServingState = React.useCallback(
-        (payload: Partial<ServingSyncPayload>) => {
-            const ts = Number(payload?.ts ?? 0)
-            if (!Number.isFinite(ts) || ts <= 0) return
-
-            // If we already know our window, only accept matching updates.
-            const localWindowId = String(windowInfo?.id ?? "").trim()
-            const remoteWindowId = String(payload?.windowId ?? "").trim()
-            if (localWindowId && remoteWindowId && localWindowId !== remoteWindowId) return
-
-            if (ts <= lastAppliedStateTsRef.current) return
-            lastAppliedStateTsRef.current = ts
-
-            // Prefer not to override assignment if we already have it; but fill gaps to improve UX.
-            if (!departmentId && typeof payload?.departmentId !== "undefined") setDepartmentId(payload.departmentId ?? null)
-            if (!windowInfo && payload?.windowInfo) setWindowInfo(payload.windowInfo)
-
-            if (
-                Array.isArray(payload?.assignedDepartments) &&
-                payload.assignedDepartments.length &&
-                assignedDepartments.length === 0
-            ) {
-                setAssignedDepartments(payload.assignedDepartments)
-            }
-            if (
-                Array.isArray(payload?.handledDepartments) &&
-                payload.handledDepartments.length &&
-                handledDepartments.length === 0
-            ) {
-                setHandledDepartments(payload.handledDepartments)
-            }
-
-            if (typeof payload?.snapshot !== "undefined") setSnapshot(payload.snapshot ?? null)
-            if (typeof payload?.current !== "undefined") setCurrent(payload.current ?? null)
-            if (Array.isArray(payload?.upNext)) setUpNext(payload.upNext)
-            if (Array.isArray(payload?.holdTickets)) setHoldTickets(payload.holdTickets)
-
-            setLastSyncedAtIso(new Date(ts).toISOString())
-            setStateLoading(false)
-            setLoading(false)
-        },
-        [assignedDepartments.length, departmentId, handledDepartments.length, windowInfo]
-    )
-
-    const refresh = React.useCallback(
-        async (opts?: { silent?: boolean; broadcast?: boolean; tickTs?: number }) => {
-            if (!opts?.silent) setStateLoading(true)
-
-            try {
-                const a = await staffApi.myAssignment()
-                setDepartmentId(a.departmentId ?? null)
-                setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
-
-                const normalizedAssigned = uniqueDepartmentAssignments(a.assignedDepartments)
-                const normalizedHandled = uniqueDepartmentAssignments(a.handledDepartments)
-
-                setAssignedDepartments(normalizedAssigned)
-                setHandledDepartments(normalizedHandled.length ? normalizedHandled : normalizedAssigned)
-
-                const assignedReady = Boolean(a.departmentId && a.window?._id)
-
-                // ✅ Updated: prefer centralized queue state for current/upNext/hold
-                const [snapshotResult, queueStateResult] = await Promise.all([
-                    staffApi.getDisplaySnapshot().catch(() => null),
-                    assignedReady ? staffApi.getQueueState().catch(() => null) : Promise.resolve(null),
-                ])
-
-                const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
-                if (!normalizedHandled.length && snapshotHandled.length) {
-                    setHandledDepartments(snapshotHandled)
-                }
-                if (!normalizedAssigned.length && snapshotHandled.length) {
-                    setAssignedDepartments(snapshotHandled)
-                }
-
-                setSnapshot(snapshotResult ?? null)
-
-                // ✅ Extract current/upNext/hold from the centralized state response
-                const extracted = queueStateResult ? extractQueueStateTickets(queueStateResult) : null
-
-                // Fallbacks for older backends or partial payloads
-                let currentTicket: TicketType | null = extracted?.current ?? null
-                let upNextTickets: TicketType[] = extracted?.upNext ?? []
-                let holdList: TicketType[] = extracted?.hold ?? []
-
-                if (assignedReady && !currentTicket) {
-                    try {
-                        const legacyCurrent = await staffApi.currentCalledForWindow()
-                        currentTicket = legacyCurrent.ticket ?? null
-                    } catch {
-                        // ignore
-                    }
-                }
-
-                if (assignedReady && upNextTickets.length === 0) {
-                    try {
-                        const waitingRes = await staffApi.listWaiting({ limit: 16 })
-                        upNextTickets = Array.isArray(waitingRes?.tickets) ? waitingRes.tickets : []
-                    } catch {
-                        // ignore
-                    }
-                }
-
-                if (assignedReady && holdList.length === 0) {
-                    try {
-                        const holdRes = await staffApi.listHold({ limit: 16 })
-                        holdList = Array.isArray(holdRes?.tickets) ? holdRes.tickets : []
-                    } catch {
-                        // ignore
-                    }
-                }
-
-                setCurrent(currentTicket)
-
-                // If we still have no waiting list, use snapshot upNext (board shape) as last resort.
-                if (upNextTickets.length) {
-                    setUpNext(upNextTickets)
-                } else if (snapshotResult?.upNext?.length) {
-                    setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
-                } else {
-                    setUpNext([])
-                }
-
-                setHoldTickets(holdList)
-
-                const tickTs =
-                    typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
-                setLastSyncedAtIso(new Date(tickTs).toISOString())
-                lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, tickTs)
-
-                if (opts?.broadcast) {
-                    const w = a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null
-                    const payload: ServingSyncPayload = {
-                        ts: tickTs,
-                        windowId: w?.id ? String(w.id) : "",
-                        departmentId: a.departmentId ?? null,
-                        windowInfo: w,
-                        assignedDepartments: uniqueDepartmentAssignments(a.assignedDepartments),
-                        handledDepartments: uniqueDepartmentAssignments(
-                            a.handledDepartments?.length ? a.handledDepartments : a.assignedDepartments
-                        ),
-                        snapshot: snapshotResult ?? null,
-                        current: (currentTicket ?? null) as any,
-                        upNext: (upNextTickets.length
-                            ? upNextTickets
-                            : snapshotResult?.upNext?.length
-                              ? snapshotResult.upNext.map(mapBoardWindowToTicketLike)
-                              : []) as any,
-                        holdTickets: (holdList ?? []) as any,
-                    }
-                    broadcastServingState(payload)
-                }
-            } catch (e: any) {
-                const msg = safeErrorMessage(e, "Failed to load now serving.")
-                if (!opts?.silent) {
-                    toast.error(msg)
-                } else {
-                    const now = Date.now()
-                    if (now - lastToastSyncErrorAtRef.current > 15_000) {
-                        lastToastSyncErrorAtRef.current = now
-                        toast.error(msg)
-                    }
-                }
-            } finally {
-                if (!opts?.silent) setStateLoading(false)
-            }
-        },
-        [broadcastServingState]
-    )
 
     const openBoardOnSelectedMonitor = React.useCallback(() => {
         if (typeof window === "undefined") return
@@ -1103,25 +708,11 @@ export default function StaffServingPage() {
         toast.success(`Queue display opened on ${selected.label}.`)
     }, [monitorOptions, panelCount, selectedMonitorId])
 
-    // ✅ Boot: apply last snapshot fast (cross-window sync) then fetch
     React.useEffect(() => {
-        if (typeof window === "undefined") return
-        try {
-            const raw = localStorage.getItem(SERVING_SYNC_SNAPSHOT_KEY)
-            if (!raw) return
-            const parsed = JSON.parse(raw) as any
-            if (parsed?.type !== "SERVING_STATE") return
-            applyRemoteServingState(parsed as any)
-        } catch {
-            // ignore
-        }
-    }, [applyRemoteServingState])
-
-    React.useEffect(() => {
-        ;(async () => {
+        ; (async () => {
             setLoading(true)
             try {
-                await refresh({ broadcast: true, tickTs: Date.now() })
+                await refresh()
             } finally {
                 setLoading(false)
             }
@@ -1133,351 +724,13 @@ export default function StaffServingPage() {
         void loadMonitorOptions(true)
     }, [boardMode, loadMonitorOptions])
 
-    // ✅ Cross-window receive: BroadcastChannel + localStorage fallback
     React.useEffect(() => {
-        if (typeof window === "undefined") return
-
-        if (canUseBroadcastChannel()) {
-            try {
-                const bc = new BroadcastChannel(SERVING_SYNC_CHANNEL)
-                bcRef.current = bc
-                bc.onmessage = (ev) => {
-                    const data = ev?.data
-                    if (!data || typeof data !== "object") return
-                    if ((data as any).type !== "SERVING_STATE") return
-                    applyRemoteServingState(data as any)
-                }
-                return () => {
-                    try {
-                        bc.close()
-                    } catch {
-                        // ignore
-                    }
-                    bcRef.current = null
-                }
-            } catch {
-                // fallback to storage listener only
-            }
-        }
-
-        const onStorage = (e: StorageEvent) => {
-            if (e.key !== SERVING_SYNC_SNAPSHOT_KEY) return
-            if (!e.newValue) return
-            try {
-                const parsed = JSON.parse(e.newValue) as any
-                if (parsed?.type !== "SERVING_STATE") return
-                applyRemoteServingState(parsed as any)
-            } catch {
-                // ignore
-            }
-        }
-
-        window.addEventListener("storage", onStorage)
-        return () => window.removeEventListener("storage", onStorage)
-    }, [applyRemoteServingState])
-
-    // ✅ Leader election: ONE tab polls; all tabs sync instantly
-    React.useEffect(() => {
-        if (typeof window === "undefined") return
-        if (!autoRefresh) {
-            setIsServingLeader(false)
-            return
-        }
-        if (!assignedOk) {
-            setIsServingLeader(false)
-            return
-        }
-
-        const tick = () => {
-            try {
-                const raw = localStorage.getItem(SERVING_POLL_LEADER_KEY)
-                const now = Date.now()
-                const parsed = raw ? (JSON.parse(raw) as { id?: string; ts?: number }) : null
-
-                const leaderId = String(parsed?.id ?? "")
-                const leaderTs = Number(parsed?.ts ?? 0)
-                const expired = !leaderId || !Number.isFinite(leaderTs) || now - leaderTs > LEADER_TTL_MS
-
-                if (expired || leaderId === tabIdRef.current) {
-                    localStorage.setItem(SERVING_POLL_LEADER_KEY, JSON.stringify({ id: tabIdRef.current, ts: now }))
-                    setIsServingLeader(true)
-                } else {
-                    setIsServingLeader(false)
-                }
-            } catch {
-                setIsServingLeader(true)
-            }
-        }
-
-        tick()
-        const iv = window.setInterval(tick, 3000)
-        return () => window.clearInterval(iv)
-    }, [assignedOk, autoRefresh])
-
-    // ✅ Poll loop (leader only): every 2.5s, broadcast to everyone
-    React.useEffect(() => {
-        if (typeof window === "undefined") return
         if (!autoRefresh) return
-        if (!assignedOk) return
-        if (!isServingLeader) return
-
-        const iv = window.setInterval(() => {
-            const tickTs = Date.now()
-            void refresh({ silent: true, broadcast: true, tickTs })
-        }, POLL_MS)
-
-        return () => window.clearInterval(iv)
-    }, [assignedOk, autoRefresh, isServingLeader, refresh])
-
-    const sendCalledSms = React.useCallback(
-        async (
-            ticket: TicketType,
-            opts?: { message?: string; senderName?: string; toastOnSuccess?: boolean; advanceNotice?: boolean }
-        ) => {
-            if (!ticket?._id) {
-                toast.error("No active ticket selected for SMS.")
-                return false
-            }
-
-            const senderName = String(opts?.senderName ?? "").trim()
-            const useAdvance = Boolean(opts?.advanceNotice)
-
-            const message =
-                String(opts?.message ?? "").trim() ||
-                buildCalledSmsMessage({
-                    departmentLabel: smsDepartmentLabel,
-                    queueNumber: Number(ticket.queueNumber),
-                    windowNumber: windowInfo?.number,
-                })
-
-            setSmsBusy(true)
-
-            const nextLog: SmsLog = {
-                at: new Date().toISOString(),
-                current: {
-                    ticketId: String(ticket._id),
-                    queueNumber: Number(ticket.queueNumber),
-                    message,
-                    ok: false,
-                },
-                advance: {
-                    enabled: useAdvance,
-                    attempted: false,
-                },
-            }
-
-            try {
-                // ✅ Updated API: unified alias (/staff/tickets/:id/sms)
-                const res = await staffApi.sendTicketSms(ticket._id, {
-                    message,
-                    ...(senderName ? { senderName } : {}),
-                    respectOptOut: true,
-                    supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
-                    meta: {
-                        source: "staff-serving",
-                        kind: "current_called",
-                        departmentLabel: smsDepartmentLabel,
-                        windowNumber: windowInfo?.number ?? null,
-                    },
-                })
-
-                const outcome = resolveSmsOutcome(res)
-                const sum = summarizeReliability(res?.result)
-                const isFail = shouldTreatSmsAsFailure(res, outcome.label)
-
-                nextLog.current.apiResponse = res
-                nextLog.current.reliabilitySummary = sum
-                nextLog.current.outcomeLabel = outcome.label
-                nextLog.current.outcomeReason = outcome.reason
-                nextLog.current.ok = !isFail
-                nextLog.current.error = isFail
-                    ? outcome.reason || String(res?.error || res?.message || "").trim() || "SMS failed."
-                    : undefined
-
-                if (isFail) {
-                    toast.error(nextLog.current.error || `SMS failed for #${ticket.queueNumber}.`)
-                    setLastSmsLog(nextLog)
-                    return false
-                }
-
-                if (outcome.label === "skipped") {
-                    toast.message(
-                        `SMS skipped for #${ticket.queueNumber}${outcome.reason ? ` • ${outcome.reason}` : " (opted out)."}`.trim()
-                    )
-                } else if (opts?.toastOnSuccess !== false) {
-                    const supportLabel =
-                        sum.supportedNetwork === true ? "supported" : sum.supportedNetwork === false ? "unsupported" : "unknown"
-
-                    toast.success(
-                        `SMS ${sum.deliveryStatus || "sent"} for #${ticket.queueNumber}` +
-                            (sum.providerNetwork ? ` • ${sum.providerNetwork}` : "") +
-                            (sum.providerMessageId ? ` • id ${sum.providerMessageId}` : "")
-                    )
-
-                    if (sum.supportedNetwork !== true) {
-                        toast.message(
-                            `Network check: ${sum.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`
-                        )
-                    }
-                }
-
-                if (!useAdvance) {
-                    nextLog.advance = { enabled: false, attempted: false }
-                    setLastSmsLog(nextLog)
-                    return true
-                }
-
-                // ✅ Updated API alignment: prefer centralized queue state for the waiting list (then fallback)
-                let waitingList: TicketType[] = upNext
-                try {
-                    const qs = await staffApi.getQueueState()
-                    const extracted = extractQueueStateTickets(qs)
-                    waitingList = extracted.upNext.length ? extracted.upNext : waitingList
-                } catch {
-                    // fallback to legacy list
-                    try {
-                        const waitingRes = await staffApi.listWaiting({ limit: 50 })
-                        waitingList = Array.isArray(waitingRes?.tickets) ? waitingRes.tickets : waitingList
-                    } catch {
-                        // ignore
-                    }
-                }
-
-                const nextTicket = pickNextWaitingTicket(Number(ticket.queueNumber), waitingList)
-
-                if (!nextTicket?._id) {
-                    nextLog.advance = {
-                        enabled: true,
-                        attempted: true,
-                        error: "No next waiting ticket found.",
-                    }
-                    setLastSmsLog(nextLog)
-                    toast.message("Advance notice: no next waiting ticket found.")
-                    return true
-                }
-
-                const nextMessage = buildAdvanceNoticeSmsMessage({
-                    departmentLabel: smsDepartmentLabel,
-                    queueNumber: Number(nextTicket.queueNumber),
-                })
-
-                nextLog.advance = {
-                    enabled: true,
-                    attempted: true,
-                    nextTicketId: String(nextTicket._id),
-                    nextQueueNumber: Number(nextTicket.queueNumber),
-                    message: nextMessage,
-                }
-
-                try {
-                    // ✅ Updated API: unified alias (/staff/tickets/:id/sms)
-                    const res2 = await staffApi.sendTicketSms(nextTicket._id, {
-                        message: nextMessage,
-                        ...(senderName ? { senderName } : {}),
-                        respectOptOut: true,
-                        supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
-                        meta: {
-                            source: "staff-serving",
-                            kind: "advance_notice",
-                            relatedCurrentTicketId: String(ticket._id),
-                            relatedCurrentQueueNumber: Number(ticket.queueNumber),
-                            nextQueueNumber: Number(nextTicket.queueNumber),
-                        },
-                    })
-
-                    const outcome2 = resolveSmsOutcome(res2)
-                    const sum2 = summarizeReliability(res2?.result)
-                    const isFail2 = shouldTreatSmsAsFailure(res2, outcome2.label)
-
-                    nextLog.advance.ok = !isFail2
-                    nextLog.advance.apiResponse = res2
-                    nextLog.advance.reliabilitySummary = sum2
-                    nextLog.advance.outcomeLabel = outcome2.label
-                    nextLog.advance.outcomeReason = outcome2.reason
-                    nextLog.advance.error = isFail2
-                        ? outcome2.reason || String(res2?.error || res2?.message || "").trim() || "Advance notice failed."
-                        : undefined
-
-                    if (isFail2) {
-                        toast.message(
-                            `Advance notice failed for next #${nextTicket.queueNumber}${
-                                nextLog.advance.error ? ` • ${nextLog.advance.error}` : ""
-                            }`
-                        )
-                        setLastSmsLog(nextLog)
-                        return true
-                    }
-
-                    if (outcome2.label === "skipped") {
-                        toast.message(
-                            `Advance SMS skipped for next #${nextTicket.queueNumber}${
-                                outcome2.reason ? ` • ${outcome2.reason}` : " (opted out)."
-                            }`.trim()
-                        )
-                    } else {
-                        const supportLabel =
-                            sum2?.supportedNetwork === true
-                                ? "supported"
-                                : sum2?.supportedNetwork === false
-                                  ? "unsupported"
-                                  : "unknown"
-
-                        toast.success(
-                            `Advance notice ${sum2?.deliveryStatus || "sent"} for next #${nextTicket.queueNumber}` +
-                                (sum2?.providerNetwork ? ` • ${sum2.providerNetwork}` : "")
-                        )
-
-                        if (sum2?.supportedNetwork !== true) {
-                            toast.message(
-                                `Network check (advance): ${sum2?.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`
-                            )
-                        }
-                    }
-                } catch (e2: any) {
-                    nextLog.advance.error = safeErrorMessage(e2, "Advance notice failed.")
-                    toast.message(`Advance notice failed: ${nextLog.advance.error}`)
-                }
-
-                setLastSmsLog(nextLog)
-                return true
-            } catch (e: any) {
-                nextLog.current.ok = false
-                nextLog.current.error = safeErrorMessage(e, "Failed to send SMS.")
-                setLastSmsLog(nextLog)
-                toast.error(nextLog.current.error)
-                return false
-            } finally {
-                setSmsBusy(false)
-            }
-        },
-        [smsDepartmentLabel, upNext, windowInfo?.number]
-    )
-
-    const onSendSmsFromDialog = React.useCallback(async () => {
-        if (!current?._id) {
-            toast.message("No active ticket selected for SMS.")
-            return
-        }
-
-        const custom = smsUseDefaultMessage ? "" : smsCustomMessage.trim()
-        if (!smsUseDefaultMessage && !custom) {
-            toast.error("Custom message is required.")
-            return
-        }
-
-        const ok = await sendCalledSms(current, {
-            message: custom || undefined,
-            senderName: smsSenderName.trim() || undefined,
-            toastOnSuccess: true,
-            advanceNotice: smsAdvanceNoticeEnabled,
-        })
-
-        if (!ok) return
-
-        setSmsDialogOpen(false)
-        setSmsUseDefaultMessage(true)
-        setSmsCustomMessage("")
-    }, [current, sendCalledSms, smsCustomMessage, smsSenderName, smsUseDefaultMessage, smsAdvanceNoticeEnabled])
+        const t = window.setInterval(() => {
+            void refresh()
+        }, 5000)
+        return () => window.clearInterval(t)
+    }, [autoRefresh, refresh])
 
     async function onCallNext() {
         if (!assignedOk) return toast.error("You are not assigned to a department/window.")
@@ -1489,16 +742,12 @@ export default function StaffServingPage() {
             announceCall(res.ticket.queueNumber)
 
             if (autoSmsOnCall) {
-                await sendCalledSms(res.ticket, {
-                    senderName: smsSenderName.trim() || undefined,
-                    toastOnSuccess: true,
-                    advanceNotice: smsAdvanceNoticeEnabled,
-                })
+                await sendCalledSms(res.ticket, { toastOnSuccess: true })
             }
 
-            await refresh({ broadcast: true, tickTs: Date.now() })
+            await refresh()
         } catch (e: any) {
-            toast.error(safeErrorMessage(e, "No waiting tickets."))
+            toast.error(e?.message ?? "No waiting tickets.")
         } finally {
             setBusy(false)
         }
@@ -1510,9 +759,9 @@ export default function StaffServingPage() {
         try {
             await staffApi.markServed(current._id)
             toast.success(`Marked #${current.queueNumber} as served.`)
-            await refresh({ broadcast: true, tickTs: Date.now() })
+            await refresh()
         } catch (e: any) {
-            toast.error(safeErrorMessage(e, "Failed to mark served."))
+            toast.error(e?.message ?? "Failed to mark served.")
         } finally {
             setBusy(false)
         }
@@ -1526,11 +775,11 @@ export default function StaffServingPage() {
             toast.success(
                 res.ticket.status === "OUT"
                     ? `Ticket #${current.queueNumber} is OUT.`
-                    : `Ticket #${current.queueNumber} moved to HOLD.`
+                    : `Ticket #${current.queueNumber} moved to HOLD.`,
             )
-            await refresh({ broadcast: true, tickTs: Date.now() })
+            await refresh()
         } catch (e: any) {
-            toast.error(safeErrorMessage(e, "Failed to hold ticket."))
+            toast.error(e?.message ?? "Failed to hold ticket.")
         } finally {
             setBusy(false)
         }
@@ -1548,7 +797,8 @@ export default function StaffServingPage() {
 
         const globalUpNextNumbers = (snapshot?.upNext?.length
             ? snapshot.upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
-            : upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))) as number[]
+            : upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
+        ) as number[]
 
         const globalHoldNumbers = holdTickets.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
 
@@ -1561,19 +811,9 @@ export default function StaffServingPage() {
                                 <Badge variant="secondary">Manager: {snapshot?.board?.transactionManager || "—"}</Badge>
                                 <Badge variant="secondary">Panels: {resolvedPanels}</Badge>
                                 <Badge variant="secondary">Windows: {boardWindows.length}</Badge>
-                                <Badge variant="secondary">Generated: {fmtTime(snapshot?.meta?.generatedAt || null)}</Badge>
-                                <Badge variant={autoRefresh ? "default" : "secondary"}>
-                                    Auto-refresh: {autoRefresh ? `ON (${(POLL_MS / 1000).toFixed(1)}s)` : "OFF"}
+                                <Badge variant="secondary">
+                                    Generated: {fmtTime(snapshot?.meta?.generatedAt || null)}
                                 </Badge>
-                                {lastSyncedAtIso ? (
-                                    <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge>
-                                ) : null}
-                                {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
-                                {autoRefresh ? (
-                                    <Badge variant={isServingLeader ? "default" : "secondary"}>
-                                        Sync leader: {isServingLeader ? "YES" : "NO"}
-                                    </Badge>
-                                ) : null}
                             </div>
 
                             <div className="mt-2">
@@ -1596,15 +836,13 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="mt-2 text-sm text-muted-foreground">
-                                Multi-window queue display (3+ split panes) • synchronized across all open windows
+                                Multi-window queue display (3+ split panes) • auto refresh every 5s
                             </div>
                         </div>
 
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                             <div className="flex items-center gap-2 rounded-md border px-3 py-2">
-                                <Label htmlFor="panelsBoard" className="text-sm">
-                                    Panels
-                                </Label>
+                                <Label htmlFor="panelsBoard" className="text-sm">Panels</Label>
                                 <Select
                                     value={String(Math.max(3, panelCount))}
                                     onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}
@@ -1634,36 +872,10 @@ export default function StaffServingPage() {
                                 </Label>
                             </div>
 
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button variant="outline" size="icon" aria-label="Board options">
-                                        <MoreHorizontal className="h-4 w-4" />
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-56">
-                                    <DropdownMenuLabel>Board options</DropdownMenuLabel>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        onClick={() => {
-                                            const ts = Date.now()
-                                            toast.message("Syncing now…")
-                                            void refresh({ broadcast: true, tickTs: ts })
-                                        }}
-                                    >
-                                        <RefreshCw className="mr-2 h-4 w-4" />
-                                        Sync now
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                        onClick={() => {
-                                            const next = !autoRefresh
-                                            setAutoRefresh(next)
-                                            toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
-                                        }}
-                                    >
-                                        {autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
+                            <Button variant="outline" onClick={() => void refresh()} disabled={loading || busy} className="gap-2">
+                                <RefreshCw className="h-4 w-4" />
+                                Refresh
+                            </Button>
 
                             <Button
                                 variant="secondary"
@@ -1681,7 +893,10 @@ export default function StaffServingPage() {
                     </div>
 
                     <div className="min-h-0 flex-1 overflow-auto p-4 lg:p-6">
-                        <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+                        <div
+                            className="grid gap-4"
+                            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+                        >
                             {panelRows.map((row, idx) => {
                                 if (!row) {
                                     return (
@@ -1703,21 +918,12 @@ export default function StaffServingPage() {
                                 const previewHold = getTwoNumberSlice(globalHoldNumbers, idx)
 
                                 const currentForThisWindow =
-                                    current && (current as any).windowNumber === row.number ? current : null
+                                    current && current.windowNumber === row.number ? current : null
 
-                                const nowServingName = getStudentFullName(row.nowServing as any)
-                                const nowServingSid = getStudentId(row.nowServing as any)
-                                const currentName = currentForThisWindow ? getStudentFullName(currentForThisWindow as any) : ""
-                                const currentSid = currentForThisWindow ? getStudentId(currentForThisWindow as any) : ""
-
-                                const participantLabel =
-                                    nowServingName ||
-                                    currentName ||
-                                    (nowServingSid
-                                        ? `ID/Phone: ${nowServingSid}`
-                                        : currentSid
-                                          ? `ID/Phone: ${currentSid}`
-                                          : "")
+                                const studentLabel =
+                                    (row.nowServing as any)?.studentName ||
+                                    (row.nowServing as any)?.studentId ||
+                                    (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
 
                                 return (
                                     <Card key={row.id || `window-${idx}`} className="min-h-95">
@@ -1735,34 +941,30 @@ export default function StaffServingPage() {
                                                     {queueNumberLabel(row.nowServing?.queueNumber)}
                                                 </div>
 
-                                                <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide whitespace-normal wrap-break-word leading-snug">
-                                                    {participantLabel || "—"}
+                                                <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide">
+                                                    {studentLabel}
                                                 </div>
 
                                                 <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
                                                     <div className="text-center">
                                                         <div className="font-medium">up next:</div>
                                                         <div className="mt-1 leading-6">
-                                                            {previewUpNext.length ? (
-                                                                previewUpNext.map((n) => (
+                                                            {previewUpNext.length
+                                                                ? previewUpNext.map((n) => (
                                                                     <div key={`up-${row.id}-${n}`}>#{n}</div>
                                                                 ))
-                                                            ) : (
-                                                                <div>—</div>
-                                                            )}
+                                                                : <div>—</div>}
                                                         </div>
                                                     </div>
 
                                                     <div className="text-center">
                                                         <div className="font-medium">on hold:</div>
                                                         <div className="mt-1 leading-6">
-                                                            {previewHold.length ? (
-                                                                previewHold.map((n) => (
+                                                            {previewHold.length
+                                                                ? previewHold.map((n) => (
                                                                     <div key={`hold-${row.id}-${n}`}>#{n}</div>
                                                                 ))
-                                                            ) : (
-                                                                <div>—</div>
-                                                            )}
+                                                                : <div>—</div>}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1784,34 +986,6 @@ export default function StaffServingPage() {
         )
     }
 
-    const lastSmsCurrentOutcome = React.useMemo(() => {
-        if (!lastSmsLog?.current?.apiResponse) return null
-        try {
-            return resolveSmsOutcome(lastSmsLog.current.apiResponse)
-        } catch {
-            return null
-        }
-    }, [lastSmsLog?.current?.apiResponse])
-
-    const lastSmsCurrentReliability = lastSmsLog?.current?.reliabilitySummary
-
-    const lastSmsBadgeText =
-        lastSmsLog && lastSmsCurrentOutcome
-            ? lastSmsCurrentOutcome.label === "failed"
-                ? "Last SMS: Failed"
-                : lastSmsCurrentOutcome.label === "skipped"
-                  ? "Last SMS: Skipped"
-                  : lastSmsCurrentOutcome.label === "sent"
-                    ? `Last SMS: ${lastSmsCurrentReliability?.deliveryStatus || "Sent"}`
-                    : "Last SMS: Logged"
-            : "Last SMS: —"
-
-    const syncBadgeText = React.useMemo(() => {
-        if (!assignedOk) return "Auto-refresh: —"
-        if (!autoRefresh) return "Auto-refresh: OFF"
-        return `Auto-refresh: ON (${(POLL_MS / 1000).toFixed(1)}s)`
-    }, [assignedOk, autoRefresh])
-
     return (
         <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
@@ -1824,12 +998,21 @@ export default function StaffServingPage() {
                                     Now Serving Board
                                 </CardTitle>
                                 <CardDescription>
-                                    Live operator board with synchronized auto-refresh across all open windows. Open{" "}
-                                    <strong>?board=1&amp;panels=3</strong> for monitor display mode.
+                                    Dedicated operator board for live calling. Open <strong>?board=1&amp;panels=3</strong> for monitor display mode.
                                 </CardDescription>
                             </div>
 
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => void refresh()}
+                                    disabled={loading || busy}
+                                    className="w-full gap-2 sm:w-auto"
+                                >
+                                    <RefreshCw className="h-4 w-4" />
+                                    Refresh
+                                </Button>
+
                                 <Button
                                     onClick={() => void onCallNext()}
                                     disabled={loading || busy || !assignedOk}
@@ -1855,37 +1038,6 @@ export default function StaffServingPage() {
                                     Recall voice
                                 </Button>
 
-                                <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                        <Button variant="outline" size="icon" className="shrink-0" aria-label="Now Serving options">
-                                            <MoreHorizontal className="h-4 w-4" />
-                                        </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" className="w-60">
-                                        <DropdownMenuLabel>Now Serving options</DropdownMenuLabel>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem
-                                            onClick={() => {
-                                                const ts = Date.now()
-                                                toast.message("Syncing now…")
-                                                void refresh({ broadcast: true, tickTs: ts })
-                                            }}
-                                        >
-                                            <RefreshCw className="mr-2 h-4 w-4" />
-                                            Sync now
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem
-                                            onClick={() => {
-                                                const next = !autoRefresh
-                                                setAutoRefresh(next)
-                                                toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
-                                            }}
-                                        >
-                                            {autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}
-                                        </DropdownMenuItem>
-                                    </DropdownMenuContent>
-                                </DropdownMenu>
-
                                 <Dialog open={smsDialogOpen} onOpenChange={setSmsDialogOpen}>
                                     <DialogTrigger asChild>
                                         <Button
@@ -1901,9 +1053,10 @@ export default function StaffServingPage() {
                                         <DialogHeader>
                                             <DialogTitle>Send SMS notification</DialogTitle>
                                             <DialogDescription>
-                                                Sends a reliable Semaphore SMS via backend. Includes{" "}
-                                                <strong>network check (Globe/Smart)</strong> and optional{" "}
-                                                <strong>advance notice</strong> to the next queue number.
+                                                Notify the current ticket via Semaphore SMS.
+                                                {current
+                                                    ? ` Ticket #${current.queueNumber} • Student ID: ${current.studentId || "—"}`
+                                                    : " No active ticket selected."}
                                             </DialogDescription>
                                         </DialogHeader>
 
@@ -1915,17 +1068,6 @@ export default function StaffServingPage() {
                                                     value={smsSenderName}
                                                     onChange={(e) => setSmsSenderName(e.target.value)}
                                                     placeholder="e.g. QUEUE"
-                                                />
-                                            </div>
-
-                                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                                                <Label htmlFor="smsAdvanceNoticeToggleDialog" className="text-sm">
-                                                    Advance notice SMS (next queue)
-                                                </Label>
-                                                <Switch
-                                                    id="smsAdvanceNoticeToggleDialog"
-                                                    checked={smsAdvanceNoticeEnabled}
-                                                    onCheckedChange={(v) => setSmsAdvanceNoticeEnabled(Boolean(v))}
                                                 />
                                             </div>
 
@@ -1943,11 +1085,7 @@ export default function StaffServingPage() {
                                             {smsUseDefaultMessage ? (
                                                 <div className="rounded-md border bg-muted p-3 text-sm text-muted-foreground">
                                                     {current
-                                                        ? buildCalledSmsMessage({
-                                                              departmentLabel: smsDepartmentLabel,
-                                                              queueNumber: current.queueNumber,
-                                                              windowNumber: windowInfo?.number,
-                                                          })
+                                                        ? defaultSmsCalledMessage(current.queueNumber, windowInfo?.number)
                                                         : "Queue update message preview will appear when an active ticket is selected."}
                                                 </div>
                                             ) : (
@@ -1962,12 +1100,6 @@ export default function StaffServingPage() {
                                                     />
                                                 </div>
                                             )}
-
-                                            <div className="rounded-md border p-3 text-xs text-muted-foreground">
-                                                Reliability checks enabled: <strong>Supported networks:</strong> Globe / Smart •{" "}
-                                                <strong>Status:</strong> queued/sent/failed • <strong>Provider response:</strong> logged to
-                                                SMS Log.
-                                            </div>
                                         </div>
 
                                         <DialogFooter>
@@ -1991,47 +1123,6 @@ export default function StaffServingPage() {
                                         </DialogFooter>
                                     </DialogContent>
                                 </Dialog>
-
-                                <Dialog open={smsLogDialogOpen} onOpenChange={setSmsLogDialogOpen}>
-                                    <DialogTrigger asChild>
-                                        <Button variant="outline" disabled={!lastSmsLog} className="w-full gap-2 sm:w-auto">
-                                            <MessageSquare className="h-4 w-4" />
-                                            SMS Log
-                                        </Button>
-                                    </DialogTrigger>
-                                    <DialogContent className="sm:max-w-170">
-                                        <DialogHeader>
-                                            <DialogTitle>SMS Log (Reliability + Provider Response)</DialogTitle>
-                                            <DialogDescription>Last send attempt details for auditing and troubleshooting.</DialogDescription>
-                                        </DialogHeader>
-
-                                        {!lastSmsLog ? (
-                                            <div className="rounded-md border p-4 text-sm text-muted-foreground">No SMS logs yet.</div>
-                                        ) : (
-                                            <div className="grid gap-3">
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    <Badge variant="secondary">At: {fmtTime(lastSmsLog.at)}</Badge>
-                                                    <Badge variant="secondary">Current: #{lastSmsLog.current.queueNumber}</Badge>
-                                                    <Badge variant="secondary">
-                                                        Advance: {lastSmsLog.advance?.enabled ? "Enabled" : "Disabled"}
-                                                    </Badge>
-                                                    <Badge variant="secondary">Networks: {SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}</Badge>
-                                                </div>
-
-                                                <div className="grid gap-2">
-                                                    <Label>Raw provider response (JSON)</Label>
-                                                    <Textarea value={safeJson(lastSmsLog)} readOnly className="min-h-80 font-mono text-xs" />
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        <DialogFooter>
-                                            <Button type="button" onClick={() => setSmsLogDialogOpen(false)}>
-                                                Close
-                                            </Button>
-                                        </DialogFooter>
-                                    </DialogContent>
-                                </Dialog>
                             </div>
                         </div>
 
@@ -2040,20 +1131,20 @@ export default function StaffServingPage() {
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex flex-wrap items-center gap-2 text-sm">
                                 <Badge variant="secondary">Assigned depts: {assignedDepartmentItems.length}</Badge>
-                                <Badge variant="secondary">Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}</Badge>
-                                <Badge variant="secondary">Manager: {snapshot?.board?.transactionManager || "—"}</Badge>
-                                <Badge variant="secondary">Managed windows: {snapshot?.board?.windows?.length ?? 0}</Badge>
-                                <Badge variant="secondary">{lastSmsBadgeText}</Badge>
+                                <Badge variant="secondary">
+                                    Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    Manager: {snapshot?.board?.transactionManager || "—"}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    Managed windows: {snapshot?.board?.windows?.length ?? 0}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    SMS: {smsBusy ? "Sending..." : autoSmsOnCall ? "Auto on call" : "Manual"}
+                                </Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
-                                <Badge variant={autoRefresh ? "default" : "secondary"}>{syncBadgeText}</Badge>
-                                {lastSyncedAtIso ? <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge> : null}
-                                {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
-                                {autoRefresh && assignedOk ? (
-                                    <Badge variant={isServingLeader ? "default" : "secondary"}>
-                                        Sync leader: {isServingLeader ? "YES" : "NO"}
-                                    </Badge>
-                                ) : null}
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2">
@@ -2061,11 +1152,7 @@ export default function StaffServingPage() {
                                     <Switch
                                         id="autoRefresh"
                                         checked={autoRefresh}
-                                        onCheckedChange={(v) => {
-                                            const next = Boolean(v)
-                                            setAutoRefresh(next)
-                                            toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
-                                        }}
+                                        onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
                                         disabled={busy}
                                     />
                                     <Label htmlFor="autoRefresh" className="text-sm">
@@ -2096,24 +1183,14 @@ export default function StaffServingPage() {
                                         Auto SMS on call
                                     </Label>
                                 </div>
-
-                                <div className="flex items-center gap-2 rounded-md border px-3 py-2">
-                                    <Switch
-                                        id="smsAdvanceNoticeToggle"
-                                        checked={smsAdvanceNoticeEnabled}
-                                        onCheckedChange={(v) => setSmsAdvanceNoticeEnabled(Boolean(v))}
-                                        disabled={busy || smsBusy || !assignedOk}
-                                    />
-                                    <Label htmlFor="smsAdvanceNoticeToggle" className="text-sm">
-                                        Advance notice SMS
-                                    </Label>
-                                </div>
                             </div>
                         </div>
 
                         <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-2">
                             <div>
-                                <div className="text-xs uppercase tracking-widest text-muted-foreground">Assigned departments</div>
+                                <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                    Assigned departments
+                                </div>
                                 {assignedDepartmentItems.length ? (
                                     <div className="mt-2 flex flex-wrap gap-2">
                                         {assignedDepartmentItems.map((dep) => (
@@ -2142,16 +1219,16 @@ export default function StaffServingPage() {
                                         ))}
                                     </div>
                                 ) : (
-                                    <div className="mt-2 text-xs text-muted-foreground">No handled departments available.</div>
+                                    <div className="mt-2 text-xs text-muted-foreground">
+                                        No handled departments available.
+                                    </div>
                                 )}
                             </div>
                         </div>
 
                         <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-12">
                             <div className="lg:col-span-3">
-                                <Label htmlFor="monitorSelect" className="mb-2 block text-sm">
-                                    Display monitor
-                                </Label>
+                                <Label htmlFor="monitorSelect" className="mb-2 block text-sm">Display monitor</Label>
                                 <Select
                                     value={selectedMonitorId || undefined}
                                     onValueChange={setSelectedMonitorId}
@@ -2171,9 +1248,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-2">
-                                <Label htmlFor="panelCountSelect" className="mb-2 block text-sm">
-                                    Split panels
-                                </Label>
+                                <Label htmlFor="panelCountSelect" className="mb-2 block text-sm">Split panels</Label>
                                 <Select value={String(panelCount)} onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}>
                                     <SelectTrigger id="panelCountSelect" className="w-full">
                                         <SelectValue placeholder="Panels" />
@@ -2189,9 +1264,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-3">
-                                <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">
-                                    Announcement voice (English)
-                                </Label>
+                                <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">Announcement voice (English)</Label>
                                 <Select
                                     value={selectedVoiceType}
                                     onValueChange={(v) => setSelectedVoiceType(v === "man" ? "man" : "woman")}
@@ -2201,8 +1274,12 @@ export default function StaffServingPage() {
                                         <SelectValue placeholder="Select voice type" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="woman">Woman ({formatVoiceLabel(resolvedEnglishVoices.woman)})</SelectItem>
-                                        <SelectItem value="man">Man ({formatVoiceLabel(resolvedEnglishVoices.man)})</SelectItem>
+                                        <SelectItem value="woman">
+                                            Woman ({formatVoiceLabel(resolvedEnglishVoices.woman)})
+                                        </SelectItem>
+                                        <SelectItem value="man">
+                                            Man ({formatVoiceLabel(resolvedEnglishVoices.man)})
+                                        </SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -2220,7 +1297,11 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="flex flex-col justify-end gap-2 lg:col-span-2">
-                                <Button className="w-full gap-2" onClick={openBoardOnSelectedMonitor} disabled={!monitorOptions.length}>
+                                <Button
+                                    className="w-full gap-2"
+                                    onClick={openBoardOnSelectedMonitor}
+                                    disabled={!monitorOptions.length}
+                                >
                                     <ExternalLink className="h-4 w-4" />
                                     Open queue board
                                 </Button>
@@ -2233,14 +1314,11 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                Voice engine: react-text-to-speech • English only • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man:{" "}
-                                {formatVoiceLabel(resolvedEnglishVoices.man)}
+                                Voice engine: react-text-to-speech • English only • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                SMS engine: Semaphore via backend • <strong>Reliability:</strong> network check ({SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")})
-                                + status + provider response log • <strong>Advance notice:</strong>{" "}
-                                {smsAdvanceNoticeEnabled ? "Enabled" : "Disabled"}
+                                SMS engine: Semaphore via backend • {autoSmsOnCall ? "Auto send is enabled when calling next." : "Manual send mode is enabled."}
                             </div>
                         </div>
                     </CardHeader>
@@ -2253,6 +1331,7 @@ export default function StaffServingPage() {
                             </div>
                         ) : (
                             <div className="grid gap-6 lg:grid-cols-12">
+                                {/* Main billboard */}
                                 <Card className="lg:col-span-8">
                                     <CardHeader>
                                         <CardTitle>Active ticket billboard</CardTitle>
@@ -2264,29 +1343,26 @@ export default function StaffServingPage() {
                                             <>
                                                 <div className="rounded-2xl border bg-muted p-6">
                                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                                        <div className="min-w-0">
+                                                        <div>
                                                             <div className="text-xs uppercase tracking-widest text-muted-foreground">
                                                                 Now serving
                                                             </div>
-                                                            <div className="mt-2 text-7xl font-semibold tracking-tight">#{current.queueNumber}</div>
-
+                                                            <div className="mt-2 text-7xl font-semibold tracking-tight">
+                                                                #{current.queueNumber}
+                                                            </div>
                                                             <div className="mt-3 text-sm text-muted-foreground">
-                                                                Participant:{" "}
-                                                                <span className="font-medium text-foreground whitespace-normal wrap-break-word">
-                                                                    {getStudentFullName(current) || "—"}
-                                                                </span>
+                                                                Student ID: {current.studentId ?? "—"}
                                                             </div>
-
                                                             <div className="text-sm text-muted-foreground">
-                                                                ID/Phone: <span className="tabular-nums">{getStudentId(current) || "—"}</span>
+                                                                Called at: {fmtTime((current as any).calledAt)}
                                                             </div>
-
-                                                            <div className="text-sm text-muted-foreground">Called at: {fmtTime((current as any).calledAt)}</div>
                                                         </div>
 
                                                         <div className="flex flex-col items-start gap-2 md:items-end">
                                                             <Badge>CALLED</Badge>
-                                                            <div className="text-xs text-muted-foreground">Hold attempts: {current.holdAttempts ?? 0}</div>
+                                                            <div className="text-xs text-muted-foreground">
+                                                                Hold attempts: {current.holdAttempts ?? 0}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2314,7 +1390,12 @@ export default function StaffServingPage() {
                                                         Hold / No-show
                                                     </Button>
 
-                                                    <Button type="button" onClick={() => void onServed()} disabled={busy} className="w-full gap-2 sm:w-auto">
+                                                    <Button
+                                                        type="button"
+                                                        onClick={() => void onServed()}
+                                                        disabled={busy}
+                                                        className="w-full gap-2 sm:w-auto"
+                                                    >
                                                         <CheckCircle2 className="h-4 w-4" />
                                                         Mark served
                                                     </Button>
@@ -2328,6 +1409,7 @@ export default function StaffServingPage() {
                                     </CardContent>
                                 </Card>
 
+                                {/* Operator side rail */}
                                 <Card className="lg:col-span-4">
                                     <CardHeader>
                                         <CardTitle>Operator rail</CardTitle>
@@ -2341,27 +1423,15 @@ export default function StaffServingPage() {
                                                 <div className="rounded-lg border p-4 text-sm text-muted-foreground">No WAITING tickets.</div>
                                             ) : (
                                                 <div className="grid gap-2">
-                                                    {upNext.slice(0, 6).map((t, idx) => {
-                                                        const name = getStudentFullName(t)
-                                                        const sid = getStudentId(t)
-
-                                                        return (
-                                                            <div key={t._id} className="flex items-start justify-between gap-3 rounded-xl border p-3">
-                                                                <div className="min-w-0">
-                                                                    <div className="text-xl font-semibold tabular-nums">#{t.queueNumber}</div>
-                                                                    <div className="mt-1 font-medium whitespace-normal wrap-break-word leading-snug">{name || "—"}</div>
-                                                                    <div className="mt-1 text-xs text-muted-foreground">
-                                                                        ID/Phone: <span className="tabular-nums">{sid || "—"}</span>
-                                                                    </div>
-                                                                </div>
-
-                                                                <div className="shrink-0 text-right text-xs text-muted-foreground">
-                                                                    <div>{idx === 0 ? "Next" : "Waiting"}</div>
-                                                                    <div>{fmtTime((t as any).waitingSince)}</div>
-                                                                </div>
+                                                    {upNext.slice(0, 6).map((t, idx) => (
+                                                        <div key={t._id} className="flex items-center justify-between rounded-xl border p-3">
+                                                            <div className="text-xl font-semibold">#{t.queueNumber}</div>
+                                                            <div className="text-right text-xs text-muted-foreground">
+                                                                <div>{idx === 0 ? "Next" : "Waiting"}</div>
+                                                                <div>{fmtTime((t as any).waitingSince)}</div>
                                                             </div>
-                                                        )
-                                                    })}
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             )}
                                         </div>
@@ -2383,6 +1453,7 @@ export default function StaffServingPage() {
                                     </CardContent>
                                 </Card>
 
+                                {/* Multi-window manager preview */}
                                 <Card className="lg:col-span-12">
                                     <CardHeader>
                                         <CardTitle className="flex items-center gap-2">
@@ -2390,7 +1461,7 @@ export default function StaffServingPage() {
                                             Manager multi-window preview
                                         </CardTitle>
                                         <CardDescription>
-                                            Queue display layout mirrors window cards: big number + participant label + up next + on hold.
+                                            Queue display layout mirrors window cards: big number + student label + up next + on hold.
                                         </CardDescription>
                                     </CardHeader>
 
@@ -2399,58 +1470,54 @@ export default function StaffServingPage() {
                                             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                                                 {snapshot.board.windows.map((w, idx) => {
                                                     const previewUpNext = getTwoNumberSlice(
-                                                        (snapshot?.upNext?.map((t) => Number(t.queueNumber)).filter((n) =>
-                                                            Number.isFinite(n)
-                                                        ) as number[]) || [],
-                                                        idx
+                                                        (snapshot?.upNext?.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n)) as number[]) || [],
+                                                        idx,
                                                     )
                                                     const previewHold = getTwoNumberSlice(
                                                         holdTickets.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n)),
-                                                        idx
+                                                        idx,
                                                     )
 
-                                                    const currentForThisWindow = current && (current as any).windowNumber === w.number ? current : null
+                                                    const currentForThisWindow =
+                                                        current && current.windowNumber === w.number ? current : null
 
-                                                    const nowServingName = getStudentFullName(w.nowServing as any)
-                                                    const nowServingSid = getStudentId(w.nowServing as any)
-                                                    const currentName = currentForThisWindow ? getStudentFullName(currentForThisWindow as any) : ""
-                                                    const currentSid = currentForThisWindow ? getStudentId(currentForThisWindow as any) : ""
-
-                                                    const participantLabel =
-                                                        nowServingName ||
-                                                        currentName ||
-                                                        (nowServingSid ? `ID/Phone: ${nowServingSid}` : currentSid ? `ID/Phone: ${currentSid}` : "")
+                                                    const studentLabel =
+                                                        (w.nowServing as any)?.studentName ||
+                                                        (w.nowServing as any)?.studentId ||
+                                                        (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
 
                                                     return (
                                                         <div key={w.id} className="rounded-xl border p-4">
-                                                            <div className="text-center text-lg font-semibold">Window {w.number}</div>
+                                                            <div className="text-center text-lg font-semibold">
+                                                                Window {w.number}
+                                                            </div>
                                                             <div className="mt-3 text-center text-base font-medium">Now Serving:</div>
                                                             <div className="mt-2 text-center text-[clamp(3.4rem,8vw,6rem)] font-bold leading-none">
                                                                 {queueNumberLabel(w.nowServing?.queueNumber)}
                                                             </div>
-                                                            <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide whitespace-normal wrap-break-word leading-snug">
-                                                                {participantLabel || "—"}
+                                                            <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide">
+                                                                {studentLabel}
                                                             </div>
 
                                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
                                                                 <div className="text-center">
                                                                     <div className="font-medium">up next:</div>
                                                                     <div className="mt-1 leading-5">
-                                                                        {previewUpNext.length ? (
-                                                                            previewUpNext.map((n) => <div key={`preview-up-${w.id}-${n}`}>#{n}</div>)
-                                                                        ) : (
-                                                                            <div>—</div>
-                                                                        )}
+                                                                        {previewUpNext.length
+                                                                            ? previewUpNext.map((n) => (
+                                                                                <div key={`preview-up-${w.id}-${n}`}>#{n}</div>
+                                                                            ))
+                                                                            : <div>—</div>}
                                                                     </div>
                                                                 </div>
                                                                 <div className="text-center">
                                                                     <div className="font-medium">on hold:</div>
                                                                     <div className="mt-1 leading-5">
-                                                                        {previewHold.length ? (
-                                                                            previewHold.map((n) => <div key={`preview-hold-${w.id}-${n}`}>#{n}</div>)
-                                                                        ) : (
-                                                                            <div>—</div>
-                                                                        )}
+                                                                        {previewHold.length
+                                                                            ? previewHold.map((n) => (
+                                                                                <div key={`preview-hold-${w.id}-${n}`}>#{n}</div>
+                                                                            ))
+                                                                            : <div>—</div>}
                                                                     </div>
                                                                 </div>
                                                             </div>

@@ -35,6 +35,10 @@ export type Ticket = {
     dateKey: string
     queueNumber: number
 
+    /**
+     * ⚠️ Backward-compat identifier.
+     * Backend may store Student ID OR Mobile here (older schema).
+     */
     studentId: string
     phone?: string
 
@@ -48,6 +52,18 @@ export type Ticket = {
      * ✅ Full name (Student / Alumni-Visitor / Guest)
      */
     participantFullName?: string | null
+
+    /**
+     * ✅ New enriched fields from updated staffController enrichTickets()
+     * - participantDisplay: "Full Name • Student ID (if student) • Mobile"
+     * - participantStudentId: only when participantType === STUDENT
+     * - participantMobileNumber: best-effort extracted mobile number
+     * - participantIdentifier: original identifier (student id OR mobile)
+     */
+    participantDisplay?: string | null
+    participantStudentId?: string | null
+    participantMobileNumber?: string | null
+    participantIdentifier?: string | null
 
     /**
      * ✅ Optional richer helpers returned by backend enrichers
@@ -87,6 +103,8 @@ export type Ticket = {
         participant?: string | null
         participantType?: TicketParticipantType | string
         participantFullName?: string | null
+        participantStudentId?: string | null
+        participantMobileNumber?: string | null
         transactionKeys?: string[]
         transactionLabels?: string[]
         [key: string]: any
@@ -181,12 +199,17 @@ export type StaffDisplayNowServing = {
     departmentId: string | null
     departmentName: string | null
     departmentCode: string | null
+    transactionManager?: string | null
     windowId: string | null
     windowName: string | null
     windowNumber: number | null
 
     // ✅ participant
     participantFullName: string | null
+    participantDisplay?: string | null
+    participantStudentId?: string | null
+    participantMobileNumber?: string | null
+
     participantLabel: string | null
     participantType: TicketParticipantType | string | null
     participantTypeLabel: string | null
@@ -204,9 +227,14 @@ export type StaffDisplayUpNextItem = {
     departmentId: string | null
     departmentName: string | null
     departmentCode: string | null
+    transactionManager?: string | null
 
     // ✅ participant
     participantFullName: string | null
+    participantDisplay?: string | null
+    participantStudentId?: string | null
+    participantMobileNumber?: string | null
+
     participantLabel: string | null
     participantType: TicketParticipantType | string | null
     participantTypeLabel: string | null
@@ -234,6 +262,10 @@ export type StaffDisplayBoardWindow = {
 
         // ✅ participant
         participantFullName: string | null
+        participantDisplay?: string | null
+        participantStudentId?: string | null
+        participantMobileNumber?: string | null
+
         participantLabel: string | null
         participantType: TicketParticipantType | string | null
         participantTypeLabel: string | null
@@ -428,8 +460,60 @@ function isLikelyHumanName(label: unknown, identifier?: string) {
     return true
 }
 
+function looksLikePhoneNumber(input?: string) {
+    const raw = String(input || "").trim()
+    if (!raw) return false
+    if (raw.includes("@")) return false
+    if (!/^[\d+\-\s()]+$/.test(raw)) return false
+    const digits = raw.replace(/[^\d]/g, "")
+    return digits.length >= 10
+}
+
+function normalizeParticipantType(value: unknown): TicketParticipantType | string | null {
+    const raw = String(value ?? "").trim().toUpperCase()
+    if (!raw) return null
+    if (raw === "STUDENT") return "STUDENT"
+    if (raw === "GUEST") return "GUEST"
+    if (raw === "ALUMNI_VISITOR" || raw === "ALUMNI/VISITOR" || raw === "ALUMNI" || raw === "VISITOR") {
+        return "ALUMNI_VISITOR"
+    }
+    return raw
+}
+
+function buildParticipantDisplayLine(params: {
+    participantFullName: string
+    participantType?: string | null
+    studentId?: string | null
+    mobileNumber?: string | null
+}) {
+    const fullName = String(params.participantFullName || "").trim()
+    const type = String(params.participantType || "").toUpperCase()
+    const studentId = String(params.studentId || "").trim()
+    const mobile = String(params.mobileNumber || "").trim()
+
+    const parts: string[] = []
+    if (fullName) parts.push(fullName)
+
+    // only show student id when participant is student
+    if (type === "STUDENT" && studentId && studentId !== fullName) parts.push(studentId)
+
+    // show mobile if available (for Student/Alumni/Guest)
+    if (mobile && mobile !== fullName) parts.push(mobile)
+
+    return parts.join(" • ")
+}
+
 function normalizeTicketParticipant(t: Ticket): Ticket {
-    const studentId = String(t?.studentId ?? "").trim()
+    const identifier = String(t?.participantIdentifier ?? t?.studentId ?? "").trim()
+    const participantTypeRaw =
+        t?.participantType ??
+        t?.transactions?.participantType ??
+        t?.meta?.participantType ??
+        t?.join?.participantType ??
+        t?.userType ??
+        t?.role
+
+    const participantType = normalizeParticipantType(participantTypeRaw)
 
     const selectionName = Array.isArray(t?.transactionSelections)
         ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
@@ -440,15 +524,50 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
     const participantFullName =
         String(t?.participantFullName ?? "").trim() ||
         (selectionName ? selectionName : "") ||
-        (isLikelyHumanName(label, studentId) ? label : "")
+        (isLikelyHumanName(label, identifier) ? label : "")
 
     const finalFullName = participantFullName ? participantFullName : null
 
+    // ✅ Student ID should only appear for students
+    const studentIdFromTicket = !looksLikePhoneNumber(identifier) ? identifier : ""
+    const participantStudentId =
+        participantType === "STUDENT"
+            ? String(t?.participantStudentId ?? "").trim() || (studentIdFromTicket ? studentIdFromTicket : "")
+            : ""
+
+    // ✅ Mobile should show for anyone if we can infer it
+    const phone = String(t?.phone ?? "").trim()
+    const participantMobileNumber =
+        String(t?.participantMobileNumber ?? "").trim() ||
+        (phone ? phone : "") ||
+        (looksLikePhoneNumber(identifier) ? identifier : "")
+
+    const baseName =
+        (finalFullName && finalFullName.trim()) ||
+        (isLikelyHumanName(label, identifier) ? label : "") ||
+        (identifier ? identifier : "") ||
+        "Participant"
+
+    const participantDisplay =
+        String(t?.participantDisplay ?? "").trim() ||
+        buildParticipantDisplayLine({
+            participantFullName: baseName,
+            participantType: String(participantType ?? ""),
+            studentId: participantStudentId || null,
+            mobileNumber: participantMobileNumber || null,
+        })
+
+    const displayFinal = participantDisplay ? participantDisplay : null
+
     return {
         ...t,
+        participantType: (participantType as any) ?? t.participantType,
         participantFullName: finalFullName,
-        // Keep label, but prefer full name for best UX
-        participantLabel: finalFullName || (t.participantLabel ?? null),
+        participantStudentId: participantStudentId ? participantStudentId : (t.participantStudentId ?? null),
+        participantMobileNumber: participantMobileNumber ? participantMobileNumber : (t.participantMobileNumber ?? null),
+        participantDisplay: displayFinal,
+        // ✅ For BEST UX, make existing UIs that render `participantLabel` show the rich display line.
+        participantLabel: displayFinal || finalFullName || (t.participantLabel ?? null),
     }
 }
 
@@ -474,37 +593,50 @@ function normalizeCurrentCalledResponse(res: CurrentCalledResponse): CurrentCall
 }
 
 function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnapshotResponse {
-    const normalizeName = (full: string | null, label: string | null) => {
-        if (full && String(full).trim()) return full
-        if (label && isLikelyHumanName(label)) return label
-        return null
+    const normalizeDisplay = (item: any) => {
+        if (!item) return item
+
+        const type = normalizeParticipantType(item?.participantType)
+        const full = String(item?.participantFullName ?? "").trim()
+        const label = String(item?.participantLabel ?? "").trim()
+
+        const studentId = String(item?.participantStudentId ?? "").trim()
+        const mobile = String(item?.participantMobileNumber ?? "").trim()
+
+        const baseName = full || (isLikelyHumanName(label) ? label : "") || "Participant"
+
+        const display =
+            String(item?.participantDisplay ?? "").trim() ||
+            buildParticipantDisplayLine({
+                participantFullName: baseName,
+                participantType: String(type ?? ""),
+                studentId: studentId || null,
+                mobileNumber: mobile || null,
+            })
+
+        const displayFinal = display ? display : null
+        const fullFinal = full || (isLikelyHumanName(label) ? label : "") || null
+
+        return {
+            ...item,
+            participantType: type ?? item.participantType ?? null,
+            participantFullName: fullFinal,
+            participantDisplay: displayFinal,
+            // ✅ Ensure legacy UI fields still show the rich participant line
+            participantLabel: displayFinal || fullFinal || item.participantLabel || null,
+        }
     }
 
     return {
         ...res,
-        nowServing: res.nowServing
-            ? {
-                  ...res.nowServing,
-                  participantFullName: normalizeName(res.nowServing.participantFullName, res.nowServing.participantLabel),
-              }
-            : null,
-        upNext: Array.isArray(res.upNext)
-            ? res.upNext.map((x) => ({
-                  ...x,
-                  participantFullName: normalizeName(x.participantFullName, x.participantLabel),
-              }))
-            : [],
+        nowServing: res.nowServing ? normalizeDisplay(res.nowServing) : null,
+        upNext: Array.isArray(res.upNext) ? res.upNext.map((x) => normalizeDisplay(x)) : [],
         board: {
             ...(res.board as any),
             windows: Array.isArray(res?.board?.windows)
                 ? res.board.windows.map((w) => ({
                       ...w,
-                      nowServing: w.nowServing
-                          ? {
-                                ...w.nowServing,
-                                participantFullName: normalizeName(w.nowServing.participantFullName, w.nowServing.participantLabel),
-                            }
-                          : null,
+                      nowServing: w.nowServing ? normalizeDisplay(w.nowServing) : null,
                   }))
                 : [],
         },
@@ -697,8 +829,7 @@ export const staffApi = {
         api.getData<MyAssignmentResponse>("/staff/me/assignment", STAFF_AUTH).then((res) => normalizeMyAssignmentPayload(res)),
 
     // ✅ Department-to-window assignment map
-    getWindowAssignments: () =>
-        api.getData<WindowAssignmentsResponse>("/staff/queue/window-assignments", STAFF_AUTH),
+    getWindowAssignments: () => api.getData<WindowAssignmentsResponse>("/staff/queue/window-assignments", STAFF_AUTH),
 
     // ✅ Dedicated backend snapshot for staff presentation/monitor pages
     getDisplaySnapshot: () =>
