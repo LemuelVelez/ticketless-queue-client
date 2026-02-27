@@ -291,17 +291,17 @@ function participantAuthHeaders(): Record<string, string> | undefined {
     const token = participantAuthStorage.getToken()
     if (!token) return undefined
 
-    // ✅ FIX: send session token via BOTH headers for max compatibility
-    // - Some proxies/middlewares may strip Authorization
-    // - Backend already supports x-session-token
-    return {
-        Authorization: `Bearer ${token}`,
-        "X-Session-Token": token,
-    }
+    // ✅ Send both for maximum compatibility:
+    // - Some proxies strip Authorization in certain deployments.
+    // - Backend supports both Authorization Bearer and x-session-token.
+    return { Authorization: `Bearer ${token}`, "X-Session-Token": token }
 }
 
 function persistToken<T extends ParticipantAuthResponse>(res: T): T {
-    const token = res?.token || res?.sessionToken
+    // ✅ FIX: Prefer sessionToken over token.
+    // The public session + join-queue endpoints validate session tokens (verifyParticipantSession).
+    // If backend returns BOTH (token + sessionToken), storing "token" breaks Join Queue and Session.
+    const token = res?.sessionToken || res?.token
     if (token) participantAuthStorage.setToken(token)
     return res
 }
@@ -425,5 +425,5 @@ export const studentApi = {
         }),
 }
 
-// Keep legacy import name while sharing one unified implementation.
+// Compatibility alias for modules that still import guestApi from student.ts
 export const guestApi = studentApi
