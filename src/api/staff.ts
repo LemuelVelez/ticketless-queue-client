@@ -393,21 +393,61 @@ export type ReportsTimeseriesResponse = {
  * ========================= */
 
 export type StaffSendSmsRequest = {
-    number: string
+    /**
+     * Backend accepts `numbers` (preferred) OR `number` (legacy).
+     * You can pass a string, comma-separated string, or string[].
+     */
+    numbers?: string | string[]
+    number?: string
+
     message: string
     senderName?: string
+
+    priority?: boolean
+    otp?: boolean
+    otpCode?: string | number
+
+    respectOptOut?: boolean
+    supportedNetworkTokens?: string[]
+
+    entityType?: string
+    entityId?: string
+    meta?: Record<string, any>
 }
 
-export type StaffSendTicketCalledSmsRequest = {
+export type StaffSendTicketSmsBaseRequest = {
     message?: string
     senderName?: string
+
+    priority?: boolean
+    otp?: boolean
+    otpCode?: string | number
+
+    respectOptOut?: boolean
+    supportedNetworkTokens?: string[]
+    meta?: Record<string, any>
+}
+
+export type StaffTicketSmsStatus = "CALLED" | "HOLD" | "OUT" | "SERVED"
+
+export type StaffSendTicketStatusSmsRequest = StaffSendTicketSmsBaseRequest & {
+    status: StaffTicketSmsStatus
 }
 
 export type StaffSmsResponse = {
     ok: boolean
     provider?: string
-    number?: string
+
+    // present on ticket-based endpoints
     ticketId?: string
+    status?: StaffTicketSmsStatus
+
+    // present on raw send
+    number?: string
+
+    // server may include this on /staff/sms/send
+    statusSummary?: Record<string, number>
+
     result?: any
     error?: string
 }
@@ -451,8 +491,13 @@ export const staffApi = {
     sendSms: (payload: StaffSendSmsRequest) =>
         api.post<StaffSmsResponse>("/staff/sms/send", payload),
 
-    sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketCalledSmsRequest) =>
+    // Legacy alias: sends CALLED status (or custom message if provided)
+    sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketSmsBaseRequest) =>
         api.post<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}),
+
+    // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED) + optional custom message override
+    sendTicketStatusSms: (ticketId: string, payload: StaffSendTicketStatusSmsRequest) =>
+        api.post<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload),
 
     // ✅ Staff reports (scoped to assigned department on backend)
     getReportsSummary: (opts?: { from?: string; to?: string }) =>

@@ -144,6 +144,18 @@ function ensureSessionTokenHeader(headers: Record<string, string>) {
     headers["X-Session-Token"] = token
 }
 
+function ensureAuthorizationFromSessionToken(headers: Record<string, string>) {
+    // ✅ Some backends only read Authorization; if caller/proxy prefers X-Session-Token,
+    // mirror it back into Authorization (but never override an explicit Authorization).
+    if (hasHeader(headers, "Authorization")) return
+
+    const session = getHeaderValue(headers, "X-Session-Token")
+    const token = String(session || "").trim()
+    if (!token) return
+
+    headers.Authorization = `Bearer ${token}`
+}
+
 function withQuery(path: string, params?: Record<string, QueryParamValue>) {
     if (!params) return path
 
@@ -240,6 +252,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
     // ✅ Ensure X-Session-Token mirrors Bearer token when not explicitly provided
     ensureSessionTokenHeader(finalHeaders)
+    // ✅ And the other way around (if only X-Session-Token is set)
+    ensureAuthorizationFromSessionToken(finalHeaders)
 
     let finalBody: BodyInit | undefined
 
@@ -290,7 +304,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
     if (!res.ok) {
         const responseHeaderMsg = res.headers.get("x-error-message") || res.headers.get("X-Error-Message") || ""
-        const serverMsg = (data as any)?.message
+        const serverMsg =
+            (data as any)?.message ||
+            (data as any)?.error ||
+            (data as any)?.detail ||
+            (data as any)?.title
 
         const default404 = `Endpoint not found (404): ${method} ${url}. This usually means the backend route is missing or the API base URL is wrong.`
         const baseMessage =
