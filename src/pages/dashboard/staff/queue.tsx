@@ -218,9 +218,9 @@ function isLikelyHumanName(label: unknown, identifier?: string) {
     if (!s) return false
     if (identifier && s === String(identifier).trim()) return false
 
-    const lower = s.toLowerCase()
-    const reject = new Set(["student", "alumni / visitor", "alumni/visitor", "alumni", "visitor", "guest", "participant"])
-    if (reject.has(lower)) return false
+    // Reject pure participant-type labels (robust to spacing/slashes)
+    const typeKey = normalizeParticipantTypeKey(s)
+    if (typeKey === "STUDENT" || typeKey === "ALUMNI_VISITOR" || typeKey === "GUEST") return false
 
     // phone-like / numeric-heavy
     if (/^\+?\d[\d\s()-]{6,}$/.test(s)) return false
@@ -335,6 +335,70 @@ function getParticipantName(ticket: TicketLike): string {
         t?.lastName,
     ])
     return composed || ""
+}
+
+/**
+ * ✅ Ensure we ALWAYS have `participantFullName` for UI, even when the backend only sends:
+ * - participantLabel (sometimes full name)
+ * - nested selection payloads
+ * This normalizes BOTH centralized and legacy shapes.
+ */
+function normalizeTicketForDisplay<T>(ticket: T): T {
+    if (!ticket || typeof ticket !== "object") return ticket
+
+    const t = ticket as any
+    const fullName = String(getParticipantName(t) ?? "").trim()
+    if (!fullName) return ticket
+
+    const next: any = {
+        ...t,
+        participantFullName: fullName,
+        participantLabel: fullName,
+    }
+
+    if (next.participant && typeof next.participant === "object") {
+        const p = next.participant as any
+        next.participant = {
+            ...p,
+            name: String(p?.name ?? "").trim() || fullName,
+            fullName: String(p?.fullName ?? "").trim() || fullName,
+            fullname: String(p?.fullname ?? "").trim() || fullName,
+            full_name: String(p?.full_name ?? "").trim() || fullName,
+        }
+    }
+
+    if (next.transactions && typeof next.transactions === "object") {
+        const tx = next.transactions as any
+        next.transactions = {
+            ...tx,
+            participantFullName: String(tx?.participantFullName ?? "").trim() || fullName,
+            participantLabel: isLikelyHumanName(tx?.participantLabel) ? String(tx?.participantLabel ?? "").trim() : tx?.participantLabel,
+        }
+    }
+
+    if (next.meta && typeof next.meta === "object") {
+        const m = next.meta as any
+        next.meta = {
+            ...m,
+            participantFullName: String(m?.participantFullName ?? "").trim() || fullName,
+            participantLabel: fullName,
+        }
+    }
+
+    return next as T
+}
+
+function normalizeQueueStateForDisplay(state: StaffQueueState | null): StaffQueueState | null {
+    if (!state) return state
+
+    return {
+        ...state,
+        nowServing: state.nowServing ? (normalizeTicketForDisplay(state.nowServing) as any) : state.nowServing,
+        waiting: Array.isArray(state.waiting) ? (state.waiting.map((t) => normalizeTicketForDisplay(t)) as any) : [],
+        hold: Array.isArray(state.hold) ? (state.hold.map((t) => normalizeTicketForDisplay(t)) as any) : [],
+        called: Array.isArray(state.called) ? (state.called.map((t) => normalizeTicketForDisplay(t)) as any) : [],
+        upNext: Array.isArray(state.upNext) ? (state.upNext.map((t) => normalizeTicketForDisplay(t)) as any) : [],
+    }
 }
 
 function getParticipantType(ticket: TicketLike): string {
@@ -847,7 +911,7 @@ export default function StaffQueuePage() {
             if (payload.ts <= lastAppliedStateTsRef.current) return
             lastAppliedStateTsRef.current = payload.ts
 
-            setQueueState(payload.state)
+            setQueueState(normalizeQueueStateForDisplay(payload.state))
             setLastSyncedAtIso(new Date(payload.ts).toISOString())
             scheduleNextRefresh(payload.ts)
             setStateLoading(false)
@@ -866,7 +930,8 @@ export default function StaffQueuePage() {
 
             try {
                 const raw = await api.get(`/staff/queue/state?windowId=${encodeURIComponent(windowInfo.id)}`)
-                const state = unwrapPayload<StaffQueueState>(raw)
+                const stateRaw = unwrapPayload<StaffQueueState>(raw)
+                const state = normalizeQueueStateForDisplay(stateRaw)
 
                 const baseTs = typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
 
@@ -875,7 +940,7 @@ export default function StaffQueuePage() {
                 lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, baseTs)
                 scheduleNextRefresh(baseTs)
 
-                if (opts?.broadcast) {
+                if (opts?.broadcast && state) {
                     broadcastQueueState({ ts: baseTs, windowId: windowInfo.id, state })
                 }
 
@@ -1158,10 +1223,7 @@ export default function StaffQueuePage() {
 
     // ✅ Build fallback name map from snapshot-full (fix: participant missing on other windows)
     const snapshotNowServingByWindow = React.useMemo(() => {
-        const map = new Map<
-            number,
-            { name: string; studentId?: string; queueNumber?: number; ticketId?: string }
-        >()
+        const map = new Map<number, { name: string; studentId?: string; queueNumber?: number; ticketId?: string }>()
 
         const windows = (displaySnapshot?.board?.windows ?? []) as any[]
         for (const w of windows) {
@@ -1280,7 +1342,8 @@ export default function StaffQueuePage() {
             if (centralAudio) claimAudioLeadership()
 
             const raw = await api.post("/staff/queue/call-next-central", { windowId: windowInfo.id })
-            const ticket = unwrapPayload<TicketView | null>(raw)
+            const ticketRaw = unwrapPayload<TicketView | null>(raw)
+            const ticket = ticketRaw ? normalizeTicketForDisplay(ticketRaw) : null
 
             if (!ticket) {
                 toast.message("No waiting tickets.")
@@ -1314,7 +1377,9 @@ export default function StaffQueuePage() {
         setBusy(true)
         try {
             const raw = await api.post("/staff/queue/serve", { ticketId })
-            const updated = unwrapPayload<TicketView>(raw)
+            const updatedRaw = unwrapPayload<TicketView>(raw)
+            const updated = normalizeTicketForDisplay(updatedRaw)
+
             const dep = getDepartmentMeta(updated)
             toast.success(`Marked ${dep.code ? `${dep.code}-${pad3(updated.queueNumber)}` : `#${updated.queueNumber}`} as served.`)
             await fetchCentralState({ broadcast: true, tickTs: Date.now() })
@@ -1334,7 +1399,9 @@ export default function StaffQueuePage() {
         setBusy(true)
         try {
             const raw = await api.post("/staff/queue/hold", { ticketId })
-            const updated = unwrapPayload<TicketView>(raw)
+            const updatedRaw = unwrapPayload<TicketView>(raw)
+            const updated = normalizeTicketForDisplay(updatedRaw)
+
             const dep = getDepartmentMeta(updated)
 
             if (String(updated.status).toUpperCase() === "OUT") {
