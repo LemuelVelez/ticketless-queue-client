@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { api } from "@/lib/http"
+import { api, unwrapApiData } from "@/lib/http"
 
 export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
 export type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
@@ -32,6 +32,11 @@ export type Ticket = {
     participantLabel?: string | null
 
     /**
+     * ✅ Full name (Student / Alumni-Visitor / Guest)
+     */
+    participantFullName?: string | null
+
+    /**
      * Queue purpose / transaction context.
      */
     transactionCategory?: string
@@ -60,7 +65,9 @@ export type Ticket = {
     }>
     transactionSelections?: Array<{
         ticket?: string
+        participant?: string | null
         participantType?: TicketParticipantType | string
+        participantFullName?: string | null
         transactionKeys?: string[]
         transactionLabels?: string[]
         [key: string]: any
@@ -150,6 +157,13 @@ export type StaffDisplayNowServing = {
     windowId: string | null
     windowName: string | null
     windowNumber: number | null
+
+    // ✅ participant
+    participantFullName: string | null
+    participantLabel: string | null
+    participantType: TicketParticipantType | string | null
+    participantTypeLabel: string | null
+
     calledAt: string | null
 }
 
@@ -159,6 +173,12 @@ export type StaffDisplayUpNextItem = {
     departmentId: string | null
     departmentName: string | null
     departmentCode: string | null
+
+    // ✅ participant
+    participantFullName: string | null
+    participantLabel: string | null
+    participantType: TicketParticipantType | string | null
+    participantTypeLabel: string | null
 }
 
 export type StaffDisplayBoardWindow = {
@@ -177,6 +197,13 @@ export type StaffDisplayBoardWindow = {
         departmentId: string | null
         departmentName: string | null
         departmentCode: string | null
+
+        // ✅ participant
+        participantFullName: string | null
+        participantLabel: string | null
+        participantType: TicketParticipantType | string | null
+        participantTypeLabel: string | null
+
         calledAt: string | null
     } | null
 }
@@ -328,13 +355,6 @@ function normalizeMyAssignmentPayload(payload: any): MyAssignmentResponse {
     }
 }
 
-function unwrapApiData<T>(value: T | { data: T }): T {
-    if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
-        return (value as { data: T }).data
-    }
-    return value as T
-}
-
 /** =========================
  * REPORTS TYPES (STAFF-SCOPED)
  * ========================= */
@@ -461,7 +481,7 @@ export const staffApi = {
     // ✅ Dedicated backend snapshot for staff presentation/monitor pages
     getDisplaySnapshot: () =>
         api
-            .get<StaffDisplaySnapshotResponse | { data: StaffDisplaySnapshotResponse }>("/staff/display/snapshot")
+            .get<StaffDisplaySnapshotResponse | { data: StaffDisplaySnapshotResponse }>("/staff/display/snapshot-full")
             .then((res) => unwrapApiData(res)),
 
     listWaiting: (opts?: { limit?: number }) =>

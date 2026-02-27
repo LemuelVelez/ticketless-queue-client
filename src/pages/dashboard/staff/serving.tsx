@@ -9,6 +9,7 @@ import {
     Megaphone,
     MessageSquare,
     Monitor,
+    MoreHorizontal,
     PauseCircle,
     RefreshCw,
     Send,
@@ -49,12 +50,27 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 function fmtTime(v?: string | null) {
     if (!v) return "—"
     const d = new Date(v)
     if (Number.isNaN(d.getTime())) return "—"
     return d.toLocaleString()
+}
+
+function shortTime(v?: string | null) {
+    if (!v) return "—"
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return "—"
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
 function parseBool(v: unknown): boolean {
@@ -172,6 +188,77 @@ const MAN_VOICE_HINTS = [
  * NOTE: Semaphore may return variants/casing; backend already matches loosely.
  */
 const SMS_SUPPORTED_NETWORK_TOKENS = ["GLOBE", "SMART"]
+
+/**
+ * ✅ Staff Panel / Queue Dashboard requirements:
+ * - Auto-refresh (AJAX polling every 2–3 seconds)
+ * - Sync across all open windows (leader election + BroadcastChannel/localStorage)
+ */
+const POLL_MS = 2500 // 2.5s loop
+const LEADER_TTL_MS = 10_000
+
+const SERVING_POLL_LEADER_KEY = "queuepass:staff:serving_poll_leader_v1"
+const SERVING_SYNC_CHANNEL = "queuepass:staff:serving_state_sync_v1"
+const SERVING_SYNC_SNAPSHOT_KEY = "queuepass:staff:serving_state_snapshot_v1"
+
+function canUseBroadcastChannel() {
+    return typeof window !== "undefined" && typeof (window as any).BroadcastChannel !== "undefined"
+}
+
+function firstNonEmptyText(candidates: unknown[]) {
+    for (const c of candidates) {
+        const s = String(c ?? "").trim()
+        if (s) return s
+    }
+    return ""
+}
+
+function composeName(parts: unknown[]) {
+    return parts
+        .map((p) => String(p ?? "").trim())
+        .filter(Boolean)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+}
+
+function getStudentFullName(ticket: any): string {
+    const t = ticket as any
+
+    const direct = firstNonEmptyText([
+        t?.studentName,
+        t?.participantName,
+        t?.participant?.fullName,
+        t?.participant?.name,
+        t?.user?.name,
+        t?.name,
+        t?.meta?.participantName,
+    ])
+    if (direct) return direct
+
+    const composed = composeName([
+        t?.participant?.firstName,
+        t?.participant?.middleName,
+        t?.participant?.lastName,
+        t?.user?.firstName,
+        t?.user?.middleName,
+        t?.user?.lastName,
+        t?.firstName,
+        t?.middleName,
+        t?.lastName,
+    ])
+
+    return composed || ""
+}
+
+function getStudentId(ticket: any): string {
+    const t = ticket as any
+    return String(t?.studentId ?? t?.participant?.studentId ?? t?.tcNumber ?? "").trim()
+}
+
+function safeErrorMessage(err: any, fallback: string) {
+    return err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || fallback
+}
 
 function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
     return {
@@ -401,6 +488,19 @@ type SmsLog = {
     }
 }
 
+type ServingSyncPayload = {
+    ts: number
+    windowId: string
+    departmentId: string | null
+    windowInfo: { id: string; name: string; number: number } | null
+    assignedDepartments: DepartmentAssignment[]
+    handledDepartments: DepartmentAssignment[]
+    snapshot: StaffDisplaySnapshotResponse | null
+    current: TicketType | null
+    upNext: TicketType[]
+    holdTickets: TicketType[]
+}
+
 export default function StaffServingPage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -421,6 +521,7 @@ export default function StaffServingPage() {
     }, [location.search])
 
     const [loading, setLoading] = React.useState(true)
+    const [stateLoading, setStateLoading] = React.useState(false)
     const [busy, setBusy] = React.useState(false)
 
     const [departmentId, setDepartmentId] = React.useState<string | null>(null)
@@ -433,7 +534,23 @@ export default function StaffServingPage() {
     const [holdTickets, setHoldTickets] = React.useState<TicketType[]>([])
     const [snapshot, setSnapshot] = React.useState<StaffDisplaySnapshotResponse | null>(null)
 
+    // ✅ Auto-refresh ON by default; 2.5s polling + cross-window sync
     const [autoRefresh, setAutoRefresh] = React.useState(true)
+    const [isServingLeader, setIsServingLeader] = React.useState(false)
+    const lastAppliedStateTsRef = React.useRef<number>(0)
+    const lastToastSyncErrorAtRef = React.useRef<number>(0)
+    const bcRef = React.useRef<BroadcastChannel | null>(null)
+    const [lastSyncedAtIso, setLastSyncedAtIso] = React.useState<string>("")
+
+    const tabIdRef = React.useRef<string>("")
+    if (!tabIdRef.current) {
+        try {
+            tabIdRef.current =
+                typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `tab_${Date.now()}_${Math.random()}`
+        } catch {
+            tabIdRef.current = `tab_${Date.now()}_${Math.random()}`
+        }
+    }
 
     const [panelCount, setPanelCount] = React.useState<number>(() => parsePanelCount(location.search, 3))
 
@@ -669,7 +786,61 @@ export default function StaffServingPage() {
         }
     }, [])
 
-    const refresh = React.useCallback(async () => {
+    const broadcastServingState = React.useCallback((payload: ServingSyncPayload) => {
+        if (typeof window === "undefined") return
+
+        if (canUseBroadcastChannel()) {
+            try {
+                bcRef.current?.postMessage({ type: "SERVING_STATE", ...payload })
+                return
+            } catch {
+                // fallback below
+            }
+        }
+
+        try {
+            localStorage.setItem(SERVING_SYNC_SNAPSHOT_KEY, JSON.stringify({ type: "SERVING_STATE", ...payload }))
+        } catch {
+            // ignore
+        }
+    }, [])
+
+    const applyRemoteServingState = React.useCallback((payload: Partial<ServingSyncPayload>) => {
+        const ts = Number(payload?.ts ?? 0)
+        if (!Number.isFinite(ts) || ts <= 0) return
+
+        // If we already know our window, only accept matching updates.
+        const localWindowId = String(windowInfo?.id ?? "").trim()
+        const remoteWindowId = String(payload?.windowId ?? "").trim()
+        if (localWindowId && remoteWindowId && localWindowId !== remoteWindowId) return
+
+        if (ts <= lastAppliedStateTsRef.current) return
+        lastAppliedStateTsRef.current = ts
+
+        // Prefer not to override assignment if we already have it; but fill gaps to improve UX.
+        if (!departmentId && typeof payload?.departmentId !== "undefined") setDepartmentId(payload.departmentId ?? null)
+        if (!windowInfo && payload?.windowInfo) setWindowInfo(payload.windowInfo)
+
+        if (Array.isArray(payload?.assignedDepartments) && payload.assignedDepartments.length && assignedDepartments.length === 0) {
+            setAssignedDepartments(payload.assignedDepartments)
+        }
+        if (Array.isArray(payload?.handledDepartments) && payload.handledDepartments.length && handledDepartments.length === 0) {
+            setHandledDepartments(payload.handledDepartments)
+        }
+
+        if (typeof payload?.snapshot !== "undefined") setSnapshot(payload.snapshot ?? null)
+        if (typeof payload?.current !== "undefined") setCurrent(payload.current ?? null)
+        if (Array.isArray(payload?.upNext)) setUpNext(payload.upNext)
+        if (Array.isArray(payload?.holdTickets)) setHoldTickets(payload.holdTickets)
+
+        setLastSyncedAtIso(new Date(ts).toISOString())
+        setStateLoading(false)
+        setLoading(false)
+    }, [assignedDepartments.length, departmentId, handledDepartments.length, windowInfo])
+
+    const refresh = React.useCallback(async (opts?: { silent?: boolean; broadcast?: boolean; tickTs?: number }) => {
+        if (!opts?.silent) setStateLoading(true)
+
         try {
             const a = await staffApi.myAssignment()
             setDepartmentId(a.departmentId ?? null)
@@ -716,10 +887,42 @@ export default function StaffServingPage() {
             }
 
             setHoldTickets(holdResult.tickets ?? [])
+
+            const tickTs = typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
+            setLastSyncedAtIso(new Date(tickTs).toISOString())
+            lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, tickTs)
+
+            if (opts?.broadcast) {
+                const w = a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null
+                const payload: ServingSyncPayload = {
+                    ts: tickTs,
+                    windowId: w?.id ? String(w.id) : "",
+                    departmentId: a.departmentId ?? null,
+                    windowInfo: w,
+                    assignedDepartments: uniqueDepartmentAssignments(a.assignedDepartments),
+                    handledDepartments: uniqueDepartmentAssignments(a.handledDepartments?.length ? a.handledDepartments : a.assignedDepartments),
+                    snapshot: snapshotResult ?? null,
+                    current: (currentResult.ticket ?? null) as any,
+                    upNext: (explicit.length ? explicit : snapshotResult?.upNext?.length ? snapshotResult.upNext.map(mapBoardWindowToTicketLike) : []) as any,
+                    holdTickets: (holdResult.tickets ?? []) as any,
+                }
+                broadcastServingState(payload)
+            }
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to load now serving.")
+            const msg = safeErrorMessage(e, "Failed to load now serving.")
+            if (!opts?.silent) {
+                toast.error(msg)
+            } else {
+                const now = Date.now()
+                if (now - lastToastSyncErrorAtRef.current > 15_000) {
+                    lastToastSyncErrorAtRef.current = now
+                    toast.error(msg)
+                }
+            }
+        } finally {
+            if (!opts?.silent) setStateLoading(false)
         }
-    }, [])
+    }, [broadcastServingState])
 
     const openBoardOnSelectedMonitor = React.useCallback(() => {
         if (typeof window === "undefined") return
@@ -761,11 +964,25 @@ export default function StaffServingPage() {
         toast.success(`Queue display opened on ${selected.label}.`)
     }, [monitorOptions, panelCount, selectedMonitorId])
 
+    // ✅ Boot: apply last snapshot fast (cross-window sync) then fetch
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        try {
+            const raw = localStorage.getItem(SERVING_SYNC_SNAPSHOT_KEY)
+            if (!raw) return
+            const parsed = JSON.parse(raw) as any
+            if (parsed?.type !== "SERVING_STATE") return
+            applyRemoteServingState(parsed as any)
+        } catch {
+            // ignore
+        }
+    }, [applyRemoteServingState])
+
     React.useEffect(() => {
         ; (async () => {
             setLoading(true)
             try {
-                await refresh()
+                await refresh({ broadcast: true, tickTs: Date.now() })
             } finally {
                 setLoading(false)
             }
@@ -777,13 +994,101 @@ export default function StaffServingPage() {
         void loadMonitorOptions(true)
     }, [boardMode, loadMonitorOptions])
 
+    // ✅ Cross-window receive: BroadcastChannel + localStorage fallback
     React.useEffect(() => {
+        if (typeof window === "undefined") return
+
+        if (canUseBroadcastChannel()) {
+            try {
+                const bc = new BroadcastChannel(SERVING_SYNC_CHANNEL)
+                bcRef.current = bc
+                bc.onmessage = (ev) => {
+                    const data = ev?.data
+                    if (!data || typeof data !== "object") return
+                    if ((data as any).type !== "SERVING_STATE") return
+                    applyRemoteServingState(data as any)
+                }
+                return () => {
+                    try {
+                        bc.close()
+                    } catch {
+                        // ignore
+                    }
+                    bcRef.current = null
+                }
+            } catch {
+                // fallback to storage listener only
+            }
+        }
+
+        const onStorage = (e: StorageEvent) => {
+            if (e.key !== SERVING_SYNC_SNAPSHOT_KEY) return
+            if (!e.newValue) return
+            try {
+                const parsed = JSON.parse(e.newValue) as any
+                if (parsed?.type !== "SERVING_STATE") return
+                applyRemoteServingState(parsed as any)
+            } catch {
+                // ignore
+            }
+        }
+
+        window.addEventListener("storage", onStorage)
+        return () => window.removeEventListener("storage", onStorage)
+    }, [applyRemoteServingState])
+
+    // ✅ Leader election: ONE tab polls; all tabs sync instantly
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        if (!autoRefresh) {
+            setIsServingLeader(false)
+            return
+        }
+        if (!assignedOk) {
+            setIsServingLeader(false)
+            return
+        }
+
+        const tick = () => {
+            try {
+                const raw = localStorage.getItem(SERVING_POLL_LEADER_KEY)
+                const now = Date.now()
+                const parsed = raw ? (JSON.parse(raw) as { id?: string; ts?: number }) : null
+
+                const leaderId = String(parsed?.id ?? "")
+                const leaderTs = Number(parsed?.ts ?? 0)
+                const expired = !leaderId || !Number.isFinite(leaderTs) || now - leaderTs > LEADER_TTL_MS
+
+                if (expired || leaderId === tabIdRef.current) {
+                    localStorage.setItem(SERVING_POLL_LEADER_KEY, JSON.stringify({ id: tabIdRef.current, ts: now }))
+                    setIsServingLeader(true)
+                } else {
+                    setIsServingLeader(false)
+                }
+            } catch {
+                setIsServingLeader(true)
+            }
+        }
+
+        tick()
+        const iv = window.setInterval(tick, 3000)
+        return () => window.clearInterval(iv)
+    }, [assignedOk, autoRefresh])
+
+    // ✅ Poll loop (leader only): every 2.5s, broadcast to everyone
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
         if (!autoRefresh) return
-        const t = window.setInterval(() => {
-            void refresh()
-        }, 5000)
-        return () => window.clearInterval(t)
-    }, [autoRefresh, refresh])
+        if (!assignedOk) return
+        if (!isServingLeader) return
+
+        const iv = window.setInterval(() => {
+            const tickTs = Date.now()
+            void refresh({ silent: true, broadcast: true, tickTs })
+        }, POLL_MS)
+
+        return () => window.clearInterval(iv)
+    }, [assignedOk, autoRefresh, isServingLeader, refresh])
 
     const sendCalledSms = React.useCallback(
         async (
@@ -828,8 +1133,6 @@ export default function StaffServingPage() {
             }
 
             try {
-                // ✅ Always send custom message for current ticket
-                // (prevents accidental backend-side auto-advance duplicates; frontend owns the toggle)
                 const res = await staffApi.sendTicketCalledSms(ticket._id, {
                     message,
                     ...(senderName ? { senderName } : {}),
@@ -869,7 +1172,6 @@ export default function StaffServingPage() {
                                 (sum.providerMessageId ? ` • id ${sum.providerMessageId}` : ""),
                         )
 
-                        // ✅ Reliability check: Globe / Smart confirmation
                         if (sum.supportedNetwork !== true) {
                             toast.message(
                                 `Network check: ${sum.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`,
@@ -878,14 +1180,12 @@ export default function StaffServingPage() {
                     }
                 }
 
-                // ✅ Optional enhancement: advance notice SMS (toggleable)
                 if (!useAdvance) {
                     nextLog.advance = { enabled: false, attempted: false }
                     setLastSmsLog(nextLog)
                     return true
                 }
 
-                // Find the next waiting ticket (fresh pull preferred)
                 let waitingList: TicketType[] = upNext
                 try {
                     const waitingRes = await staffApi.listWaiting({ limit: 50 })
@@ -1026,7 +1326,7 @@ export default function StaffServingPage() {
                 })
             }
 
-            await refresh()
+            await refresh({ broadcast: true, tickTs: Date.now() })
         } catch (e: any) {
             toast.error(e?.message ?? "No waiting tickets.")
         } finally {
@@ -1040,7 +1340,7 @@ export default function StaffServingPage() {
         try {
             await staffApi.markServed(current._id)
             toast.success(`Marked #${current.queueNumber} as served.`)
-            await refresh()
+            await refresh({ broadcast: true, tickTs: Date.now() })
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to mark served.")
         } finally {
@@ -1058,7 +1358,7 @@ export default function StaffServingPage() {
                     ? `Ticket #${current.queueNumber} is OUT.`
                     : `Ticket #${current.queueNumber} moved to HOLD.`,
             )
-            await refresh()
+            await refresh({ broadcast: true, tickTs: Date.now() })
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to hold ticket.")
         } finally {
@@ -1095,6 +1395,18 @@ export default function StaffServingPage() {
                                 <Badge variant="secondary">
                                     Generated: {fmtTime(snapshot?.meta?.generatedAt || null)}
                                 </Badge>
+                                <Badge variant={autoRefresh ? "default" : "secondary"}>
+                                    Auto-refresh: {autoRefresh ? `ON (${(POLL_MS / 1000).toFixed(1)}s)` : "OFF"}
+                                </Badge>
+                                {lastSyncedAtIso ? (
+                                    <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge>
+                                ) : null}
+                                {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
+                                {autoRefresh ? (
+                                    <Badge variant={isServingLeader ? "default" : "secondary"}>
+                                        Sync leader: {isServingLeader ? "YES" : "NO"}
+                                    </Badge>
+                                ) : null}
                             </div>
 
                             <div className="mt-2">
@@ -1117,7 +1429,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="mt-2 text-sm text-muted-foreground">
-                                Multi-window queue display (3+ split panes) • auto refresh every 5s
+                                Multi-window queue display (3+ split panes) • synchronized across all open windows
                             </div>
                         </div>
 
@@ -1153,10 +1465,36 @@ export default function StaffServingPage() {
                                 </Label>
                             </div>
 
-                            <Button variant="outline" onClick={() => void refresh()} disabled={loading || busy} className="gap-2">
-                                <RefreshCw className="h-4 w-4" />
-                                Refresh
-                            </Button>
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button variant="outline" size="icon" aria-label="Board options">
+                                        <MoreHorizontal className="h-4 w-4" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56">
+                                    <DropdownMenuLabel>Board options</DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                        onClick={() => {
+                                            const ts = Date.now()
+                                            toast.message("Syncing now…")
+                                            void refresh({ broadcast: true, tickTs: ts })
+                                        }}
+                                    >
+                                        <RefreshCw className="mr-2 h-4 w-4" />
+                                        Sync now
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                        onClick={() => {
+                                            const next = !autoRefresh
+                                            setAutoRefresh(next)
+                                            toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
+                                        }}
+                                    >
+                                        {autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
 
                             <Button
                                 variant="secondary"
@@ -1199,12 +1537,17 @@ export default function StaffServingPage() {
                                 const previewHold = getTwoNumberSlice(globalHoldNumbers, idx)
 
                                 const currentForThisWindow =
-                                    current && current.windowNumber === row.number ? current : null
+                                    current && (current as any).windowNumber === row.number ? current : null
+
+                                const nowServingName = getStudentFullName(row.nowServing as any)
+                                const nowServingSid = getStudentId(row.nowServing as any)
+                                const currentName = currentForThisWindow ? getStudentFullName(currentForThisWindow as any) : ""
+                                const currentSid = currentForThisWindow ? getStudentId(currentForThisWindow as any) : ""
 
                                 const studentLabel =
-                                    (row.nowServing as any)?.studentName ||
-                                    (row.nowServing as any)?.studentId ||
-                                    (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
+                                    nowServingName ||
+                                    currentName ||
+                                    (nowServingSid ? `Student ID: ${nowServingSid}` : currentSid ? `Student ID: ${currentSid}` : "")
 
                                 return (
                                     <Card key={row.id || `window-${idx}`} className="min-h-95">
@@ -1222,8 +1565,8 @@ export default function StaffServingPage() {
                                                     {queueNumberLabel(row.nowServing?.queueNumber)}
                                                 </div>
 
-                                                <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide">
-                                                    {studentLabel}
+                                                <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide whitespace-normal wrap-break-word leading-snug">
+                                                    {studentLabel || "—"}
                                                 </div>
 
                                                 <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
@@ -1279,6 +1622,12 @@ export default function StaffServingPage() {
                     : "Last SMS: Logged"
             : "Last SMS: —"
 
+    const syncBadgeText = React.useMemo(() => {
+        if (!assignedOk) return "Auto-refresh: —"
+        if (!autoRefresh) return "Auto-refresh: OFF"
+        return `Auto-refresh: ON (${(POLL_MS / 1000).toFixed(1)}s)`
+    }, [assignedOk, autoRefresh])
+
     return (
         <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
@@ -1291,21 +1640,12 @@ export default function StaffServingPage() {
                                     Now Serving Board
                                 </CardTitle>
                                 <CardDescription>
-                                    Dedicated operator board for live calling. Open <strong>?board=1&amp;panels=3</strong> for monitor display mode.
+                                    Live operator board with synchronized auto-refresh across all open windows. Open{" "}
+                                    <strong>?board=1&amp;panels=3</strong> for monitor display mode.
                                 </CardDescription>
                             </div>
 
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                <Button
-                                    variant="outline"
-                                    onClick={() => void refresh()}
-                                    disabled={loading || busy}
-                                    className="w-full gap-2 sm:w-auto"
-                                >
-                                    <RefreshCw className="h-4 w-4" />
-                                    Refresh
-                                </Button>
-
                                 <Button
                                     onClick={() => void onCallNext()}
                                     disabled={loading || busy || !assignedOk}
@@ -1331,6 +1671,38 @@ export default function StaffServingPage() {
                                     Recall voice
                                 </Button>
 
+                                {/* ✅ No manual refresh required; keep a compact “Sync now” in overflow menu */}
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button variant="outline" size="icon" className="shrink-0" aria-label="Now Serving options">
+                                            <MoreHorizontal className="h-4 w-4" />
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-60">
+                                        <DropdownMenuLabel>Now Serving options</DropdownMenuLabel>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem
+                                            onClick={() => {
+                                                const ts = Date.now()
+                                                toast.message("Syncing now…")
+                                                void refresh({ broadcast: true, tickTs: ts })
+                                            }}
+                                        >
+                                            <RefreshCw className="mr-2 h-4 w-4" />
+                                            Sync now
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem
+                                            onClick={() => {
+                                                const next = !autoRefresh
+                                                setAutoRefresh(next)
+                                                toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
+                                            }}
+                                        >
+                                            {autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+
                                 <Dialog open={smsDialogOpen} onOpenChange={setSmsDialogOpen}>
                                     <DialogTrigger asChild>
                                         <Button
@@ -1346,8 +1718,7 @@ export default function StaffServingPage() {
                                         <DialogHeader>
                                             <DialogTitle>Send SMS notification</DialogTitle>
                                             <DialogDescription>
-                                                Sends a reliable Semaphore SMS via backend. Includes:
-                                                {" "}
+                                                Sends a reliable Semaphore SMS via backend. Includes{" "}
                                                 <strong>network check (Globe/Smart)</strong> and optional{" "}
                                                 <strong>advance notice</strong> to the next queue number.
                                             </DialogDescription>
@@ -1410,12 +1781,9 @@ export default function StaffServingPage() {
                                             )}
 
                                             <div className="rounded-md border p-3 text-xs text-muted-foreground">
-                                                Reliability checks enabled:
-                                                {" "}
-                                                <strong>Supported networks:</strong> Globe / Smart •
-                                                {" "}
-                                                <strong>Status:</strong> queued/sent/failed •
-                                                {" "}
+                                                Reliability checks enabled:{" "}
+                                                <strong>Supported networks:</strong> Globe / Smart •{" "}
+                                                <strong>Status:</strong> queued/sent/failed •{" "}
                                                 <strong>Provider response:</strong> logged to SMS Log.
                                             </div>
                                         </div>
@@ -1518,6 +1886,16 @@ export default function StaffServingPage() {
                                 <Badge variant="secondary">{lastSmsBadgeText}</Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
+                                <Badge variant={autoRefresh ? "default" : "secondary"}>{syncBadgeText}</Badge>
+                                {lastSyncedAtIso ? (
+                                    <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge>
+                                ) : null}
+                                {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
+                                {autoRefresh && assignedOk ? (
+                                    <Badge variant={isServingLeader ? "default" : "secondary"}>
+                                        Sync leader: {isServingLeader ? "YES" : "NO"}
+                                    </Badge>
+                                ) : null}
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2">
@@ -1525,7 +1903,11 @@ export default function StaffServingPage() {
                                     <Switch
                                         id="autoRefresh"
                                         checked={autoRefresh}
-                                        onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                        onCheckedChange={(v) => {
+                                            const next = Boolean(v)
+                                            setAutoRefresh(next)
+                                            toast.message(next ? "Auto-refresh enabled." : "Auto-refresh paused.")
+                                        }}
                                         disabled={busy}
                                     />
                                     <Label htmlFor="autoRefresh" className="text-sm">
@@ -1703,10 +2085,8 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                SMS engine: Semaphore via backend •
-                                {" "}
-                                <strong>Reliability:</strong> network check ({SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}) + status + provider response log •
-                                {" "}
+                                SMS engine: Semaphore via backend •{" "}
+                                <strong>Reliability:</strong> network check ({SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}) + status + provider response log •{" "}
                                 <strong>Advance notice:</strong> {smsAdvanceNoticeEnabled ? "Enabled" : "Disabled"}
                             </div>
                         </div>
@@ -1732,16 +2112,27 @@ export default function StaffServingPage() {
                                             <>
                                                 <div className="rounded-2xl border bg-muted p-6">
                                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                                        <div>
+                                                        <div className="min-w-0">
                                                             <div className="text-xs uppercase tracking-widest text-muted-foreground">
                                                                 Now serving
                                                             </div>
                                                             <div className="mt-2 text-7xl font-semibold tracking-tight">
                                                                 #{current.queueNumber}
                                                             </div>
+
+                                                            {/* ✅ Full name first (user-friendly) */}
                                                             <div className="mt-3 text-sm text-muted-foreground">
-                                                                Student ID: {current.studentId ?? "—"}
+                                                                Student:{" "}
+                                                                <span className="font-medium text-foreground whitespace-normal wrap-break-word">
+                                                                    {getStudentFullName(current) || "—"}
+                                                                </span>
                                                             </div>
+
+                                                            <div className="text-sm text-muted-foreground">
+                                                                Student ID:{" "}
+                                                                <span className="tabular-nums">{getStudentId(current) || "—"}</span>
+                                                            </div>
+
                                                             <div className="text-sm text-muted-foreground">
                                                                 Called at: {fmtTime((current as any).calledAt)}
                                                             </div>
@@ -1812,15 +2203,29 @@ export default function StaffServingPage() {
                                                 <div className="rounded-lg border p-4 text-sm text-muted-foreground">No WAITING tickets.</div>
                                             ) : (
                                                 <div className="grid gap-2">
-                                                    {upNext.slice(0, 6).map((t, idx) => (
-                                                        <div key={t._id} className="flex items-center justify-between rounded-xl border p-3">
-                                                            <div className="text-xl font-semibold">#{t.queueNumber}</div>
-                                                            <div className="text-right text-xs text-muted-foreground">
-                                                                <div>{idx === 0 ? "Next" : "Waiting"}</div>
-                                                                <div>{fmtTime((t as any).waitingSince)}</div>
+                                                    {upNext.slice(0, 6).map((t, idx) => {
+                                                        const name = getStudentFullName(t)
+                                                        const sid = getStudentId(t)
+
+                                                        return (
+                                                            <div key={t._id} className="flex items-start justify-between gap-3 rounded-xl border p-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="text-xl font-semibold tabular-nums">#{t.queueNumber}</div>
+                                                                    <div className="mt-1 font-medium whitespace-normal wrap-break-word leading-snug">
+                                                                        {name || "—"}
+                                                                    </div>
+                                                                    <div className="mt-1 text-xs text-muted-foreground">
+                                                                        Student ID: <span className="tabular-nums">{sid || "—"}</span>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="shrink-0 text-right text-xs text-muted-foreground">
+                                                                    <div>{idx === 0 ? "Next" : "Waiting"}</div>
+                                                                    <div>{fmtTime((t as any).waitingSince)}</div>
+                                                                </div>
                                                             </div>
-                                                        </div>
-                                                    ))}
+                                                        )
+                                                    })}
                                                 </div>
                                             )}
                                         </div>
@@ -1868,12 +2273,17 @@ export default function StaffServingPage() {
                                                     )
 
                                                     const currentForThisWindow =
-                                                        current && current.windowNumber === w.number ? current : null
+                                                        current && (current as any).windowNumber === w.number ? current : null
+
+                                                    const nowServingName = getStudentFullName(w.nowServing as any)
+                                                    const nowServingSid = getStudentId(w.nowServing as any)
+                                                    const currentName = currentForThisWindow ? getStudentFullName(currentForThisWindow as any) : ""
+                                                    const currentSid = currentForThisWindow ? getStudentId(currentForThisWindow as any) : ""
 
                                                     const studentLabel =
-                                                        (w.nowServing as any)?.studentName ||
-                                                        (w.nowServing as any)?.studentId ||
-                                                        (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
+                                                        nowServingName ||
+                                                        currentName ||
+                                                        (nowServingSid ? `Student ID: ${nowServingSid}` : currentSid ? `Student ID: ${currentSid}` : "")
 
                                                     return (
                                                         <div key={w.id} className="rounded-xl border p-4">
@@ -1884,8 +2294,8 @@ export default function StaffServingPage() {
                                                             <div className="mt-2 text-center text-[clamp(3.4rem,8vw,6rem)] font-bold leading-none">
                                                                 {queueNumberLabel(w.nowServing?.queueNumber)}
                                                             </div>
-                                                            <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide">
-                                                                {studentLabel}
+                                                            <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide whitespace-normal wrap-break-word leading-snug">
+                                                                {studentLabel || "—"}
                                                             </div>
 
                                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">

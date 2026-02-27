@@ -30,6 +30,15 @@ export class ApiError extends Error {
 
 type QueryParamValue = string | number | boolean | null | undefined
 
+export type ApiData<T> = T | { data: T }
+
+export function unwrapApiData<T>(value: ApiData<T>): T {
+    if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
+        return (value as { data: T }).data
+    }
+    return value as T
+}
+
 type RequestOptions = {
     method?: HttpMethod
     body?: unknown
