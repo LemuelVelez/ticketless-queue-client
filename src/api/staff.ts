@@ -239,6 +239,23 @@ export type StaffDisplaySnapshotResponse = {
     }
 }
 
+/**
+ * ✅ CENTRALIZED REAL-TIME QUEUE STATE (pollable)
+ * Backend shape may evolve; keep flexible but still typed enough for UI use.
+ */
+export type StaffQueueStateResponse = {
+    ok?: boolean
+    nowServing?: Ticket | null
+    upNext?: Ticket[]
+    waiting?: Ticket[]
+    hold?: Ticket[]
+    out?: Ticket[]
+    history?: Ticket[]
+    state?: Record<string, any>
+    meta?: Record<string, any>
+    [key: string]: any
+}
+
 function toQuery(params?: Record<string, string | number | boolean | undefined | null>) {
     const qs = new URLSearchParams()
     if (!params) return ""
@@ -462,6 +479,47 @@ function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnaps
     }
 }
 
+function isTicketLike(value: any): value is Ticket {
+    if (!value || typeof value !== "object") return false
+    const id = value?._id ?? value?.id
+    const hasId = typeof id === "string" || (id && typeof id === "object")
+    const hasQueueNumber = typeof value?.queueNumber === "number" || typeof value?.queueNumber === "string"
+    const hasStatus = typeof value?.status === "string"
+    return !!(hasId && hasQueueNumber && hasStatus)
+}
+
+function normalizeTicketArrayMaybe(items: any): any {
+    if (!Array.isArray(items)) return items
+    return items.map((x) => (isTicketLike(x) ? normalizeTicketParticipant(x) : x))
+}
+
+function normalizeQueueStatePayload(payload: StaffQueueStateResponse): StaffQueueStateResponse {
+    const next: StaffQueueStateResponse = { ...(payload || {}) }
+
+    if (isTicketLike(next.nowServing)) next.nowServing = normalizeTicketParticipant(next.nowServing)
+    next.upNext = normalizeTicketArrayMaybe(next.upNext)
+    next.waiting = normalizeTicketArrayMaybe(next.waiting)
+    next.hold = normalizeTicketArrayMaybe(next.hold)
+    next.out = normalizeTicketArrayMaybe(next.out)
+    next.history = normalizeTicketArrayMaybe(next.history)
+
+    // If backend wraps in `state`, normalize common keys there too.
+    if (next.state && typeof next.state === "object") {
+        const s: any = { ...next.state }
+
+        if (isTicketLike(s.nowServing)) s.nowServing = normalizeTicketParticipant(s.nowServing)
+        s.upNext = normalizeTicketArrayMaybe(s.upNext)
+        s.waiting = normalizeTicketArrayMaybe(s.waiting)
+        s.hold = normalizeTicketArrayMaybe(s.hold)
+        s.out = normalizeTicketArrayMaybe(s.out)
+        s.history = normalizeTicketArrayMaybe(s.history)
+
+        next.state = s
+    }
+
+    return next
+}
+
 /** =========================
  * REPORTS TYPES (STAFF-SCOPED)
  * ========================= */
@@ -578,7 +636,11 @@ export type StaffSmsResponse = {
     ticketId?: string
     status?: StaffTicketSmsStatus
 
-    // present on raw send
+    // server semantic outcome
+    outcome?: "sent" | "skipped" | "failed" | "unknown"
+    reason?: string
+
+    // present on raw send (legacy helper behavior)
     number?: string
 
     // server may include this on /staff/sms/send
@@ -605,53 +667,106 @@ export const staffApi = {
     listWaiting: (opts?: { limit?: number }) =>
         api
             .getData<ListTicketsResponse & { context?: any }>(
-                `/staff/queue/waiting${toQuery(opts as any)}`,
+                `/staff/queue/waiting-full${toQuery(opts as any)}`,
                 STAFF_AUTH
             )
             .then((res) => normalizeTicketsResponse(res)),
 
     listHold: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/hold${toQuery(opts as any)}`, STAFF_AUTH)
+            .getData<ListTicketsResponse & { context?: any }>(
+                `/staff/queue/hold-full${toQuery(opts as any)}`,
+                STAFF_AUTH
+            )
             .then((res) => normalizeTicketsResponse(res)),
 
     listOut: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/out${toQuery(opts as any)}`, STAFF_AUTH)
+            .getData<ListTicketsResponse & { context?: any }>(
+                `/staff/queue/out-full${toQuery(opts as any)}`,
+                STAFF_AUTH
+            )
             .then((res) => normalizeTicketsResponse(res)),
 
     // ✅ mine=true => only tickets for this staff's assigned window
     listHistory: (opts?: { limit?: number; mine?: boolean }) =>
         api
             .getData<ListTicketsResponse & { context?: any }>(
-                `/staff/queue/history${toQuery(opts as any)}`,
+                `/staff/queue/history-full${toQuery(opts as any)}`,
                 STAFF_AUTH
             )
             .then((res) => normalizeTicketsResponse(res)),
 
+    /**
+     * ✅ CENTRALIZED REAL-TIME QUEUE STATE
+     * One unified queue state shared across all staff/windows (single DB truth).
+     */
+    getQueueState: () =>
+        api
+            .getData<StaffQueueStateResponse>("/staff/queue/state-full", STAFF_AUTH)
+            .then((res) => normalizeQueueStatePayload(res)),
+
+    /**
+     * ✅ Primary "Next Queue" action (centralized, race-safe)
+     * Route: POST /staff/queue/call-next-central
+     */
     callNext: () =>
         api
-            .postData<TicketResponse>("/staff/queue/call-next", undefined, STAFF_AUTH)
+            .postData<TicketResponse>("/staff/queue/call-next-central", undefined, STAFF_AUTH)
             .then((res) => normalizeTicketResponse(res)),
+
+    /**
+     * Legacy "Next Queue" (window-based)
+     * Route: POST /staff/queue/call-next
+     */
+    callNextLegacy: () =>
+        api.postData<TicketResponse>("/staff/queue/call-next", undefined, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     currentCalledForWindow: () =>
         api
-            .getData<CurrentCalledResponse>("/staff/queue/current-called", STAFF_AUTH)
+            .getData<CurrentCalledResponse>("/staff/queue/current-called-full", STAFF_AUTH)
             .then((res) => normalizeCurrentCalledResponse(res)),
 
+    /**
+     * ✅ Centralized queue operations
+     * Routes:
+     * - POST /staff/queue/serve
+     * - POST /staff/queue/hold
+     * - POST /staff/queue/out
+     *
+     * Payload: { ticketId } (we also include { id } for extra backend compatibility)
+     */
     markServed: (ticketId: string) =>
         api
-            .postData<TicketResponse>(`/staff/tickets/${ticketId}/served`, undefined, STAFF_AUTH)
+            .postData<TicketResponse>("/staff/queue/serve", { ticketId, id: ticketId }, STAFF_AUTH)
             .then((res) => normalizeTicketResponse(res)),
 
     holdNoShow: (ticketId: string) =>
         api
-            .postData<TicketResponse>(`/staff/tickets/${ticketId}/hold`, undefined, STAFF_AUTH)
+            .postData<TicketResponse>("/staff/queue/hold", { ticketId, id: ticketId }, STAFF_AUTH)
+            .then((res) => normalizeTicketResponse(res)),
+
+    markOut: (ticketId: string) =>
+        api
+            .postData<TicketResponse>("/staff/queue/out", { ticketId, id: ticketId }, STAFF_AUTH)
+            .then((res) => normalizeTicketResponse(res)),
+
+    /**
+     * Legacy ticket operations (kept for backwards compatibility)
+     */
+    markServedLegacy: (ticketId: string) =>
+        api
+            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/served`, undefined, STAFF_AUTH)
+            .then((res) => normalizeTicketResponse(res)),
+
+    holdNoShowLegacy: (ticketId: string) =>
+        api
+            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/hold`, undefined, STAFF_AUTH)
             .then((res) => normalizeTicketResponse(res)),
 
     returnFromHold: (ticketId: string) =>
         api
-            .postData<TicketResponse>(`/staff/tickets/${ticketId}/return`, undefined, STAFF_AUTH)
+            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/return`, undefined, STAFF_AUTH)
             .then((res) => normalizeTicketResponse(res)),
 
     // ✅ SMS endpoints

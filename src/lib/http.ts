@@ -92,6 +92,13 @@ type RequestOptions = {
      * - cross-origin API -> "omit" (prevents CORS failures when backend uses wildcard origins)
      */
     credentials?: RequestCredentials
+    /**
+     * ✅ If false, do not throw ApiError on non-2xx responses.
+     * This is useful for endpoints that intentionally return structured JSON bodies
+     * with non-2xx status codes (e.g., `{ ok:false, reason:... }`) and you want
+     * the caller to handle it without try/catch.
+     */
+    throwOnError?: boolean
     signal?: AbortSignal
 }
 
@@ -274,8 +281,23 @@ function resolveCredentials(url: string, explicit?: RequestCredentials): Request
     }
 }
 
+function formatServerReason(reason: unknown): string {
+    const s = String(reason ?? "").trim()
+    if (!s) return ""
+    return s.replace(/[_-]+/g, " ").trim()
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = "GET", body, headers = {}, auth = "auto", params, credentials, signal } = options
+    const {
+        method = "GET",
+        body,
+        headers = {},
+        auth = "auto",
+        params,
+        credentials,
+        throwOnError = true,
+        signal,
+    } = options
 
     const finalHeaders: Record<string, string> = {
         Accept: "application/json",
@@ -341,12 +363,18 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     const data = await parseResponseSafe(res)
 
     if (!res.ok) {
+        // ✅ Allow structured error bodies to be handled by caller without try/catch
+        if (throwOnError === false) return data as T
+
         const responseHeaderMsg = res.headers.get("x-error-message") || res.headers.get("X-Error-Message") || ""
+        const reasonMsg = formatServerReason((data as any)?.reason)
+
         const serverMsg =
             (data as any)?.message ||
             (data as any)?.error ||
             (data as any)?.detail ||
-            (data as any)?.title
+            (data as any)?.title ||
+            reasonMsg
 
         const default404 = `Endpoint not found (404): ${method} ${url}. This usually means the backend route is missing or the API base URL is wrong.`
         const baseMessage =
