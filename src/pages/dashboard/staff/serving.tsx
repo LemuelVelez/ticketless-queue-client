@@ -31,6 +31,8 @@ import {
     type Ticket as TicketType,
 } from "@/api/staff"
 
+import { ApiError } from "@/lib/http"
+
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -88,11 +90,7 @@ function parsePanelCount(search: string, fallback = 3) {
 }
 
 function isSpeechSupported() {
-    return (
-        typeof window !== "undefined" &&
-        "speechSynthesis" in window &&
-        "SpeechSynthesisUtterance" in window
-    )
+    return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
 }
 
 type MonitorOption = {
@@ -229,10 +227,9 @@ function composeName(parts: unknown[]) {
 function getStudentFullName(ticket: any): string {
     const t = ticket as any
 
-    const selectionName =
-        Array.isArray(t?.transactionSelections)
-            ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
-            : ""
+    const selectionName = Array.isArray(t?.transactionSelections)
+        ? String(t.transactionSelections.find(Boolean)?.participantFullName ?? "").trim()
+        : ""
 
     const direct = firstNonEmptyText([
         // ✅ new/enriched fields (best UX)
@@ -273,17 +270,26 @@ function getStudentFullName(ticket: any): string {
  */
 function getStudentId(ticket: any): string {
     const t = ticket as any
-    return firstNonEmptyText([
-        t?.studentId,
-        t?.participant?.studentId,
-        t?.tcNumber,
-        t?.phone,
-        t?.participant?.phone,
-    ])
+    return firstNonEmptyText([t?.studentId, t?.participant?.studentId, t?.tcNumber, t?.phone, t?.participant?.phone])
 }
 
 function safeErrorMessage(err: any, fallback: string) {
-    return err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || fallback
+    if (!err) return fallback
+
+    const data =
+        err instanceof ApiError
+            ? err.data
+            : (err?.data ?? err?.response?.data) // keep compatibility if any legacy axios errors exist
+
+    const fromData =
+        typeof data === "string"
+            ? data
+            : data && typeof data === "object"
+              ? String((data as any)?.message || (data as any)?.error || (data as any)?.detail || (data as any)?.title || "")
+              : ""
+
+    const msg = String(err?.message || "").trim() || String(fromData || "").trim()
+    return msg || fallback
 }
 
 function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
@@ -329,21 +335,17 @@ function containsAnyHint(text: string, hints: string[]) {
 
 function isLikelyWomanVoice(v: SpeechSynthesisVoice) {
     const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
-    return (
-        containsAnyHint(blob, WOMAN_VOICE_HINTS) ||
-        /(?:^|[-_ ])f(?:$|[-_ 0-9])/i.test(blob)
-    )
+    return containsAnyHint(blob, WOMAN_VOICE_HINTS) || /(?:^|[-_ ])f(?:$|[-_ 0-9])/i.test(blob)
 }
 
 function isLikelyManVoice(v: SpeechSynthesisVoice) {
     const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
-    return (
-        containsAnyHint(blob, MAN_VOICE_HINTS) ||
-        /(?:^|[-_ ])m(?:$|[-_ 0-9])/i.test(blob)
-    )
+    return containsAnyHint(blob, MAN_VOICE_HINTS) || /(?:^|[-_ ])m(?:$|[-_ 0-9])/i.test(blob)
 }
 
-function resolveGenderedEnglishVoices(list: SpeechSynthesisVoice[]): {
+function resolveGenderedEnglishVoices(
+    list: SpeechSynthesisVoice[]
+): {
     english: SpeechSynthesisVoice[]
     woman?: SpeechSynthesisVoice
     man?: SpeechSynthesisVoice
@@ -397,8 +399,7 @@ function uniqueDepartmentAssignments(list?: DepartmentAssignment[] | null): Depa
             id,
             name: typeof item?.name === "string" ? item.name : undefined,
             code: typeof item?.code === "string" ? item.code : null,
-            transactionManager:
-                typeof item?.transactionManager === "string" ? item.transactionManager : null,
+            transactionManager: typeof item?.transactionManager === "string" ? item.transactionManager : null,
             enabled: item?.enabled !== false,
         })
     }
@@ -414,11 +415,7 @@ function departmentLabel(dep?: Partial<DepartmentAssignment> | null) {
     return name || code || "—"
 }
 
-function buildCalledSmsMessage(args: {
-    departmentLabel: string
-    queueNumber: number
-    windowNumber?: number
-}) {
+function buildCalledSmsMessage(args: { departmentLabel: string; queueNumber: number; windowNumber?: number }) {
     const dept = args.departmentLabel || "your office"
     const q = args.queueNumber
     const w = args.windowNumber
@@ -572,7 +569,9 @@ export default function StaffServingPage() {
     if (!tabIdRef.current) {
         try {
             tabIdRef.current =
-                typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `tab_${Date.now()}_${Math.random()}`
+                typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `tab_${Date.now()}_${Math.random()}`
         } catch {
             tabIdRef.current = `tab_${Date.now()}_${Math.random()}`
         }
@@ -589,11 +588,11 @@ export default function StaffServingPage() {
 
     const assignedDepartmentItems = React.useMemo(
         () => uniqueDepartmentAssignments(assignedDepartments),
-        [assignedDepartments],
+        [assignedDepartments]
     )
     const handledDepartmentItems = React.useMemo(
         () => uniqueDepartmentAssignments(handledDepartments),
-        [handledDepartments],
+        [handledDepartments]
     )
 
     const assignedOk = Boolean(departmentId && windowInfo?.id)
@@ -640,7 +639,7 @@ export default function StaffServingPage() {
 
     const resolvedEnglishVoices = React.useMemo(
         () => resolveGenderedEnglishVoices(Array.isArray(voices) ? voices : []),
-        [voices],
+        [voices]
     )
 
     React.useEffect(() => {
@@ -667,42 +666,36 @@ export default function StaffServingPage() {
         toast.message("No English TTS voice was found. Browser default voice will be used.")
     }, [resolvedEnglishVoices.english.length, voiceSupported, voices])
 
-    const speak = React.useCallback((text: string) => {
-        if (!voiceSupported) return
+    const speak = React.useCallback(
+        (text: string) => {
+            if (!voiceSupported) return
 
-        const preferred =
-            selectedVoiceType === "woman"
-                ? resolvedEnglishVoices.woman
-                : resolvedEnglishVoices.man
+            const preferred = selectedVoiceType === "woman" ? resolvedEnglishVoices.woman : resolvedEnglishVoices.man
 
-        const fallback =
-            selectedVoiceType === "woman"
-                ? resolvedEnglishVoices.man
-                : resolvedEnglishVoices.woman
+            const fallback = selectedVoiceType === "woman" ? resolvedEnglishVoices.man : resolvedEnglishVoices.woman
 
-        const voiceURI =
-            preferred?.voiceURI ||
-            fallback?.voiceURI ||
-            resolvedEnglishVoices.english[0]?.voiceURI
+            const voiceURI = preferred?.voiceURI || fallback?.voiceURI || resolvedEnglishVoices.english[0]?.voiceURI
 
-        try {
-            stopSpeech()
-        } catch {
-            // ignore
-        }
+            try {
+                stopSpeech()
+            } catch {
+                // ignore
+            }
 
-        try {
-            speakWithPackage(text, {
-                lang: "en-US",
-                rate: 1,
-                pitch: 1,
-                volume: 1,
-                ...(voiceURI ? { voiceURI } : {}),
-            })
-        } catch {
-            // ignore
-        }
-    }, [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported])
+            try {
+                speakWithPackage(text, {
+                    lang: "en-US",
+                    rate: 1,
+                    pitch: 1,
+                    volume: 1,
+                    ...(voiceURI ? { voiceURI } : {}),
+                })
+            } catch {
+                // ignore
+            }
+        },
+        [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported]
+    )
 
     const announceCall = React.useCallback(
         (queueNumber: number) => {
@@ -718,13 +711,11 @@ export default function StaffServingPage() {
             }
 
             const win = windowInfo?.number
-            const text = win
-                ? `Number ${queueNumber}, please proceed to window ${win}.`
-                : `Number ${queueNumber}.`
+            const text = win ? `Number ${queueNumber}, please proceed to window ${win}.` : `Number ${queueNumber}.`
 
             speak(text)
         },
-        [speak, voiceEnabled, voiceSupported, windowInfo?.number],
+        [speak, voiceEnabled, voiceSupported, windowInfo?.number]
     )
 
     const onRecallVoice = React.useCallback(() => {
@@ -831,124 +822,145 @@ export default function StaffServingPage() {
         }
     }, [])
 
-    const applyRemoteServingState = React.useCallback((payload: Partial<ServingSyncPayload>) => {
-        const ts = Number(payload?.ts ?? 0)
-        if (!Number.isFinite(ts) || ts <= 0) return
+    const applyRemoteServingState = React.useCallback(
+        (payload: Partial<ServingSyncPayload>) => {
+            const ts = Number(payload?.ts ?? 0)
+            if (!Number.isFinite(ts) || ts <= 0) return
 
-        // If we already know our window, only accept matching updates.
-        const localWindowId = String(windowInfo?.id ?? "").trim()
-        const remoteWindowId = String(payload?.windowId ?? "").trim()
-        if (localWindowId && remoteWindowId && localWindowId !== remoteWindowId) return
+            // If we already know our window, only accept matching updates.
+            const localWindowId = String(windowInfo?.id ?? "").trim()
+            const remoteWindowId = String(payload?.windowId ?? "").trim()
+            if (localWindowId && remoteWindowId && localWindowId !== remoteWindowId) return
 
-        if (ts <= lastAppliedStateTsRef.current) return
-        lastAppliedStateTsRef.current = ts
+            if (ts <= lastAppliedStateTsRef.current) return
+            lastAppliedStateTsRef.current = ts
 
-        // Prefer not to override assignment if we already have it; but fill gaps to improve UX.
-        if (!departmentId && typeof payload?.departmentId !== "undefined") setDepartmentId(payload.departmentId ?? null)
-        if (!windowInfo && payload?.windowInfo) setWindowInfo(payload.windowInfo)
+            // Prefer not to override assignment if we already have it; but fill gaps to improve UX.
+            if (!departmentId && typeof payload?.departmentId !== "undefined") setDepartmentId(payload.departmentId ?? null)
+            if (!windowInfo && payload?.windowInfo) setWindowInfo(payload.windowInfo)
 
-        if (Array.isArray(payload?.assignedDepartments) && payload.assignedDepartments.length && assignedDepartments.length === 0) {
-            setAssignedDepartments(payload.assignedDepartments)
-        }
-        if (Array.isArray(payload?.handledDepartments) && payload.handledDepartments.length && handledDepartments.length === 0) {
-            setHandledDepartments(payload.handledDepartments)
-        }
-
-        if (typeof payload?.snapshot !== "undefined") setSnapshot(payload.snapshot ?? null)
-        if (typeof payload?.current !== "undefined") setCurrent(payload.current ?? null)
-        if (Array.isArray(payload?.upNext)) setUpNext(payload.upNext)
-        if (Array.isArray(payload?.holdTickets)) setHoldTickets(payload.holdTickets)
-
-        setLastSyncedAtIso(new Date(ts).toISOString())
-        setStateLoading(false)
-        setLoading(false)
-    }, [assignedDepartments.length, departmentId, handledDepartments.length, windowInfo])
-
-    const refresh = React.useCallback(async (opts?: { silent?: boolean; broadcast?: boolean; tickTs?: number }) => {
-        if (!opts?.silent) setStateLoading(true)
-
-        try {
-            const a = await staffApi.myAssignment()
-            setDepartmentId(a.departmentId ?? null)
-            setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
-
-            const normalizedAssigned = uniqueDepartmentAssignments(a.assignedDepartments)
-            const normalizedHandled = uniqueDepartmentAssignments(a.handledDepartments)
-
-            setAssignedDepartments(normalizedAssigned)
-            setHandledDepartments(normalizedHandled.length ? normalizedHandled : normalizedAssigned)
-
-            const [snapshotResult, currentResult, waitingResult, holdResult] = await Promise.all([
-                staffApi.getDisplaySnapshot().catch(() => null),
-                a.departmentId && a.window?._id
-                    ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null }))
-                    : Promise.resolve({ ticket: null }),
-                a.departmentId && a.window?._id
-                    ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] }))
-                    : Promise.resolve({ tickets: [] }),
-                a.departmentId && a.window?._id
-                    ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] }))
-                    : Promise.resolve({ tickets: [] }),
-            ])
-
-            const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
-            if (!normalizedHandled.length && snapshotHandled.length) {
-                setHandledDepartments(snapshotHandled)
+            if (
+                Array.isArray(payload?.assignedDepartments) &&
+                payload.assignedDepartments.length &&
+                assignedDepartments.length === 0
+            ) {
+                setAssignedDepartments(payload.assignedDepartments)
             }
-            if (!normalizedAssigned.length && snapshotHandled.length) {
-                setAssignedDepartments(snapshotHandled)
+            if (
+                Array.isArray(payload?.handledDepartments) &&
+                payload.handledDepartments.length &&
+                handledDepartments.length === 0
+            ) {
+                setHandledDepartments(payload.handledDepartments)
             }
 
-            setSnapshot(snapshotResult ?? null)
-            setCurrent(currentResult.ticket ?? null)
+            if (typeof payload?.snapshot !== "undefined") setSnapshot(payload.snapshot ?? null)
+            if (typeof payload?.current !== "undefined") setCurrent(payload.current ?? null)
+            if (Array.isArray(payload?.upNext)) setUpNext(payload.upNext)
+            if (Array.isArray(payload?.holdTickets)) setHoldTickets(payload.holdTickets)
 
-            // Prefer explicit queue list for operator mode, but fallback to snapshot upNext if needed.
-            const explicit = waitingResult.tickets ?? []
-            if (explicit.length) {
-                setUpNext(explicit)
-            } else if (snapshotResult?.upNext?.length) {
-                setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
-            } else {
-                setUpNext([])
-            }
+            setLastSyncedAtIso(new Date(ts).toISOString())
+            setStateLoading(false)
+            setLoading(false)
+        },
+        [assignedDepartments.length, departmentId, handledDepartments.length, windowInfo]
+    )
 
-            setHoldTickets(holdResult.tickets ?? [])
+    const refresh = React.useCallback(
+        async (opts?: { silent?: boolean; broadcast?: boolean; tickTs?: number }) => {
+            if (!opts?.silent) setStateLoading(true)
 
-            const tickTs = typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
-            setLastSyncedAtIso(new Date(tickTs).toISOString())
-            lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, tickTs)
+            try {
+                const a = await staffApi.myAssignment()
+                setDepartmentId(a.departmentId ?? null)
+                setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
 
-            if (opts?.broadcast) {
-                const w = a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null
-                const payload: ServingSyncPayload = {
-                    ts: tickTs,
-                    windowId: w?.id ? String(w.id) : "",
-                    departmentId: a.departmentId ?? null,
-                    windowInfo: w,
-                    assignedDepartments: uniqueDepartmentAssignments(a.assignedDepartments),
-                    handledDepartments: uniqueDepartmentAssignments(a.handledDepartments?.length ? a.handledDepartments : a.assignedDepartments),
-                    snapshot: snapshotResult ?? null,
-                    current: (currentResult.ticket ?? null) as any,
-                    upNext: (explicit.length ? explicit : snapshotResult?.upNext?.length ? snapshotResult.upNext.map(mapBoardWindowToTicketLike) : []) as any,
-                    holdTickets: (holdResult.tickets ?? []) as any,
+                const normalizedAssigned = uniqueDepartmentAssignments(a.assignedDepartments)
+                const normalizedHandled = uniqueDepartmentAssignments(a.handledDepartments)
+
+                setAssignedDepartments(normalizedAssigned)
+                setHandledDepartments(normalizedHandled.length ? normalizedHandled : normalizedAssigned)
+
+                const [snapshotResult, currentResult, waitingResult, holdResult] = await Promise.all([
+                    staffApi.getDisplaySnapshot().catch(() => null),
+                    a.departmentId && a.window?._id
+                        ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null }))
+                        : Promise.resolve({ ticket: null }),
+                    a.departmentId && a.window?._id
+                        ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] }))
+                        : Promise.resolve({ tickets: [] }),
+                    a.departmentId && a.window?._id
+                        ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] }))
+                        : Promise.resolve({ tickets: [] }),
+                ])
+
+                const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
+                if (!normalizedHandled.length && snapshotHandled.length) {
+                    setHandledDepartments(snapshotHandled)
                 }
-                broadcastServingState(payload)
-            }
-        } catch (e: any) {
-            const msg = safeErrorMessage(e, "Failed to load now serving.")
-            if (!opts?.silent) {
-                toast.error(msg)
-            } else {
-                const now = Date.now()
-                if (now - lastToastSyncErrorAtRef.current > 15_000) {
-                    lastToastSyncErrorAtRef.current = now
+                if (!normalizedAssigned.length && snapshotHandled.length) {
+                    setAssignedDepartments(snapshotHandled)
+                }
+
+                setSnapshot(snapshotResult ?? null)
+                setCurrent(currentResult.ticket ?? null)
+
+                // Prefer explicit queue list for operator mode, but fallback to snapshot upNext if needed.
+                const explicit = waitingResult.tickets ?? []
+                if (explicit.length) {
+                    setUpNext(explicit)
+                } else if (snapshotResult?.upNext?.length) {
+                    setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
+                } else {
+                    setUpNext([])
+                }
+
+                setHoldTickets(holdResult.tickets ?? [])
+
+                const tickTs =
+                    typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
+                setLastSyncedAtIso(new Date(tickTs).toISOString())
+                lastAppliedStateTsRef.current = Math.max(lastAppliedStateTsRef.current, tickTs)
+
+                if (opts?.broadcast) {
+                    const w = a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null
+                    const payload: ServingSyncPayload = {
+                        ts: tickTs,
+                        windowId: w?.id ? String(w.id) : "",
+                        departmentId: a.departmentId ?? null,
+                        windowInfo: w,
+                        assignedDepartments: uniqueDepartmentAssignments(a.assignedDepartments),
+                        handledDepartments: uniqueDepartmentAssignments(
+                            a.handledDepartments?.length ? a.handledDepartments : a.assignedDepartments
+                        ),
+                        snapshot: snapshotResult ?? null,
+                        current: (currentResult.ticket ?? null) as any,
+                        upNext: (explicit.length
+                            ? explicit
+                            : snapshotResult?.upNext?.length
+                              ? snapshotResult.upNext.map(mapBoardWindowToTicketLike)
+                              : []) as any,
+                        holdTickets: (holdResult.tickets ?? []) as any,
+                    }
+                    broadcastServingState(payload)
+                }
+            } catch (e: any) {
+                const msg = safeErrorMessage(e, "Failed to load now serving.")
+                if (!opts?.silent) {
                     toast.error(msg)
+                } else {
+                    const now = Date.now()
+                    if (now - lastToastSyncErrorAtRef.current > 15_000) {
+                        lastToastSyncErrorAtRef.current = now
+                        toast.error(msg)
+                    }
                 }
+            } finally {
+                if (!opts?.silent) setStateLoading(false)
             }
-        } finally {
-            if (!opts?.silent) setStateLoading(false)
-        }
-    }, [broadcastServingState])
+        },
+        [broadcastServingState]
+    )
 
     const openBoardOnSelectedMonitor = React.useCallback(() => {
         if (typeof window === "undefined") return
@@ -1119,12 +1131,7 @@ export default function StaffServingPage() {
     const sendCalledSms = React.useCallback(
         async (
             ticket: TicketType,
-            opts?: {
-                message?: string
-                senderName?: string
-                toastOnSuccess?: boolean
-                advanceNotice?: boolean
-            },
+            opts?: { message?: string; senderName?: string; toastOnSuccess?: boolean; advanceNotice?: boolean }
         ) => {
             if (!ticket?._id) {
                 toast.error("No active ticket selected for SMS.")
@@ -1159,30 +1166,53 @@ export default function StaffServingPage() {
             }
 
             try {
-                const res = await staffApi.sendTicketCalledSms(ticket._id, {
-                    message,
-                    ...(senderName ? { senderName } : {}),
-                    respectOptOut: true,
-                    supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
-                    meta: {
-                        source: "staff-serving",
-                        kind: "current_called",
-                        departmentLabel: smsDepartmentLabel,
-                        windowNumber: windowInfo?.number ?? null,
-                    },
-                })
+                let res: any
+                try {
+                    // ✅ Updated API: unified alias (/staff/tickets/:id/sms)
+                    res = await staffApi.sendTicketSms(ticket._id, {
+                        message,
+                        ...(senderName ? { senderName } : {}),
+                        respectOptOut: true,
+                        supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
+                        meta: {
+                            source: "staff-serving",
+                            kind: "current_called",
+                            departmentLabel: smsDepartmentLabel,
+                            windowNumber: windowInfo?.number ?? null,
+                        },
+                    })
+                } catch (e: any) {
+                    // ✅ If backend returns 502 with JSON body (provider failure), our fetch-based client throws.
+                    // We still want to show/log the payload for best UX.
+                    if (e instanceof ApiError && e.status === 502 && e.data && typeof e.data === "object") {
+                        res = e.data
+                    } else {
+                        throw e
+                    }
+                }
 
                 nextLog.current.ok = Boolean(res?.ok)
                 nextLog.current.apiResponse = res
+                nextLog.current.error = !res?.ok
+                    ? String((res as any)?.error || (res as any)?.message || "").trim() || "SMS failed."
+                    : undefined
                 nextLog.current.reliabilitySummary = summarizeReliability(res?.result)
+
+                if (!res?.ok) {
+                    toast.error(nextLog.current.error || `SMS failed for #${ticket.queueNumber}.`)
+                    setLastSmsLog(nextLog)
+                    return false
+                }
 
                 const sum = nextLog.current.reliabilitySummary
                 if (sum.statusLabel === "skipped") {
                     toast.message(`SMS skipped for #${ticket.queueNumber} (opted out).`)
                 } else if (sum.statusLabel === "failed") {
                     toast.error(
-                        `SMS failed for #${ticket.queueNumber}${sum.providerNetwork ? ` • ${sum.providerNetwork}` : ""}.`,
+                        `SMS failed for #${ticket.queueNumber}${sum.providerNetwork ? ` • ${sum.providerNetwork}` : ""}.`
                     )
+                    setLastSmsLog(nextLog)
+                    return false
                 } else {
                     if (opts?.toastOnSuccess !== false) {
                         const supportLabel =
@@ -1195,12 +1225,12 @@ export default function StaffServingPage() {
                         toast.success(
                             `SMS ${sum.deliveryStatus || "sent"} for #${ticket.queueNumber}` +
                                 (sum.providerNetwork ? ` • ${sum.providerNetwork}` : "") +
-                                (sum.providerMessageId ? ` • id ${sum.providerMessageId}` : ""),
+                                (sum.providerMessageId ? ` • id ${sum.providerMessageId}` : "")
                         )
 
                         if (sum.supportedNetwork !== true) {
                             toast.message(
-                                `Network check: ${sum.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`,
+                                `Network check: ${sum.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`
                             )
                         }
                     }
@@ -1247,23 +1277,42 @@ export default function StaffServingPage() {
                 }
 
                 try {
-                    const res2 = await staffApi.sendTicketCalledSms(nextTicket._id, {
-                        message: nextMessage,
-                        ...(senderName ? { senderName } : {}),
-                        respectOptOut: true,
-                        supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
-                        meta: {
-                            source: "staff-serving",
-                            kind: "advance_notice",
-                            relatedCurrentTicketId: String(ticket._id),
-                            relatedCurrentQueueNumber: Number(ticket.queueNumber),
-                            nextQueueNumber: Number(nextTicket.queueNumber),
-                        },
-                    })
+                    let res2: any
+                    try {
+                        // ✅ Updated API: unified alias (/staff/tickets/:id/sms)
+                        res2 = await staffApi.sendTicketSms(nextTicket._id, {
+                            message: nextMessage,
+                            ...(senderName ? { senderName } : {}),
+                            respectOptOut: true,
+                            supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
+                            meta: {
+                                source: "staff-serving",
+                                kind: "advance_notice",
+                                relatedCurrentTicketId: String(ticket._id),
+                                relatedCurrentQueueNumber: Number(ticket.queueNumber),
+                                nextQueueNumber: Number(nextTicket.queueNumber),
+                            },
+                        })
+                    } catch (e2: any) {
+                        if (e2 instanceof ApiError && e2.status === 502 && e2.data && typeof e2.data === "object") {
+                            res2 = e2.data
+                        } else {
+                            throw e2
+                        }
+                    }
 
                     nextLog.advance.ok = Boolean(res2?.ok)
                     nextLog.advance.apiResponse = res2
+                    nextLog.advance.error = !res2?.ok
+                        ? String((res2 as any)?.error || (res2 as any)?.message || "").trim() || "Advance notice failed."
+                        : undefined
                     nextLog.advance.reliabilitySummary = summarizeReliability(res2?.result)
+
+                    if (!res2?.ok) {
+                        toast.message(`Advance notice failed: ${nextLog.advance.error || "Unknown error"}`)
+                        setLastSmsLog(nextLog)
+                        return true
+                    }
 
                     const sum2 = nextLog.advance.reliabilitySummary
                     if (sum2?.statusLabel === "skipped") {
@@ -1280,25 +1329,25 @@ export default function StaffServingPage() {
 
                         toast.success(
                             `Advance notice ${sum2?.deliveryStatus || "sent"} for next #${nextTicket.queueNumber}` +
-                                (sum2?.providerNetwork ? ` • ${sum2.providerNetwork}` : ""),
+                                (sum2?.providerNetwork ? ` • ${sum2.providerNetwork}` : "")
                         )
 
                         if (sum2?.supportedNetwork !== true) {
                             toast.message(
-                                `Network check (advance): ${sum2?.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`,
+                                `Network check (advance): ${sum2?.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`
                             )
                         }
                     }
                 } catch (e2: any) {
-                    nextLog.advance.error = String(e2?.message || "Advance notice failed")
-                    toast.message(`Advance notice failed: ${String(e2?.message || "Unknown error")}`)
+                    nextLog.advance.error = safeErrorMessage(e2, "Advance notice failed.")
+                    toast.message(`Advance notice failed: ${nextLog.advance.error}`)
                 }
 
                 setLastSmsLog(nextLog)
                 return true
             } catch (e: any) {
                 nextLog.current.ok = false
-                nextLog.current.error = String(e?.message ?? "Failed to send SMS.")
+                nextLog.current.error = safeErrorMessage(e, "Failed to send SMS.")
                 setLastSmsLog(nextLog)
                 toast.error(nextLog.current.error)
                 return false
@@ -1306,7 +1355,7 @@ export default function StaffServingPage() {
                 setSmsBusy(false)
             }
         },
-        [smsDepartmentLabel, upNext, windowInfo?.number],
+        [smsDepartmentLabel, upNext, windowInfo?.number]
     )
 
     const onSendSmsFromDialog = React.useCallback(async () => {
@@ -1354,7 +1403,7 @@ export default function StaffServingPage() {
 
             await refresh({ broadcast: true, tickTs: Date.now() })
         } catch (e: any) {
-            toast.error(e?.message ?? "No waiting tickets.")
+            toast.error(safeErrorMessage(e, "No waiting tickets."))
         } finally {
             setBusy(false)
         }
@@ -1368,7 +1417,7 @@ export default function StaffServingPage() {
             toast.success(`Marked #${current.queueNumber} as served.`)
             await refresh({ broadcast: true, tickTs: Date.now() })
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to mark served.")
+            toast.error(safeErrorMessage(e, "Failed to mark served."))
         } finally {
             setBusy(false)
         }
@@ -1382,11 +1431,11 @@ export default function StaffServingPage() {
             toast.success(
                 res.ticket.status === "OUT"
                     ? `Ticket #${current.queueNumber} is OUT.`
-                    : `Ticket #${current.queueNumber} moved to HOLD.`,
+                    : `Ticket #${current.queueNumber} moved to HOLD.`
             )
             await refresh({ broadcast: true, tickTs: Date.now() })
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to hold ticket.")
+            toast.error(safeErrorMessage(e, "Failed to hold ticket."))
         } finally {
             setBusy(false)
         }
@@ -1404,8 +1453,7 @@ export default function StaffServingPage() {
 
         const globalUpNextNumbers = (snapshot?.upNext?.length
             ? snapshot.upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
-            : upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
-        ) as number[]
+            : upNext.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))) as number[]
 
         const globalHoldNumbers = holdTickets.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n))
 
@@ -1418,15 +1466,11 @@ export default function StaffServingPage() {
                                 <Badge variant="secondary">Manager: {snapshot?.board?.transactionManager || "—"}</Badge>
                                 <Badge variant="secondary">Panels: {resolvedPanels}</Badge>
                                 <Badge variant="secondary">Windows: {boardWindows.length}</Badge>
-                                <Badge variant="secondary">
-                                    Generated: {fmtTime(snapshot?.meta?.generatedAt || null)}
-                                </Badge>
+                                <Badge variant="secondary">Generated: {fmtTime(snapshot?.meta?.generatedAt || null)}</Badge>
                                 <Badge variant={autoRefresh ? "default" : "secondary"}>
                                     Auto-refresh: {autoRefresh ? `ON (${(POLL_MS / 1000).toFixed(1)}s)` : "OFF"}
                                 </Badge>
-                                {lastSyncedAtIso ? (
-                                    <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge>
-                                ) : null}
+                                {lastSyncedAtIso ? <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge> : null}
                                 {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
                                 {autoRefresh ? (
                                     <Badge variant={isServingLeader ? "default" : "secondary"}>
@@ -1436,9 +1480,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="mt-2">
-                                <div className="text-xs uppercase tracking-widest text-muted-foreground">
-                                    Assigned departments
-                                </div>
+                                <div className="text-xs uppercase tracking-widest text-muted-foreground">Assigned departments</div>
                                 {assignedDepartmentItems.length ? (
                                     <div className="mt-1 flex flex-wrap gap-2">
                                         {assignedDepartmentItems.map((dep) => (
@@ -1461,7 +1503,9 @@ export default function StaffServingPage() {
 
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                             <div className="flex items-center gap-2 rounded-md border px-3 py-2">
-                                <Label htmlFor="panelsBoard" className="text-sm">Panels</Label>
+                                <Label htmlFor="panelsBoard" className="text-sm">
+                                    Panels
+                                </Label>
                                 <Select
                                     value={String(Math.max(3, panelCount))}
                                     onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}
@@ -1538,10 +1582,7 @@ export default function StaffServingPage() {
                     </div>
 
                     <div className="min-h-0 flex-1 overflow-auto p-4 lg:p-6">
-                        <div
-                            className="grid gap-4"
-                            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-                        >
+                        <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
                             {panelRows.map((row, idx) => {
                                 if (!row) {
                                     return (
@@ -1562,8 +1603,7 @@ export default function StaffServingPage() {
                                 const previewUpNext = getTwoNumberSlice(globalUpNextNumbers, idx)
                                 const previewHold = getTwoNumberSlice(globalHoldNumbers, idx)
 
-                                const currentForThisWindow =
-                                    current && (current as any).windowNumber === row.number ? current : null
+                                const currentForThisWindow = current && (current as any).windowNumber === row.number ? current : null
 
                                 const nowServingName = getStudentFullName(row.nowServing as any)
                                 const nowServingSid = getStudentId(row.nowServing as any)
@@ -1599,30 +1639,28 @@ export default function StaffServingPage() {
                                                     <div className="text-center">
                                                         <div className="font-medium">up next:</div>
                                                         <div className="mt-1 leading-6">
-                                                            {previewUpNext.length
-                                                                ? previewUpNext.map((n) => (
-                                                                    <div key={`up-${row.id}-${n}`}>#{n}</div>
-                                                                ))
-                                                                : <div>—</div>}
+                                                            {previewUpNext.length ? (
+                                                                previewUpNext.map((n) => <div key={`up-${row.id}-${n}`}>#{n}</div>)
+                                                            ) : (
+                                                                <div>—</div>
+                                                            )}
                                                         </div>
                                                     </div>
 
                                                     <div className="text-center">
                                                         <div className="font-medium">on hold:</div>
                                                         <div className="mt-1 leading-6">
-                                                            {previewHold.length
-                                                                ? previewHold.map((n) => (
-                                                                    <div key={`hold-${row.id}-${n}`}>#{n}</div>
-                                                                ))
-                                                                : <div>—</div>}
+                                                            {previewHold.length ? (
+                                                                previewHold.map((n) => <div key={`hold-${row.id}-${n}`}>#{n}</div>)
+                                                            ) : (
+                                                                <div>—</div>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </div>
 
                                                 <div className="mt-5 text-center text-xs text-muted-foreground">
-                                                    {row.nowServing
-                                                        ? `Called at ${fmtTime(row.nowServing.calledAt)}`
-                                                        : "No active called ticket"}
+                                                    {row.nowServing ? `Called at ${fmtTime(row.nowServing.calledAt)}` : "No active called ticket"}
                                                 </div>
                                             </div>
                                         </CardContent>
@@ -1697,7 +1735,6 @@ export default function StaffServingPage() {
                                     Recall voice
                                 </Button>
 
-                                {/* ✅ No manual refresh required; keep a compact “Sync now” in overflow menu */}
                                 <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
                                         <Button variant="outline" size="icon" className="shrink-0" aria-label="Now Serving options">
@@ -1787,10 +1824,10 @@ export default function StaffServingPage() {
                                                 <div className="rounded-md border bg-muted p-3 text-sm text-muted-foreground">
                                                     {current
                                                         ? buildCalledSmsMessage({
-                                                            departmentLabel: smsDepartmentLabel,
-                                                            queueNumber: current.queueNumber,
-                                                            windowNumber: windowInfo?.number,
-                                                        })
+                                                              departmentLabel: smsDepartmentLabel,
+                                                              queueNumber: current.queueNumber,
+                                                              windowNumber: windowInfo?.number,
+                                                          })
                                                         : "Queue update message preview will appear when an active ticket is selected."}
                                                 </div>
                                             ) : (
@@ -1807,20 +1844,14 @@ export default function StaffServingPage() {
                                             )}
 
                                             <div className="rounded-md border p-3 text-xs text-muted-foreground">
-                                                Reliability checks enabled:{" "}
-                                                <strong>Supported networks:</strong> Globe / Smart •{" "}
-                                                <strong>Status:</strong> queued/sent/failed •{" "}
-                                                <strong>Provider response:</strong> logged to SMS Log.
+                                                Reliability checks enabled: <strong>Supported networks:</strong> Globe / Smart •{" "}
+                                                <strong>Status:</strong> queued/sent/failed • <strong>Provider response:</strong> logged to
+                                                SMS Log.
                                             </div>
                                         </div>
 
                                         <DialogFooter>
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                onClick={() => setSmsDialogOpen(false)}
-                                                disabled={smsBusy}
-                                            >
+                                            <Button type="button" variant="outline" onClick={() => setSmsDialogOpen(false)} disabled={smsBusy}>
                                                 Cancel
                                             </Button>
                                             <Button
@@ -1838,11 +1869,7 @@ export default function StaffServingPage() {
 
                                 <Dialog open={smsLogDialogOpen} onOpenChange={setSmsLogDialogOpen}>
                                     <DialogTrigger asChild>
-                                        <Button
-                                            variant="outline"
-                                            disabled={!lastSmsLog}
-                                            className="w-full gap-2 sm:w-auto"
-                                        >
+                                        <Button variant="outline" disabled={!lastSmsLog} className="w-full gap-2 sm:w-auto">
                                             <MessageSquare className="h-4 w-4" />
                                             SMS Log
                                         </Button>
@@ -1850,37 +1877,25 @@ export default function StaffServingPage() {
                                     <DialogContent className="sm:max-w-170">
                                         <DialogHeader>
                                             <DialogTitle>SMS Log (Reliability + Provider Response)</DialogTitle>
-                                            <DialogDescription>
-                                                Last send attempt details for auditing and troubleshooting.
-                                            </DialogDescription>
+                                            <DialogDescription>Last send attempt details for auditing and troubleshooting.</DialogDescription>
                                         </DialogHeader>
 
                                         {!lastSmsLog ? (
-                                            <div className="rounded-md border p-4 text-sm text-muted-foreground">
-                                                No SMS logs yet.
-                                            </div>
+                                            <div className="rounded-md border p-4 text-sm text-muted-foreground">No SMS logs yet.</div>
                                         ) : (
                                             <div className="grid gap-3">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <Badge variant="secondary">At: {fmtTime(lastSmsLog.at)}</Badge>
-                                                    <Badge variant="secondary">
-                                                        Current: #{lastSmsLog.current.queueNumber}
-                                                    </Badge>
+                                                    <Badge variant="secondary">Current: #{lastSmsLog.current.queueNumber}</Badge>
                                                     <Badge variant="secondary">
                                                         Advance: {lastSmsLog.advance?.enabled ? "Enabled" : "Disabled"}
                                                     </Badge>
-                                                    <Badge variant="secondary">
-                                                        Networks: {SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}
-                                                    </Badge>
+                                                    <Badge variant="secondary">Networks: {SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}</Badge>
                                                 </div>
 
                                                 <div className="grid gap-2">
                                                     <Label>Raw provider response (JSON)</Label>
-                                                    <Textarea
-                                                        value={safeJson(lastSmsLog)}
-                                                        readOnly
-                                                        className="min-h-80 font-mono text-xs"
-                                                    />
+                                                    <Textarea value={safeJson(lastSmsLog)} readOnly className="min-h-80 font-mono text-xs" />
                                                 </div>
                                             </div>
                                         )}
@@ -1900,22 +1915,14 @@ export default function StaffServingPage() {
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex flex-wrap items-center gap-2 text-sm">
                                 <Badge variant="secondary">Assigned depts: {assignedDepartmentItems.length}</Badge>
-                                <Badge variant="secondary">
-                                    Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}
-                                </Badge>
-                                <Badge variant="secondary">
-                                    Manager: {snapshot?.board?.transactionManager || "—"}
-                                </Badge>
-                                <Badge variant="secondary">
-                                    Managed windows: {snapshot?.board?.windows?.length ?? 0}
-                                </Badge>
+                                <Badge variant="secondary">Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}</Badge>
+                                <Badge variant="secondary">Manager: {snapshot?.board?.transactionManager || "—"}</Badge>
+                                <Badge variant="secondary">Managed windows: {snapshot?.board?.windows?.length ?? 0}</Badge>
                                 <Badge variant="secondary">{lastSmsBadgeText}</Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                                 <Badge variant={autoRefresh ? "default" : "secondary"}>{syncBadgeText}</Badge>
-                                {lastSyncedAtIso ? (
-                                    <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge>
-                                ) : null}
+                                {lastSyncedAtIso ? <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge> : null}
                                 {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
                                 {autoRefresh && assignedOk ? (
                                     <Badge variant={isServingLeader ? "default" : "secondary"}>
@@ -1981,9 +1988,7 @@ export default function StaffServingPage() {
 
                         <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-2">
                             <div>
-                                <div className="text-xs uppercase tracking-widest text-muted-foreground">
-                                    Assigned departments
-                                </div>
+                                <div className="text-xs uppercase tracking-widest text-muted-foreground">Assigned departments</div>
                                 {assignedDepartmentItems.length ? (
                                     <div className="mt-2 flex flex-wrap gap-2">
                                         {assignedDepartmentItems.map((dep) => (
@@ -2012,16 +2017,16 @@ export default function StaffServingPage() {
                                         ))}
                                     </div>
                                 ) : (
-                                    <div className="mt-2 text-xs text-muted-foreground">
-                                        No handled departments available.
-                                    </div>
+                                    <div className="mt-2 text-xs text-muted-foreground">No handled departments available.</div>
                                 )}
                             </div>
                         </div>
 
                         <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-12">
                             <div className="lg:col-span-3">
-                                <Label htmlFor="monitorSelect" className="mb-2 block text-sm">Display monitor</Label>
+                                <Label htmlFor="monitorSelect" className="mb-2 block text-sm">
+                                    Display monitor
+                                </Label>
                                 <Select
                                     value={selectedMonitorId || undefined}
                                     onValueChange={setSelectedMonitorId}
@@ -2041,7 +2046,9 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-2">
-                                <Label htmlFor="panelCountSelect" className="mb-2 block text-sm">Split panels</Label>
+                                <Label htmlFor="panelCountSelect" className="mb-2 block text-sm">
+                                    Split panels
+                                </Label>
                                 <Select value={String(panelCount)} onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}>
                                     <SelectTrigger id="panelCountSelect" className="w-full">
                                         <SelectValue placeholder="Panels" />
@@ -2057,7 +2064,9 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-3">
-                                <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">Announcement voice (English)</Label>
+                                <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">
+                                    Announcement voice (English)
+                                </Label>
                                 <Select
                                     value={selectedVoiceType}
                                     onValueChange={(v) => setSelectedVoiceType(v === "man" ? "man" : "woman")}
@@ -2067,12 +2076,8 @@ export default function StaffServingPage() {
                                         <SelectValue placeholder="Select voice type" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="woman">
-                                            Woman ({formatVoiceLabel(resolvedEnglishVoices.woman)})
-                                        </SelectItem>
-                                        <SelectItem value="man">
-                                            Man ({formatVoiceLabel(resolvedEnglishVoices.man)})
-                                        </SelectItem>
+                                        <SelectItem value="woman">Woman ({formatVoiceLabel(resolvedEnglishVoices.woman)})</SelectItem>
+                                        <SelectItem value="man">Man ({formatVoiceLabel(resolvedEnglishVoices.man)})</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -2090,11 +2095,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="flex flex-col justify-end gap-2 lg:col-span-2">
-                                <Button
-                                    className="w-full gap-2"
-                                    onClick={openBoardOnSelectedMonitor}
-                                    disabled={!monitorOptions.length}
-                                >
+                                <Button className="w-full gap-2" onClick={openBoardOnSelectedMonitor} disabled={!monitorOptions.length}>
                                     <ExternalLink className="h-4 w-4" />
                                     Open queue board
                                 </Button>
@@ -2107,13 +2108,14 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                Voice engine: react-text-to-speech • English only • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
+                                Voice engine: react-text-to-speech • English only • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man:{" "}
+                                {formatVoiceLabel(resolvedEnglishVoices.man)}
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                SMS engine: Semaphore via backend •{" "}
-                                <strong>Reliability:</strong> network check ({SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}) + status + provider response log •{" "}
-                                <strong>Advance notice:</strong> {smsAdvanceNoticeEnabled ? "Enabled" : "Disabled"}
+                                SMS engine: Semaphore via backend • <strong>Reliability:</strong> network check ({SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")})
+                                + status + provider response log • <strong>Advance notice:</strong>{" "}
+                                {smsAdvanceNoticeEnabled ? "Enabled" : "Disabled"}
                             </div>
                         </div>
                     </CardHeader>
@@ -2126,7 +2128,6 @@ export default function StaffServingPage() {
                             </div>
                         ) : (
                             <div className="grid gap-6 lg:grid-cols-12">
-                                {/* Main billboard */}
                                 <Card className="lg:col-span-8">
                                     <CardHeader>
                                         <CardTitle>Active ticket billboard</CardTitle>
@@ -2142,11 +2143,8 @@ export default function StaffServingPage() {
                                                             <div className="text-xs uppercase tracking-widest text-muted-foreground">
                                                                 Now serving
                                                             </div>
-                                                            <div className="mt-2 text-7xl font-semibold tracking-tight">
-                                                                #{current.queueNumber}
-                                                            </div>
+                                                            <div className="mt-2 text-7xl font-semibold tracking-tight">#{current.queueNumber}</div>
 
-                                                            {/* ✅ Full name first (Participant-friendly) */}
                                                             <div className="mt-3 text-sm text-muted-foreground">
                                                                 Participant:{" "}
                                                                 <span className="font-medium text-foreground whitespace-normal wrap-break-word">
@@ -2155,20 +2153,15 @@ export default function StaffServingPage() {
                                                             </div>
 
                                                             <div className="text-sm text-muted-foreground">
-                                                                ID/Phone:{" "}
-                                                                <span className="tabular-nums">{getStudentId(current) || "—"}</span>
+                                                                ID/Phone: <span className="tabular-nums">{getStudentId(current) || "—"}</span>
                                                             </div>
 
-                                                            <div className="text-sm text-muted-foreground">
-                                                                Called at: {fmtTime((current as any).calledAt)}
-                                                            </div>
+                                                            <div className="text-sm text-muted-foreground">Called at: {fmtTime((current as any).calledAt)}</div>
                                                         </div>
 
                                                         <div className="flex flex-col items-start gap-2 md:items-end">
                                                             <Badge>CALLED</Badge>
-                                                            <div className="text-xs text-muted-foreground">
-                                                                Hold attempts: {current.holdAttempts ?? 0}
-                                                            </div>
+                                                            <div className="text-xs text-muted-foreground">Hold attempts: {current.holdAttempts ?? 0}</div>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2196,12 +2189,7 @@ export default function StaffServingPage() {
                                                         Hold / No-show
                                                     </Button>
 
-                                                    <Button
-                                                        type="button"
-                                                        onClick={() => void onServed()}
-                                                        disabled={busy}
-                                                        className="w-full gap-2 sm:w-auto"
-                                                    >
+                                                    <Button type="button" onClick={() => void onServed()} disabled={busy} className="w-full gap-2 sm:w-auto">
                                                         <CheckCircle2 className="h-4 w-4" />
                                                         Mark served
                                                     </Button>
@@ -2215,7 +2203,6 @@ export default function StaffServingPage() {
                                     </CardContent>
                                 </Card>
 
-                                {/* Operator side rail */}
                                 <Card className="lg:col-span-4">
                                     <CardHeader>
                                         <CardTitle>Operator rail</CardTitle>
@@ -2237,9 +2224,7 @@ export default function StaffServingPage() {
                                                             <div key={t._id} className="flex items-start justify-between gap-3 rounded-xl border p-3">
                                                                 <div className="min-w-0">
                                                                     <div className="text-xl font-semibold tabular-nums">#{t.queueNumber}</div>
-                                                                    <div className="mt-1 font-medium whitespace-normal wrap-break-word leading-snug">
-                                                                        {name || "—"}
-                                                                    </div>
+                                                                    <div className="mt-1 font-medium whitespace-normal wrap-break-word leading-snug">{name || "—"}</div>
                                                                     <div className="mt-1 text-xs text-muted-foreground">
                                                                         ID/Phone: <span className="tabular-nums">{sid || "—"}</span>
                                                                     </div>
@@ -2273,7 +2258,6 @@ export default function StaffServingPage() {
                                     </CardContent>
                                 </Card>
 
-                                {/* Multi-window manager preview */}
                                 <Card className="lg:col-span-12">
                                     <CardHeader>
                                         <CardTitle className="flex items-center gap-2">
@@ -2290,16 +2274,17 @@ export default function StaffServingPage() {
                                             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                                                 {snapshot.board.windows.map((w, idx) => {
                                                     const previewUpNext = getTwoNumberSlice(
-                                                        (snapshot?.upNext?.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n)) as number[]) || [],
-                                                        idx,
+                                                        (snapshot?.upNext?.map((t) => Number(t.queueNumber)).filter((n) =>
+                                                            Number.isFinite(n)
+                                                        ) as number[]) || [],
+                                                        idx
                                                     )
                                                     const previewHold = getTwoNumberSlice(
                                                         holdTickets.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n)),
-                                                        idx,
+                                                        idx
                                                     )
 
-                                                    const currentForThisWindow =
-                                                        current && (current as any).windowNumber === w.number ? current : null
+                                                    const currentForThisWindow = current && (current as any).windowNumber === w.number ? current : null
 
                                                     const nowServingName = getStudentFullName(w.nowServing as any)
                                                     const nowServingSid = getStudentId(w.nowServing as any)
@@ -2313,9 +2298,7 @@ export default function StaffServingPage() {
 
                                                     return (
                                                         <div key={w.id} className="rounded-xl border p-4">
-                                                            <div className="text-center text-lg font-semibold">
-                                                                Window {w.number}
-                                                            </div>
+                                                            <div className="text-center text-lg font-semibold">Window {w.number}</div>
                                                             <div className="mt-3 text-center text-base font-medium">Now Serving:</div>
                                                             <div className="mt-2 text-center text-[clamp(3.4rem,8vw,6rem)] font-bold leading-none">
                                                                 {queueNumberLabel(w.nowServing?.queueNumber)}
@@ -2328,21 +2311,21 @@ export default function StaffServingPage() {
                                                                 <div className="text-center">
                                                                     <div className="font-medium">up next:</div>
                                                                     <div className="mt-1 leading-5">
-                                                                        {previewUpNext.length
-                                                                            ? previewUpNext.map((n) => (
-                                                                                <div key={`preview-up-${w.id}-${n}`}>#{n}</div>
-                                                                            ))
-                                                                            : <div>—</div>}
+                                                                        {previewUpNext.length ? (
+                                                                            previewUpNext.map((n) => <div key={`preview-up-${w.id}-${n}`}>#{n}</div>)
+                                                                        ) : (
+                                                                            <div>—</div>
+                                                                        )}
                                                                     </div>
                                                                 </div>
                                                                 <div className="text-center">
                                                                     <div className="font-medium">on hold:</div>
                                                                     <div className="mt-1 leading-5">
-                                                                        {previewHold.length
-                                                                            ? previewHold.map((n) => (
-                                                                                <div key={`preview-hold-${w.id}-${n}`}>#{n}</div>
-                                                                            ))
-                                                                            : <div>—</div>}
+                                                                        {previewHold.length ? (
+                                                                            previewHold.map((n) => <div key={`preview-hold-${w.id}-${n}`}>#{n}</div>)
+                                                                        ) : (
+                                                                            <div>—</div>
+                                                                        )}
                                                                     </div>
                                                                 </div>
                                                             </div>
