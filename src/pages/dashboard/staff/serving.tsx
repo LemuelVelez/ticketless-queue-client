@@ -54,7 +54,7 @@ function fmtTime(v?: string | null) {
     if (!v) return "—"
     const d = new Date(v)
     if (Number.isNaN(d.getTime())) return "—"
-    return d.toLocaleString()
+    return d.toLocaleString("en-US")
 }
 
 function parseBool(v: unknown): boolean {
@@ -248,7 +248,7 @@ const MAN_VOICE_HINTS = [
     "william",
 ]
 
-const EN_PH_HINTS = ["en-ph", "philippines", "philippine"]
+const EN_US_HINTS = ["en-us", "united states", "us english", "american", "english (united states)"]
 
 function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
     return {
@@ -267,10 +267,16 @@ function containsAnyHint(text: string, hints: string[]) {
     return hints.some((h) => low.includes(h))
 }
 
-function isEnglishPhilippinesVoice(v: SpeechSynthesisVoice) {
-    const lang = String(v.lang || "").trim().toLowerCase()
+function normalizeLangTag(tag?: string | null) {
+    const raw = String(tag || "").trim()
+    if (!raw) return ""
+    return raw.replace(/_/g, "-")
+}
+
+function isEnglishUSVoice(v: SpeechSynthesisVoice) {
+    const lang = normalizeLangTag(v.lang || "").toLowerCase()
     const blob = `${v.name || ""} ${v.voiceURI || ""} ${lang}`.toLowerCase()
-    return lang.startsWith("en-ph") || containsAnyHint(blob, EN_PH_HINTS)
+    return lang.startsWith("en-us") || containsAnyHint(blob, EN_US_HINTS)
 }
 
 function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
@@ -280,7 +286,7 @@ function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
         const key = String(v.voiceURI || "").trim() || `${v.name}-${v.lang}`
         if (!key) continue
 
-        const lang = String(v.lang || "").trim().toLowerCase()
+        const lang = normalizeLangTag(v.lang || "").trim().toLowerCase()
         if (!lang.startsWith("en")) continue
 
         if (!map.has(key)) map.set(key, v)
@@ -289,9 +295,10 @@ function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
     const out = Array.from(map.values())
 
     return out.sort((a, b) => {
-        const aPH = isEnglishPhilippinesVoice(a) ? 0 : 1
-        const bPH = isEnglishPhilippinesVoice(b) ? 0 : 1
-        if (aPH !== bPH) return aPH - bPH
+        // ✅ Prefer US English voices first
+        const aUS = isEnglishUSVoice(a) ? 0 : 1
+        const bUS = isEnglishUSVoice(b) ? 0 : 1
+        if (aUS !== bUS) return aUS - bUS
 
         const aDefault = a.default ? 0 : 1
         const bDefault = b.default ? 0 : 1
@@ -399,6 +406,32 @@ function defaultSmsCalledMessage(queueNumber: number, windowNumber?: number) {
     return `Queue update: Your ticket #${queueNumber} is now being served${windowText}.`
 }
 
+// ✅ Normalize TTS text (clear spacing + punctuation-driven pauses)
+function normalizeTtsText(text: string) {
+    const cleaned = String(text || "")
+        .replace(/\s+/g, " ")
+        .replace(/\s+([,.!?;:])/g, "$1")
+        .trim()
+
+    if (!cleaned) return ""
+    return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`
+}
+
+// ✅ US English announcement with natural pauses + clear articulation
+function buildNowServingAnnouncement(queueNumber: number, windowNumber?: number) {
+    const n = Number(queueNumber)
+    const w = typeof windowNumber === "number" ? Number(windowNumber) : NaN
+
+    if (!Number.isFinite(n)) return "Now serving."
+
+    if (Number.isFinite(w)) {
+        // Ellipsis + periods help create natural pauses (no fast/robotic delivery)
+        return `Now serving... ticket number ${n}. Please proceed to window ${w}. Thank you.`
+    }
+
+    return `Now serving... ticket number ${n}.`
+}
+
 export default function StaffServingPage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -461,6 +494,14 @@ export default function StaffServingPage() {
     const englishVoiceWarnedRef = React.useRef(false)
     const lastAnnouncedRef = React.useRef<number | null>(null)
 
+    // ✅ helps ensure stop() applies and prevents clipped/fast starts
+    const speakTimerRef = React.useRef<number | null>(null)
+
+    // ✅ Natural speaking settings (not fast)
+    const ANNOUNCEMENT_RATE = 0.92
+    const ANNOUNCEMENT_PITCH = 1.02
+    const ANNOUNCEMENT_GAP_MS = 140
+
     // -------- SMS states --------
     const [autoSmsOnCall, setAutoSmsOnCall] = React.useState(false)
     const [smsDialogOpen, setSmsDialogOpen] = React.useState(false)
@@ -504,12 +545,23 @@ export default function StaffServingPage() {
         if (englishVoiceWarnedRef.current) return
 
         englishVoiceWarnedRef.current = true
-        toast.message("No English TTS voice was found. Browser default voice will be used.")
+        toast.message("No English TTS voice was found. Your browser default voice will be used.")
     }, [resolvedEnglishVoices.english.length, voiceSupported, voices])
+
+    React.useEffect(() => {
+        return () => {
+            if (typeof window === "undefined") return
+            if (speakTimerRef.current) {
+                window.clearTimeout(speakTimerRef.current)
+                speakTimerRef.current = null
+            }
+        }
+    }, [])
 
     const speak = React.useCallback(
         (text: string) => {
             if (!voiceSupported) return
+            if (typeof window === "undefined") return
 
             const preferred =
                 selectedVoiceType === "woman"
@@ -527,7 +579,17 @@ export default function StaffServingPage() {
                 resolvedEnglishVoices.english[0]
 
             const voiceURI = chosen?.voiceURI
-            const voiceLang = String(chosen?.lang || "").trim() || "en-PH"
+
+            const voiceLangRaw = normalizeLangTag(chosen?.lang || "")
+            const voiceLang = voiceLangRaw || "en-US"
+
+            const finalLang = voiceLang.toLowerCase().startsWith("en-") ? voiceLang : "en-US"
+
+            // clear any pending speak calls so pacing stays clean
+            if (speakTimerRef.current) {
+                window.clearTimeout(speakTimerRef.current)
+                speakTimerRef.current = null
+            }
 
             try {
                 stopSpeech()
@@ -535,21 +597,35 @@ export default function StaffServingPage() {
                 // ignore
             }
 
-            try {
-                speakWithPackage(text, {
-                    // ✅ Prefer English (Philippines). If unavailable, voiceURI + lang will fall back gracefully.
-                    lang: voiceLang.toLowerCase().startsWith("en-") ? voiceLang : "en-PH",
-                    // ✅ Clear + vivid (slightly slower, slightly higher pitch)
-                    rate: 0.95,
-                    pitch: 1.1,
-                    volume: 1,
-                    ...(voiceURI ? { voiceURI } : {}),
-                })
-            } catch {
-                // ignore
-            }
+            const cleaned = normalizeTtsText(text)
+
+            // small gap improves articulation and prevents clipped/fast starts
+            speakTimerRef.current = window.setTimeout(() => {
+                try {
+                    speakWithPackage(cleaned, {
+                        // ✅ Use US English by default; chosen voice should already be en-US preferred
+                        lang: finalLang,
+                        // ✅ Natural pace (not fast) + friendly tone
+                        rate: ANNOUNCEMENT_RATE,
+                        pitch: ANNOUNCEMENT_PITCH,
+                        volume: 1,
+                        ...(voiceURI ? { voiceURI } : {}),
+                    })
+                } catch {
+                    // ignore
+                }
+            }, ANNOUNCEMENT_GAP_MS)
         },
-        [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported],
+        [
+            ANNOUNCEMENT_GAP_MS,
+            ANNOUNCEMENT_PITCH,
+            ANNOUNCEMENT_RATE,
+            resolvedEnglishVoices,
+            selectedVoiceType,
+            speakWithPackage,
+            stopSpeech,
+            voiceSupported,
+        ],
     )
 
     const announceCall = React.useCallback(
@@ -566,9 +642,7 @@ export default function StaffServingPage() {
             }
 
             const win = windowInfo?.number
-            const text = win
-                ? `Now serving number ${queueNumber}. Please proceed to window ${win}. Thank you.`
-                : `Now serving number ${queueNumber}.`
+            const text = buildNowServingAnnouncement(queueNumber, win)
 
             speak(text)
         },
@@ -1379,7 +1453,7 @@ export default function StaffServingPage() {
 
                             <div className="lg:col-span-3">
                                 <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">
-                                    Announcement voice (English • Philippines preferred)
+                                    Announcement voice (English • United States preferred)
                                 </Label>
                                 <Select
                                     value={selectedVoiceType}
@@ -1430,7 +1504,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                Voice engine: react-text-to-speech • Prefers en-PH when available • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
+                                Voice engine: react-text-to-speech • Prefers en-US when available • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
