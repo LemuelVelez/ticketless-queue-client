@@ -40,6 +40,13 @@ type RequestOptions = {
      * - false: no token
      */
     auth?: RequestAuthMode
+    /**
+     * Fetch credentials behavior.
+     * Default is smart:
+     * - same-origin API -> "include" (keeps cookie-based flows working)
+     * - cross-origin API -> "omit" (prevents CORS failures when backend uses wildcard origins)
+     */
+    credentials?: RequestCredentials
     signal?: AbortSignal
 }
 
@@ -150,8 +157,25 @@ function snippet(val: unknown, max = 220) {
     return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
+function resolveCredentials(url: string, explicit?: RequestCredentials): RequestCredentials {
+    if (explicit) return explicit
+
+    // In SSR / Node contexts, omit by default.
+    if (typeof window === "undefined") return "omit"
+
+    // If API is same-origin, keep include (supports cookie-based admin/staff sessions if any).
+    // If cross-origin, omit to avoid common CORS failures (wildcard origins + credentials is blocked by browsers).
+    try {
+        const u = new URL(url, window.location.origin)
+        return u.origin === window.location.origin ? "include" : "omit"
+    } catch {
+        // Safe fallback
+        return "omit"
+    }
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = "GET", body, headers = {}, auth = true, signal } = options
+    const { method = "GET", body, headers = {}, auth = true, credentials, signal } = options
 
     const finalHeaders: Record<string, string> = {
         Accept: "application/json",
@@ -198,7 +222,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
             headers: finalHeaders,
             body: finalBody,
             signal,
-            credentials: "include",
+            // ✅ FIX: Smart credentials to prevent cross-origin CORS blocks on Join Queue
+            credentials: resolveCredentials(url, credentials),
         })
     } catch (err: any) {
         throw new ApiError(
