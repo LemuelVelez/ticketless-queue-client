@@ -1,16 +1,6 @@
 import * as React from "react"
 import { toast } from "sonner"
-import {
-    Expand,
-    History,
-    Pause,
-    Play,
-    RefreshCcw,
-    Volume2,
-    VolumeX,
-    WifiOff,
-    X,
-} from "lucide-react"
+import { Expand, History, Pause, Play, RefreshCcw, WifiOff, X } from "lucide-react"
 
 import { landingApi, type Announcement, type PublicDisplayState, type TicketView } from "@/api/landing"
 import { cn } from "@/lib/utils"
@@ -27,7 +17,6 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 const STORAGE_MANAGER = "qp_public_display_manager"
-const STORAGE_VOICE = "qp_public_display_voice"
 const STORAGE_AUTO_REFRESH = "qp_public_display_auto_refresh"
 
 function titleCase(input: string) {
@@ -107,10 +96,6 @@ type DisplayBoardProps = {
     loadingState: boolean
     onRefresh: () => void
 
-    voiceEnabled: boolean
-    onVoiceToggle: (v: boolean) => void
-    onTestVoice: () => void
-
     autoRefreshEnabled: boolean
     onAutoRefreshToggle: (v: boolean) => void
 
@@ -136,9 +121,6 @@ function DisplayBoard({
     state,
     loadingState,
     onRefresh,
-    voiceEnabled,
-    onVoiceToggle,
-    onTestVoice,
     autoRefreshEnabled,
     onAutoRefreshToggle,
     recentCalls,
@@ -194,7 +176,6 @@ function DisplayBoard({
 
                         <p className="mt-1 text-sm text-muted-foreground">
                             Switch managers to view their active service windows, now serving, and up next.
-                            <span className="hidden sm:inline"> Voice announcements can be enabled for live calls.</span>
                         </p>
                     </div>
 
@@ -252,38 +233,6 @@ function DisplayBoard({
                             </span>
 
                             <div className="flex flex-wrap items-center gap-3">
-                                <div className="flex items-center gap-2">
-                                    <Switch
-                                        checked={voiceEnabled}
-                                        onCheckedChange={onVoiceToggle}
-                                        aria-label="Toggle voice announcements"
-                                    />
-                                    <span className="text-sm text-muted-foreground">
-                                        {voiceEnabled ? (
-                                            <span className="inline-flex items-center gap-1">
-                                                <Volume2 className="h-4 w-4" />
-                                                Voice on
-                                            </span>
-                                        ) : (
-                                            <span className="inline-flex items-center gap-1">
-                                                <VolumeX className="h-4 w-4" />
-                                                Voice off
-                                            </span>
-                                        )}
-                                    </span>
-
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={onTestVoice}
-                                        className="h-8 px-2"
-                                    >
-                                        <Volume2 className="mr-2 h-4 w-4" />
-                                        Test
-                                    </Button>
-                                </div>
-
                                 {variant === "fullscreen" ? (
                                     <Badge
                                         variant={fullscreenActive ? "default" : "outline"}
@@ -343,7 +292,9 @@ function DisplayBoard({
                                 {latestCall ? (
                                     <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
                                         <Badge className="whitespace-nowrap">Latest call</Badge>
-                                        <span className="text-xs text-muted-foreground">{buildAnnouncementLabel(latestCall)}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                            {buildAnnouncementLabel(latestCall)}
+                                        </span>
                                     </div>
                                 ) : manager ? (
                                     <div className="text-xs text-muted-foreground">
@@ -399,7 +350,12 @@ function DisplayBoard({
                             </div>
                         ) : state?.windows?.length ? (
                             <ScrollArea className={cn(variant === "fullscreen" ? "h-[60vh] sm:h-[64vh]" : "h-80 sm:h-96")}>
-                                <div className={cn("grid gap-3", variant === "fullscreen" ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2")}>
+                                <div
+                                    className={cn(
+                                        "grid gap-3",
+                                        variant === "fullscreen" ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2"
+                                    )}
+                                >
                                     {state.windows.map((w) => {
                                         const serving = w.nowServing
                                         const deptNames = w.departments?.map((d) => d.name).filter(Boolean) ?? []
@@ -412,10 +368,7 @@ function DisplayBoard({
                                         return (
                                             <Card
                                                 key={w.id}
-                                                className={cn(
-                                                    "overflow-hidden transition",
-                                                    highlighted && "ring-2 ring-primary"
-                                                )}
+                                                className={cn("overflow-hidden transition", highlighted && "ring-2 ring-primary")}
                                             >
                                                 <CardHeader className="pb-3">
                                                     <CardTitle className="flex items-start justify-between gap-2">
@@ -430,7 +383,9 @@ function DisplayBoard({
                                                             </div>
 
                                                             <p className="mt-1 text-xs text-muted-foreground">
-                                                                {deptNames.length ? deptNames.join(" • ") : "No departments assigned"}
+                                                                {deptNames.length
+                                                                    ? deptNames.join(" • ")
+                                                                    : "No departments assigned"}
                                                             </p>
                                                         </div>
 
@@ -562,7 +517,10 @@ function DisplayBoard({
                                             .slice()
                                             .reverse()
                                             .map((a) => (
-                                                <div key={a.id} className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                                                <div
+                                                    key={a.id}
+                                                    className="flex items-start justify-between gap-3 rounded-lg border p-3"
+                                                >
                                                     <div className="min-w-0">
                                                         <div className="flex flex-wrap items-center gap-2">
                                                             <Badge className="whitespace-nowrap">{a.queueNumber || "—"}</Badge>
@@ -642,28 +600,7 @@ export default function PublicDisplaySection() {
         toast.message(autoRefreshEnabled ? "Auto refresh enabled." : "Auto refresh paused.")
     }, [autoRefreshEnabled])
 
-    const [voiceEnabled, setVoiceEnabled] = React.useState<boolean>(() => {
-        try {
-            return localStorage.getItem(STORAGE_VOICE) === "1"
-        } catch {
-            return false
-        }
-    })
-
-    const voiceEnabledRef = React.useRef(voiceEnabled)
-    React.useEffect(() => {
-        voiceEnabledRef.current = voiceEnabled
-        try {
-            localStorage.setItem(STORAGE_VOICE, voiceEnabled ? "1" : "0")
-        } catch {
-            // ignore
-        }
-    }, [voiceEnabled])
-
     const sinceRef = React.useRef<string | undefined>(undefined)
-    const spokenIdsRef = React.useRef<Set<string>>(new Set())
-    const speechQueueRef = React.useRef<Announcement[]>([])
-    const speakingRef = React.useRef(false)
 
     const lastToastRef = React.useRef<number>(0)
     const lastCallToastIdRef = React.useRef<string | null>(null)
@@ -680,54 +617,11 @@ export default function PublicDisplaySection() {
         if (lastCallToastIdRef.current === a.id) return
         lastCallToastIdRef.current = a.id
 
-        // Avoid noisy toasts if voice is enabled (voice is the “live” signal).
-        if (voiceEnabledRef.current) return
-
         const now = Date.now()
         if (now - lastToastRef.current < 2500) return
         lastToastRef.current = now
         toast.message(buildAnnouncementLabel(a))
     }
-
-    const pumpSpeech = React.useCallback(() => {
-        if (!voiceEnabledRef.current) return
-        if (speakingRef.current) return
-        const next = speechQueueRef.current.shift()
-        if (!next) return
-
-        speakingRef.current = true
-        try {
-            const u = new SpeechSynthesisUtterance(next.voiceText)
-            u.rate = 1
-            u.onend = () => {
-                speakingRef.current = false
-                pumpSpeech()
-            }
-            u.onerror = () => {
-                speakingRef.current = false
-                pumpSpeech()
-            }
-            window.speechSynthesis.speak(u)
-        } catch {
-            speakingRef.current = false
-        }
-    }, [])
-
-    const enqueueAnnouncements = React.useCallback(
-        (items: Announcement[]) => {
-            if (!items?.length) return
-            const fresh = items.filter((a) => a?.id && !spokenIdsRef.current.has(a.id))
-            if (!fresh.length) return
-
-            for (const a of fresh) {
-                spokenIdsRef.current.add(a.id)
-                speechQueueRef.current.push(a)
-            }
-
-            pumpSpeech()
-        },
-        [pumpSpeech]
-    )
 
     const appendRecentCalls = React.useCallback((items: Announcement[]) => {
         if (!items?.length) return
@@ -790,7 +684,6 @@ export default function PublicDisplaySection() {
                 sinceRef.current = last?.createdAt || sinceRef.current
 
                 appendRecentCalls(anns)
-                enqueueAnnouncements(anns)
                 safeToastCall(last)
 
                 const wn = last?.windowNumber != null ? Number(last.windowNumber) : null
@@ -806,7 +699,7 @@ export default function PublicDisplaySection() {
         } finally {
             setLoadingState(false)
         }
-    }, [manager, appendRecentCalls, enqueueAnnouncements])
+    }, [manager, appendRecentCalls])
 
     React.useEffect(() => {
         return () => {
@@ -823,11 +716,8 @@ export default function PublicDisplaySection() {
             // ignore
         }
 
-        // Reset announcement dedupe + local recents per manager switch
+        // Reset per manager switch
         sinceRef.current = undefined
-        spokenIdsRef.current = new Set()
-        speechQueueRef.current = []
-        speakingRef.current = false
         lastCallToastIdRef.current = null
         setRecentCalls([])
         setHighlightWindowNumber(null)
@@ -854,18 +744,6 @@ export default function PublicDisplaySection() {
         }
     }, [])
 
-    React.useEffect(() => {
-        // If voice is turned off, cancel any ongoing speech and clear queue for clean UX.
-        if (voiceEnabled) return
-        try {
-            window.speechSynthesis.cancel()
-        } catch {
-            // ignore
-        }
-        speechQueueRef.current = []
-        speakingRef.current = false
-    }, [voiceEnabled])
-
     const handleManagerChange = (v: string) => {
         setManager(v)
     }
@@ -889,32 +767,6 @@ export default function PublicDisplaySection() {
     const closeFullscreen = async () => {
         setFullscreenOpen(false)
         if (isFullscreenActive()) await exitFullscreen()
-    }
-
-    const toggleVoice = (v: boolean) => {
-        // This click is a user gesture -> helps keep voice audible on mobile
-        setVoiceEnabled(v)
-        try {
-            // Warm-up voices (some browsers populate lazily)
-            window.speechSynthesis.getVoices()
-        } catch {
-            // ignore
-        }
-        toast.success(v ? "Voice announcements enabled." : "Voice announcements disabled.")
-    }
-
-    const testVoice = () => {
-        const msg = "Test announcement. Now serving queue number 1. Please proceed to window 1."
-        try {
-            // Ensure audible and immediate on user gesture
-            window.speechSynthesis.cancel()
-            const u = new SpeechSynthesisUtterance(msg)
-            u.rate = 1
-            window.speechSynthesis.speak(u)
-            toast.success("Playing test announcement.")
-        } catch {
-            toast.error("Voice is not available in this browser/device.")
-        }
     }
 
     const clearRecentCalls = () => {
@@ -941,9 +793,6 @@ export default function PublicDisplaySection() {
                 state={state}
                 loadingState={loadingState}
                 onRefresh={refresh}
-                voiceEnabled={voiceEnabled}
-                onVoiceToggle={toggleVoice}
-                onTestVoice={testVoice}
                 autoRefreshEnabled={autoRefreshEnabled}
                 onAutoRefreshToggle={setAutoRefreshEnabled}
                 recentCalls={recentCalls}
@@ -962,12 +811,12 @@ export default function PublicDisplaySection() {
                     else setFullscreenOpen(true)
                 }}
             >
-                <DialogContent fullscreen showCloseButton={false} className="p-0">
+                <DialogContent fullscreen showCloseButton={false} className="p-0 overflow-auto">
                     <DialogHeader className="sr-only">
                         <DialogTitle>Public Display Fullscreen</DialogTitle>
                     </DialogHeader>
 
-                    <div className="flex h-full flex-col">
+                    <div className="flex min-h-full flex-col">
                         <div className="flex items-center justify-between border-b px-4 py-3 sm:px-6">
                             <div className="flex items-center gap-2">
                                 <Badge variant="secondary">Public Display</Badge>
@@ -999,9 +848,6 @@ export default function PublicDisplaySection() {
                                 state={state}
                                 loadingState={loadingState}
                                 onRefresh={refresh}
-                                voiceEnabled={voiceEnabled}
-                                onVoiceToggle={toggleVoice}
-                                onTestVoice={testVoice}
                                 autoRefreshEnabled={autoRefreshEnabled}
                                 onAutoRefreshToggle={setAutoRefreshEnabled}
                                 recentCalls={recentCalls}
