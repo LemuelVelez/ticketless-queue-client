@@ -79,6 +79,88 @@ function isSpeechSupported() {
     )
 }
 
+function looksLikePhoneNumber(input?: string | null) {
+    const raw = String(input || "").trim()
+    if (!raw) return false
+    if (raw.includes("@")) return false
+    if (!/^[\d+\-\s()]+$/.test(raw)) return false
+    const digits = raw.replace(/[^\d]/g, "")
+    return digits.length >= 10
+}
+
+type ParticipantLike = {
+    participantFullName?: string | null
+    participantDisplay?: string | null
+    participantStudentId?: string | null
+    participantMobileNumber?: string | null
+    participantLabel?: string | null
+    participantType?: unknown
+    // legacy fields (older schema)
+    studentId?: string | null
+    phone?: string | null
+}
+
+function firstSegment(line?: string | null) {
+    const s = String(line || "").trim()
+    if (!s) return ""
+    const seg = s.split("•")[0]
+    return String(seg || "").trim()
+}
+
+function buildParticipantDisplay(params: { name: string; isStudent: boolean; studentId?: string | null; mobile?: string | null }) {
+    const name = String(params.name || "").trim()
+    const sid = String(params.studentId || "").trim()
+    const mobile = String(params.mobile || "").trim()
+
+    const parts: string[] = []
+    if (name) parts.push(name)
+    if (params.isStudent && sid) parts.push(sid)
+    if (mobile) parts.push(mobile)
+
+    return parts.join(" • ")
+}
+
+function getParticipantDetails(source?: ParticipantLike | null) {
+    const type = String(source?.participantType ?? "").trim().toUpperCase()
+    const isStudent = type === "STUDENT"
+
+    const displayRaw =
+        String(source?.participantDisplay ?? "").trim() ||
+        String(source?.participantLabel ?? "").trim()
+
+    const nameRaw =
+        String(source?.participantFullName ?? "").trim() ||
+        firstSegment(displayRaw)
+
+    const legacyIdentifier = String(source?.studentId ?? "").trim()
+
+    const name =
+        nameRaw ||
+        (legacyIdentifier && !looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : "") ||
+        "Participant"
+
+    const studentId =
+        isStudent
+            ? String(source?.participantStudentId ?? "").trim() ||
+              (legacyIdentifier && !looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : "")
+            : ""
+
+    const mobile =
+        String(source?.participantMobileNumber ?? "").trim() ||
+        String(source?.phone ?? "").trim() ||
+        (legacyIdentifier && looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : "")
+
+    const display = displayRaw || buildParticipantDisplay({ name, isStudent, studentId: studentId || null, mobile: mobile || null })
+
+    return {
+        name,
+        isStudent,
+        studentId: studentId || null,
+        mobile: mobile || null,
+        display: display || null,
+    }
+}
+
 type MonitorOption = {
     id: string
     label: string
@@ -166,6 +248,8 @@ const MAN_VOICE_HINTS = [
     "william",
 ]
 
+const EN_PH_HINTS = ["en-ph", "philippines", "philippine"]
+
 function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
     return {
         _id: row.id,
@@ -176,6 +260,17 @@ function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
         status: "WAITING",
         holdAttempts: 0,
     } as TicketType
+}
+
+function containsAnyHint(text: string, hints: string[]) {
+    const low = text.toLowerCase()
+    return hints.some((h) => low.includes(h))
+}
+
+function isEnglishPhilippinesVoice(v: SpeechSynthesisVoice) {
+    const lang = String(v.lang || "").trim().toLowerCase()
+    const blob = `${v.name || ""} ${v.voiceURI || ""} ${lang}`.toLowerCase()
+    return lang.startsWith("en-ph") || containsAnyHint(blob, EN_PH_HINTS)
 }
 
 function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
@@ -191,20 +286,25 @@ function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
         if (!map.has(key)) map.set(key, v)
     }
 
-    return Array.from(map.values()).sort((a, b) => {
+    const out = Array.from(map.values())
+
+    return out.sort((a, b) => {
+        const aPH = isEnglishPhilippinesVoice(a) ? 0 : 1
+        const bPH = isEnglishPhilippinesVoice(b) ? 0 : 1
+        if (aPH !== bPH) return aPH - bPH
+
         const aDefault = a.default ? 0 : 1
         const bDefault = b.default ? 0 : 1
         if (aDefault !== bDefault) return aDefault - bDefault
+
+        const aLocal = (a as any)?.localService ? 0 : 1
+        const bLocal = (b as any)?.localService ? 0 : 1
+        if (aLocal !== bLocal) return aLocal - bLocal
 
         const langCmp = String(a.lang || "").localeCompare(String(b.lang || ""))
         if (langCmp !== 0) return langCmp
         return String(a.name || "").localeCompare(String(b.name || ""))
     })
-}
-
-function containsAnyHint(text: string, hints: string[]) {
-    const low = text.toLowerCase()
-    return hints.some((h) => low.includes(h))
 }
 
 function isLikelyWomanVoice(v: SpeechSynthesisVoice) {
@@ -407,42 +507,50 @@ export default function StaffServingPage() {
         toast.message("No English TTS voice was found. Browser default voice will be used.")
     }, [resolvedEnglishVoices.english.length, voiceSupported, voices])
 
-    const speak = React.useCallback((text: string) => {
-        if (!voiceSupported) return
+    const speak = React.useCallback(
+        (text: string) => {
+            if (!voiceSupported) return
 
-        const preferred =
-            selectedVoiceType === "woman"
-                ? resolvedEnglishVoices.woman
-                : resolvedEnglishVoices.man
+            const preferred =
+                selectedVoiceType === "woman"
+                    ? resolvedEnglishVoices.woman
+                    : resolvedEnglishVoices.man
 
-        const fallback =
-            selectedVoiceType === "woman"
-                ? resolvedEnglishVoices.man
-                : resolvedEnglishVoices.woman
+            const fallback =
+                selectedVoiceType === "woman"
+                    ? resolvedEnglishVoices.man
+                    : resolvedEnglishVoices.woman
 
-        const voiceURI =
-            preferred?.voiceURI ||
-            fallback?.voiceURI ||
-            resolvedEnglishVoices.english[0]?.voiceURI
+            const chosen =
+                preferred ||
+                fallback ||
+                resolvedEnglishVoices.english[0]
 
-        try {
-            stopSpeech()
-        } catch {
-            // ignore
-        }
+            const voiceURI = chosen?.voiceURI
+            const voiceLang = String(chosen?.lang || "").trim() || "en-PH"
 
-        try {
-            speakWithPackage(text, {
-                lang: "en-US",
-                rate: 1,
-                pitch: 1,
-                volume: 1,
-                ...(voiceURI ? { voiceURI } : {}),
-            })
-        } catch {
-            // ignore
-        }
-    }, [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported])
+            try {
+                stopSpeech()
+            } catch {
+                // ignore
+            }
+
+            try {
+                speakWithPackage(text, {
+                    // ✅ Prefer English (Philippines). If unavailable, voiceURI + lang will fall back gracefully.
+                    lang: voiceLang.toLowerCase().startsWith("en-") ? voiceLang : "en-PH",
+                    // ✅ Clear + vivid (slightly slower, slightly higher pitch)
+                    rate: 0.95,
+                    pitch: 1.1,
+                    volume: 1,
+                    ...(voiceURI ? { voiceURI } : {}),
+                })
+            } catch {
+                // ignore
+            }
+        },
+        [resolvedEnglishVoices, selectedVoiceType, speakWithPackage, stopSpeech, voiceSupported],
+    )
 
     const announceCall = React.useCallback(
         (queueNumber: number) => {
@@ -459,8 +567,8 @@ export default function StaffServingPage() {
 
             const win = windowInfo?.number
             const text = win
-                ? `Number ${queueNumber}, please proceed to window ${win}.`
-                : `Number ${queueNumber}.`
+                ? `Now serving number ${queueNumber}. Please proceed to window ${win}. Thank you.`
+                : `Now serving number ${queueNumber}.`
 
             speak(text)
         },
@@ -709,7 +817,7 @@ export default function StaffServingPage() {
     }, [monitorOptions, panelCount, selectedMonitorId])
 
     React.useEffect(() => {
-        ; (async () => {
+        ;(async () => {
             setLoading(true)
             try {
                 await refresh()
@@ -920,10 +1028,7 @@ export default function StaffServingPage() {
                                 const currentForThisWindow =
                                     current && current.windowNumber === row.number ? current : null
 
-                                const studentLabel =
-                                    (row.nowServing as any)?.studentName ||
-                                    (row.nowServing as any)?.studentId ||
-                                    (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
+                                const p = getParticipantDetails((row.nowServing as any) ?? (currentForThisWindow as any))
 
                                 return (
                                     <Card key={row.id || `window-${idx}`} className="min-h-95">
@@ -942,7 +1047,7 @@ export default function StaffServingPage() {
                                                 </div>
 
                                                 <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide">
-                                                    {studentLabel}
+                                                    {p.display || p.name}
                                                 </div>
 
                                                 <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
@@ -985,6 +1090,8 @@ export default function StaffServingPage() {
             </div>
         )
     }
+
+    const currentP = getParticipantDetails(current as any)
 
     return (
         <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
@@ -1054,9 +1161,16 @@ export default function StaffServingPage() {
                                             <DialogTitle>Send SMS notification</DialogTitle>
                                             <DialogDescription>
                                                 Notify the current ticket via Semaphore SMS.
-                                                {current
-                                                    ? ` Ticket #${current.queueNumber} • Student ID: ${current.studentId || "—"}`
-                                                    : " No active ticket selected."}
+                                                {current ? (
+                                                    <>
+                                                        {" "}
+                                                        Ticket #{current.queueNumber} • {currentP.name}
+                                                        {currentP.isStudent ? ` • ${currentP.studentId || "—"}` : ""}
+                                                        {currentP.mobile ? ` • ${currentP.mobile}` : ""}
+                                                    </>
+                                                ) : (
+                                                    " No active ticket selected."
+                                                )}
                                             </DialogDescription>
                                         </DialogHeader>
 
@@ -1264,7 +1378,9 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-3">
-                                <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">Announcement voice (English)</Label>
+                                <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">
+                                    Announcement voice (English • Philippines preferred)
+                                </Label>
                                 <Select
                                     value={selectedVoiceType}
                                     onValueChange={(v) => setSelectedVoiceType(v === "man" ? "man" : "woman")}
@@ -1314,7 +1430,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                Voice engine: react-text-to-speech • English only • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
+                                Voice engine: react-text-to-speech • Prefers en-PH when available • Woman: {formatVoiceLabel(resolvedEnglishVoices.woman)} • Man: {formatVoiceLabel(resolvedEnglishVoices.man)}
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
@@ -1343,18 +1459,31 @@ export default function StaffServingPage() {
                                             <>
                                                 <div className="rounded-2xl border bg-muted p-6">
                                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                                        <div>
+                                                        <div className="min-w-0">
                                                             <div className="text-xs uppercase tracking-widest text-muted-foreground">
                                                                 Now serving
                                                             </div>
                                                             <div className="mt-2 text-7xl font-semibold tracking-tight">
                                                                 #{current.queueNumber}
                                                             </div>
-                                                            <div className="mt-3 text-sm text-muted-foreground">
-                                                                Student ID: {current.studentId ?? "—"}
-                                                            </div>
-                                                            <div className="text-sm text-muted-foreground">
-                                                                Called at: {fmtTime((current as any).calledAt)}
+
+                                                            <div className="mt-4 grid gap-1 text-sm text-muted-foreground">
+                                                                <div className="min-w-0">
+                                                                    Participant:{" "}
+                                                                    <span className="font-medium text-foreground">
+                                                                        {currentP.name}
+                                                                    </span>
+                                                                </div>
+
+                                                                {currentP.isStudent ? (
+                                                                    <div>Student ID: {currentP.studentId || "—"}</div>
+                                                                ) : null}
+
+                                                                <div>Mobile: {currentP.mobile || "—"}</div>
+
+                                                                <div className="text-sm text-muted-foreground">
+                                                                    Called at: {fmtTime((current as any).calledAt)}
+                                                                </div>
                                                             </div>
                                                         </div>
 
@@ -1461,7 +1590,7 @@ export default function StaffServingPage() {
                                             Manager multi-window preview
                                         </CardTitle>
                                         <CardDescription>
-                                            Queue display layout mirrors window cards: big number + student label + up next + on hold.
+                                            Queue display layout mirrors window cards: big number + participant details + up next + on hold.
                                         </CardDescription>
                                     </CardHeader>
 
@@ -1481,10 +1610,7 @@ export default function StaffServingPage() {
                                                     const currentForThisWindow =
                                                         current && current.windowNumber === w.number ? current : null
 
-                                                    const studentLabel =
-                                                        (w.nowServing as any)?.studentName ||
-                                                        (w.nowServing as any)?.studentId ||
-                                                        (currentForThisWindow?.studentId ? `STUDENT ID: ${currentForThisWindow.studentId}` : "NAME OF STUDENT")
+                                                    const p = getParticipantDetails((w.nowServing as any) ?? (currentForThisWindow as any))
 
                                                     return (
                                                         <div key={w.id} className="rounded-xl border p-4">
@@ -1496,7 +1622,7 @@ export default function StaffServingPage() {
                                                                 {queueNumberLabel(w.nowServing?.queueNumber)}
                                                             </div>
                                                             <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide">
-                                                                {studentLabel}
+                                                                {p.display || p.name}
                                                             </div>
 
                                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
