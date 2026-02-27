@@ -209,6 +209,28 @@ function composeName(parts: unknown[]) {
     return s
 }
 
+/**
+ * ✅ Heuristic: detect if a field is likely a *human name* (not a participant type label).
+ * This fixes cases where backend sends the full name via `participantLabel`.
+ */
+function isLikelyHumanName(label: unknown, identifier?: string) {
+    const s = String(label ?? "").trim()
+    if (!s) return false
+    if (identifier && s === String(identifier).trim()) return false
+
+    const lower = s.toLowerCase()
+    const reject = new Set(["student", "alumni / visitor", "alumni/visitor", "alumni", "visitor", "guest", "participant"])
+    if (reject.has(lower)) return false
+
+    // phone-like / numeric-heavy
+    if (/^\+?\d[\d\s()-]{6,}$/.test(s)) return false
+
+    // must contain at least one letter
+    if (!/[a-z]/i.test(s)) return false
+
+    return true
+}
+
 function getTicketId(ticket: TicketLike): string {
     const t = ticket as any
     return String(t?.id ?? t?._id ?? "").trim()
@@ -248,8 +270,26 @@ function getWindowMeta(ticket: TicketLike) {
 function getParticipantName(ticket: TicketLike): string {
     const t = ticket as any
 
+    const studentId = String(t?.participant?.studentId ?? t?.studentId ?? t?.tcNumber ?? "").trim()
+
     // ✅ Pull from legacy/centralized fields (prefer full name)
-    const fromSelections = firstNonEmptyFromArray(t?.transactionSelections, (x) => x?.participantFullName ?? x?.participantLabel ?? x?.participantName)
+    const fromSelections = firstNonEmptyFromArray(t?.transactionSelections, (x) => {
+        const sid = String(x?.studentId ?? x?.participantStudentId ?? "").trim()
+        const refId = sid || studentId
+        return (
+            x?.participantFullName ??
+            (isLikelyHumanName(x?.participantLabel, refId) ? x?.participantLabel : "") ??
+            x?.participantName ??
+            x?.participant_full_name ??
+            x?.participantFullname
+        )
+    })
+
+    const rootLabelName = isLikelyHumanName(t?.participantLabel, studentId) ? String(t?.participantLabel ?? "").trim() : ""
+    const txLabelName = isLikelyHumanName(t?.transactions?.participantLabel, studentId)
+        ? String(t?.transactions?.participantLabel ?? "").trim()
+        : ""
+    const metaLabelName = isLikelyHumanName(t?.meta?.participantLabel, studentId) ? String(t?.meta?.participantLabel ?? "").trim() : ""
 
     const name = firstNonEmptyText([
         // ✅ legacy Ticket fields
@@ -257,12 +297,13 @@ function getParticipantName(ticket: TicketLike): string {
         t?.participant_full_name,
         t?.participantFullname,
 
-        // ✅ sometimes nested inside selections/transactions
+        // ✅ sometimes nested inside selections/transactions/meta
         fromSelections,
         t?.transactions?.participantFullName,
-        t?.transactions?.participantLabel,
+        txLabelName,
         t?.meta?.participantFullName,
         t?.meta?.participantName,
+        metaLabelName,
 
         // ✅ centralized TicketView / enriched participant object
         t?.participant?.fullName,
@@ -275,6 +316,9 @@ function getParticipantName(ticket: TicketLike): string {
         t?.__participantName,
         t?.user?.name,
         t?.name,
+
+        // ✅ root label sometimes contains the full name (fix)
+        rootLabelName,
     ])
     if (name) return name
 
@@ -295,19 +339,26 @@ function getParticipantName(ticket: TicketLike): string {
 
 function getParticipantType(ticket: TicketLike): string {
     const t = ticket as any
-    const type = firstNonEmptyText([
+    const studentId = String(t?.participant?.studentId ?? t?.studentId ?? t?.tcNumber ?? "").trim()
+
+    // Prefer explicit "type" fields first
+    const explicit = firstNonEmptyText([
         t?.participant?.type,
         t?.participantType,
-        t?.participantLabel,
-        t?.participantTypeLabel,
         t?.transactions?.participantType,
-        t?.transactions?.participantTypeLabel,
         t?.meta?.participantType,
-        t?.meta?.participantLabel,
+        t?.participantTypeLabel,
+        t?.transactions?.participantTypeLabel,
         t?.userType,
         t?.role,
     ])
-    return type || ""
+    if (explicit) return explicit
+
+    // Fallback to label only when it doesn't look like a human name
+    const label = firstNonEmptyText([t?.participantLabel, t?.transactions?.participantLabel, t?.meta?.participantLabel])
+    if (label && !isLikelyHumanName(label, studentId)) return label
+
+    return ""
 }
 
 function getStudentId(ticket: TicketLike): string {
