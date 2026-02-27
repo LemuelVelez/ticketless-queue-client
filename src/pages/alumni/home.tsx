@@ -423,19 +423,20 @@ export default function AlumniHomePage() {
     const nowServingCount = displayNowServing ? 1 : 0
     const visibleCount = nowServingCount + waitingCount
 
+    // ✅ Use chart tokens from src/index.css (OKLCH vars), not hsl(var(--...))
     const liveQueueBars = React.useMemo(
         () => [
-            { label: "Now Serving", count: nowServingCount, fill: "hsl(var(--primary))" },
-            { label: "Up Next", count: waitingCount, fill: "hsl(var(--secondary))" },
-            { label: "Visible Queue", count: visibleCount, fill: "hsl(var(--accent))" },
+            { label: "Now Serving", count: nowServingCount, fill: "var(--chart-1)" },
+            { label: "Up Next", count: waitingCount, fill: "var(--chart-2)" },
+            { label: "Visible Queue", count: visibleCount, fill: "var(--chart-3)" },
         ],
         [nowServingCount, waitingCount, visibleCount],
     )
 
     const queueMixData = React.useMemo(
         () => [
-            { name: "Called", value: nowServingCount, fill: "hsl(var(--primary))" },
-            { name: "Waiting", value: waitingCount, fill: "hsl(var(--secondary))" },
+            { name: "Called", value: nowServingCount, fill: "var(--chart-1)" },
+            { name: "Waiting", value: waitingCount, fill: "var(--chart-2)" },
         ],
         [nowServingCount, waitingCount],
     )
@@ -516,7 +517,9 @@ export default function AlumniHomePage() {
                                     disabled={loadingDisplay || loadingTicket || loadingDepts}
                                 >
                                     <RefreshCw className="h-4 w-4" />
-                                    {refreshCooldown.isCoolingDown ? `Refresh in ${refreshCooldown.remainingSec}s` : "Refresh Overview"}
+                                    {refreshCooldown.isCoolingDown
+                                        ? `Refresh in ${refreshCooldown.remainingSec}s`
+                                        : "Refresh Overview"}
                                 </Button>
                             </div>
                         </CardHeader>
@@ -724,29 +727,29 @@ export default function AlumniHomePage() {
                                                     data={liveQueueBars}
                                                     margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
                                                 >
-                                                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                                                     <XAxis
                                                         dataKey="label"
-                                                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                                                        axisLine={{ stroke: "hsl(var(--border))" }}
-                                                        tickLine={{ stroke: "hsl(var(--border))" }}
+                                                        tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
+                                                        axisLine={{ stroke: "var(--border)" }}
+                                                        tickLine={{ stroke: "var(--border)" }}
                                                     />
                                                     <YAxis
                                                         allowDecimals={false}
-                                                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                                                        axisLine={{ stroke: "hsl(var(--border))" }}
-                                                        tickLine={{ stroke: "hsl(var(--border))" }}
+                                                        tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
+                                                        axisLine={{ stroke: "var(--border)" }}
+                                                        tickLine={{ stroke: "var(--border)" }}
                                                     />
                                                     <Tooltip
                                                         formatter={(value: number | string | undefined) => [value ?? "—", "Count"]}
                                                         contentStyle={{
-                                                            background: "hsl(var(--background))",
-                                                            border: "1px solid hsl(var(--border))",
+                                                            background: "var(--background)",
+                                                            border: "1px solid var(--border)",
                                                             borderRadius: "0.75rem",
-                                                            color: "hsl(var(--foreground))",
+                                                            color: "var(--foreground)",
                                                         }}
-                                                        labelStyle={{ color: "hsl(var(--foreground))" }}
-                                                        cursor={{ fill: "hsl(var(--muted))" }}
+                                                        labelStyle={{ color: "var(--foreground)" }}
+                                                        cursor={{ fill: "var(--muted)" }}
                                                     />
                                                     <Bar dataKey="count" radius={[8, 8, 0, 0]}>
                                                         {liveQueueBars.map((entry) => (
@@ -776,7 +779,8 @@ export default function AlumniHomePage() {
                                     Queue Mix
                                 </CardTitle>
                                 <CardDescription>
-                                    Recharts donut view using your app CSS color tokens from <span className="font-mono">src/index.css</span>.
+                                    Recharts donut view using your app CSS color tokens from{" "}
+                                    <span className="font-mono">src/index.css</span>.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
@@ -798,14 +802,17 @@ export default function AlumniHomePage() {
                                                     <Tooltip
                                                         formatter={(value: number | string | undefined) => [value ?? "—", "Tickets"]}
                                                         contentStyle={{
-                                                            background: "hsl(var(--background))",
-                                                            border: "1px solid hsl(var(--border))",
+                                                            background: "var(--background)",
+                                                            border: "1px solid var(--border)",
                                                             borderRadius: "0.75rem",
-                                                            color: "hsl(var(--foreground))",
+                                                            color: "var(--foreground)",
                                                         }}
-                                                        labelStyle={{ color: "hsl(var(--foreground))" }}
+                                                        labelStyle={{ color: "var(--foreground)" }}
                                                     />
-                                                    <Legend verticalAlign="bottom" wrapperStyle={{ color: "hsl(var(--muted-foreground))" }} />
+                                                    <Legend
+                                                        verticalAlign="bottom"
+                                                        wrapperStyle={{ color: "var(--muted-foreground)" }}
+                                                    />
                                                     <Pie
                                                         data={queueMixData}
                                                         dataKey="value"
@@ -872,7 +879,10 @@ export default function AlumniHomePage() {
                                                             #{displayNowServing.queueNumber}
                                                         </div>
                                                         <div className="mt-3 text-sm text-muted-foreground">
-                                                            Window: {displayNowServing.windowNumber ? `#${displayNowServing.windowNumber}` : "—"}
+                                                            Window:{" "}
+                                                            {displayNowServing.windowNumber
+                                                                ? `#${displayNowServing.windowNumber}`
+                                                                : "—"}
                                                         </div>
                                                         <div className="text-sm text-muted-foreground">
                                                             Called at: {fmtTime(displayNowServing.calledAt)}
