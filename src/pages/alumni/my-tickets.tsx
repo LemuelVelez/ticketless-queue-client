@@ -2,13 +2,24 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { Ticket, RefreshCw, PlusCircle, Monitor, Lock } from "lucide-react"
+import {
+    Ticket,
+    RefreshCw,
+    PlusCircle,
+    Monitor,
+    Lock,
+    MapPin,
+    Building2,
+    Users,
+    ClipboardList,
+    DoorOpen,
+} from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
 import { guestApi } from "@/api/guest"
-import { studentApi, type Department, type Ticket as QueueTicket } from "@/api/student"
+import { studentApi, type Department, type Ticket as QueueTicket, type TicketDetails } from "@/api/student"
 import { api } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
@@ -77,6 +88,8 @@ function readParticipantIdFromObject(source: any) {
         source?.idNumber,
         source?.studentId,
         source?.tcNumber,
+        source?.mobileNumber,
+        source?.phone,
     ]
 
     for (const c of candidates) {
@@ -179,14 +192,91 @@ async function findActiveByParticipant(args: { departmentId: string; participant
         studentId: args.participantId,
         idNumber: args.participantId,
         tcNumber: args.participantId,
+        mobileNumber: args.participantId,
+        phone: args.participantId,
     }
 
     return await callFirstSuccessful<any>([
         () => maybeInvoke(guestApi, "findActiveByParticipant", payload),
         () => maybeInvoke(guestApi, "findActiveByStudent", payload),
         () => maybeInvoke(studentApi, "findActiveByParticipant", payload),
-        () => maybeInvoke(studentApi, "findActiveByStudent", { departmentId: args.departmentId, studentId: args.participantId }),
+        () =>
+            maybeInvoke(studentApi, "findActiveByStudent", {
+                departmentId: args.departmentId,
+                studentId: args.participantId,
+            }),
     ])
+}
+
+function joinCompact(items: string[], max = 8) {
+    const clean = (items || []).map((x) => String(x || "").trim()).filter(Boolean)
+    if (!clean.length) return { text: "—", extra: 0 }
+    if (clean.length <= max) return { text: clean.join(", "), extra: 0 }
+    return { text: clean.slice(0, max).join(", "), extra: clean.length - max }
+}
+
+function buildWindowLabel(params: { details?: TicketDetails | null; ticket?: QueueTicket | null }) {
+    const windowName = pickNonEmptyString(params.details?.windowName)
+    const windowNo =
+        params.details?.windowNumber != null
+            ? Number(params.details.windowNumber)
+            : params.ticket?.windowNumber != null
+              ? Number(params.ticket.windowNumber)
+              : undefined
+
+    const hasNo = windowNo != null && Number.isFinite(windowNo) && windowNo > 0
+    if (windowName && hasNo) return `${windowName} (Window ${windowNo})`
+    if (windowName) return windowName
+    if (hasNo) return `Window ${windowNo}`
+    return ""
+}
+
+async function copyTextToClipboard(text: string) {
+    const clean = String(text || "").trim()
+    if (!clean) {
+        toast.message("Nothing to copy.")
+        return
+    }
+
+    try {
+        await navigator.clipboard.writeText(clean)
+        toast.success("Copied to clipboard.")
+    } catch {
+        try {
+            const el = document.createElement("textarea")
+            el.value = clean
+            el.style.position = "fixed"
+            el.style.left = "-9999px"
+            el.setAttribute("readonly", "true")
+            document.body.appendChild(el)
+            el.select()
+            document.execCommand("copy")
+            document.body.removeChild(el)
+            toast.success("Copied to clipboard.")
+        } catch {
+            toast.error("Copy failed. Please copy manually.")
+        }
+    }
+}
+
+type InfoRowProps = {
+    icon?: React.ReactNode
+    label: string
+    value: React.ReactNode
+    hint?: React.ReactNode
+}
+
+function InfoRow({ icon, label, value, hint }: InfoRowProps) {
+    return (
+        <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
+                {icon ? <span className="inline-flex">{icon}</span> : null}
+                <span>{label}</span>
+            </div>
+            <div className="mt-1 truncate text-sm font-medium">{value}</div>
+            {hint ? <div className="mt-1 text-xs text-muted-foreground">{hint}</div> : null}
+        </div>
+    )
 }
 
 export default function AlumniMyTicketsPage() {
@@ -197,7 +287,11 @@ export default function AlumniMyTicketsPage() {
     const preParticipantId = React.useMemo(
         () =>
             pickNonEmptyString(
-                qs.get("participantId") || qs.get("studentId") || qs.get("idNumber") || qs.get("visitorId") || qs.get("alumniId"),
+                qs.get("participantId") ||
+                    qs.get("studentId") ||
+                    qs.get("idNumber") ||
+                    qs.get("visitorId") ||
+                    qs.get("alumniId"),
             ),
         [qs],
     )
@@ -213,6 +307,7 @@ export default function AlumniMyTicketsPage() {
     const [participantId, setParticipantId] = React.useState<string>(preParticipantId)
 
     const [ticket, setTicket] = React.useState<QueueTicket | null>(null)
+    const [ticketDetails, setTicketDetails] = React.useState<TicketDetails | null>(null)
     const [busy, setBusy] = React.useState(false)
 
     const [displayLoading, setDisplayLoading] = React.useState(false)
@@ -238,6 +333,17 @@ export default function AlumniMyTicketsPage() {
 
     const displayCooldown = useActionCooldown(displayCooldownKey, 5000)
     const ticketRefreshCooldown = useActionCooldown(ticketCooldownKey, 5000)
+
+    const isActiveTicket = React.useMemo(() => {
+        if (!ticket) return false
+        const s = String((ticket as any)?.status ?? "").toUpperCase()
+        return ["WAITING", "CALLED", "HOLD"].includes(s) || !s
+    }, [ticket])
+
+    const isBeingCalledNow = React.useMemo(() => {
+        if (!ticket || !displayNowServing) return false
+        return Number(displayNowServing.queueNumber) === Number(ticket.queueNumber)
+    }, [ticket, displayNowServing])
 
     const loadSession = React.useCallback(async () => {
         setLoadingSession(true)
@@ -317,10 +423,12 @@ export default function AlumniMyTicketsPage() {
                     participantId: pid,
                 })
 
-                setTicket((res?.ticket ?? null) as QueueTicket | null)
+                const t = (res?.ticket ?? null) as QueueTicket | null
+                setTicket(t)
+                setTicketDetails((res?.ticketDetails ?? null) as TicketDetails | null)
 
                 if (!silent) {
-                    if (res?.ticket) {
+                    if (t) {
                         toast.success("Ticket refreshed.")
                     } else {
                         toast.message("No active ticket found for today.")
@@ -380,7 +488,9 @@ export default function AlumniMyTicketsPage() {
         setBusy(true)
         try {
             const res = await getParticipantTicket(ticketId)
-            setTicket((res?.ticket ?? null) as QueueTicket | null)
+            const t = (res?.ticket ?? null) as QueueTicket | null
+            setTicket(t)
+            setTicketDetails((res?.ticketDetails ?? null) as TicketDetails | null)
 
             const dept = (res?.ticket as any)?.department
             const deptIdFromTicket =
@@ -445,7 +555,63 @@ export default function AlumniMyTicketsPage() {
         return `/alumni/join${qsStr ? `?${qsStr}` : ""}`
     }, [departmentId, participantId])
 
-    const joinBlocked = Boolean(ticket)
+    const joinBlocked = Boolean(isActiveTicket)
+
+    const windowLabel = React.useMemo(() => buildWindowLabel({ details: ticketDetails, ticket }), [ticketDetails, ticket])
+
+    const servedDepartmentsCompact = React.useMemo(() => {
+        const list = Array.isArray(ticketDetails?.servedDepartments) ? ticketDetails!.servedDepartments : []
+        return joinCompact(list, 8)
+    }, [ticketDetails])
+
+    const txCompact = React.useMemo(() => {
+        const list = Array.isArray(ticketDetails?.transactionLabels) ? ticketDetails!.transactionLabels : []
+        return joinCompact(list, 8)
+    }, [ticketDetails])
+
+    const primaryWhereToGo = pickNonEmptyString(ticketDetails?.whereToGo)
+
+    const quickInstruction = React.useMemo(() => {
+        if (primaryWhereToGo) return primaryWhereToGo
+        const base = windowLabel ? `Please proceed to ${windowLabel}.` : "Please check the display monitor for your assigned window."
+        return base
+    }, [primaryWhereToGo, windowLabel])
+
+    const copyPayload = React.useMemo(() => {
+        if (!ticket) return ""
+        const parts = [
+            `Queue Ticket`,
+            `Queue #: ${ticket.queueNumber}`,
+            pickNonEmptyString(ticketDetails?.participantTypeLabel) ? `Type: ${pickNonEmptyString(ticketDetails?.participantTypeLabel)}` : "",
+            pickNonEmptyString(ticketDetails?.departmentName)
+                ? pickNonEmptyString(ticketDetails?.departmentCode)
+                    ? `Department: ${pickNonEmptyString(ticketDetails?.departmentName)} (${pickNonEmptyString(ticketDetails?.departmentCode)})`
+                    : `Department: ${pickNonEmptyString(ticketDetails?.departmentName)}`
+                : ticketDeptName
+                  ? `Department: ${ticketDeptName}`
+                  : "",
+            pickNonEmptyString(ticketDetails?.officeLabel)
+                ? `Office: ${pickNonEmptyString(ticketDetails?.officeLabel)}`
+                : pickNonEmptyString(ticketDetails?.transactionManager)
+                  ? `Office: ${pickNonEmptyString(ticketDetails?.transactionManager)}`
+                  : "",
+            windowLabel ? `Window: ${windowLabel}` : "",
+            pickNonEmptyString(ticketDetails?.staffName) ? `Staff in charge: ${pickNonEmptyString(ticketDetails?.staffName)}` : "",
+            Array.isArray(ticketDetails?.transactionLabels) && ticketDetails!.transactionLabels.length
+                ? `Transactions: ${ticketDetails!.transactionLabels.join(", ")}`
+                : "",
+            Array.isArray(ticketDetails?.servedDepartments) && ticketDetails!.servedDepartments.length
+                ? `Serves: ${ticketDetails!.servedDepartments.join(", ")}`
+                : "",
+            `Status: ${String(ticket.status || "").toUpperCase()}`,
+            ticket.calledAt ? `Called at: ${fmtTime(ticket.calledAt)}` : "",
+            `Where to go: ${quickInstruction}`,
+            `Ticket ID: ${ticket._id}`,
+        ]
+            .map((x) => String(x || "").trim())
+            .filter(Boolean)
+        return parts.join("\n")
+    }, [ticket, ticketDetails, ticketDeptName, windowLabel, quickInstruction])
 
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -458,7 +624,7 @@ export default function AlumniMyTicketsPage() {
                         My Tickets
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        View your queue status and the live department queue board preview.
+                        View your queue status and your exact “where to go” instructions (window, staff, and transactions).
                     </p>
                 </div>
 
@@ -576,7 +742,7 @@ export default function AlumniMyTicketsPage() {
                                                             <div className="mt-4">
                                                                 {displayNowServing ? (
                                                                     <>
-                                                                        <div className="text-[clamp(4rem,12vw,9rem)] font-semibold leading-none tracking-tight">
+                                                                        <div className="text-6xl font-semibold leading-none tracking-tight sm:text-7xl">
                                                                             #{displayNowServing.queueNumber}
                                                                         </div>
                                                                         <div className="mt-4 text-sm text-muted-foreground">
@@ -637,18 +803,32 @@ export default function AlumniMyTicketsPage() {
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div className="min-w-0">
                                         <CardTitle>Active Ticket</CardTitle>
-                                        <CardDescription>Current ticket details for today.</CardDescription>
+                                        <CardDescription>
+                                            Your ticket details and exactly which window to go to (Alumni / Visitor / Guest).
+                                        </CardDescription>
                                     </div>
 
-                                    <Button
-                                        variant="outline"
-                                        onClick={() => void findActive()}
-                                        disabled={busy || !departmentId || !participantId.trim() || ticketRefreshCooldown.isCoolingDown}
-                                        className="w-full gap-2 sm:w-auto"
-                                    >
-                                        <RefreshCw className="h-4 w-4" />
-                                        {ticketRefreshCooldown.isCoolingDown ? `Wait ${ticketRefreshCooldown.remainingSec}s` : "Refresh Ticket"}
-                                    </Button>
+                                    <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => void copyTextToClipboard(copyPayload)}
+                                            disabled={!copyPayload}
+                                            className="w-full gap-2 sm:w-auto"
+                                        >
+                                            <ClipboardList className="h-4 w-4" />
+                                            Copy Details
+                                        </Button>
+
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => void findActive()}
+                                            disabled={busy || !departmentId || !participantId.trim() || ticketRefreshCooldown.isCoolingDown}
+                                            className="w-full gap-2 sm:w-auto"
+                                        >
+                                            <RefreshCw className="h-4 w-4" />
+                                            {ticketRefreshCooldown.isCoolingDown ? `Wait ${ticketRefreshCooldown.remainingSec}s` : "Refresh Ticket"}
+                                        </Button>
+                                    </div>
                                 </div>
                             </CardHeader>
 
@@ -657,11 +837,28 @@ export default function AlumniMyTicketsPage() {
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                         <div className="min-w-0">
                                             <div className="text-sm text-muted-foreground">Department</div>
-                                            <div className="truncate text-lg font-medium">{ticketDeptName}</div>
+                                            <div className="truncate text-lg font-medium">
+                                                {pickNonEmptyString(ticketDetails?.departmentName) || ticketDeptName}
+                                                {pickNonEmptyString(ticketDetails?.departmentCode)
+                                                    ? ` (${pickNonEmptyString(ticketDetails?.departmentCode)})`
+                                                    : ""}
+                                            </div>
+                                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                                                {pickNonEmptyString(ticketDetails?.participantTypeLabel) ? (
+                                                    <Badge variant="secondary">{pickNonEmptyString(ticketDetails?.participantTypeLabel)}</Badge>
+                                                ) : null}
+                                                {pickNonEmptyString(ticketDetails?.officeLabel) ? (
+                                                    <Badge variant="outline">{pickNonEmptyString(ticketDetails?.officeLabel)}</Badge>
+                                                ) : pickNonEmptyString(ticketDetails?.transactionManager) ? (
+                                                    <Badge variant="outline">{pickNonEmptyString(ticketDetails?.transactionManager)}</Badge>
+                                                ) : null}
+                                            </div>
                                         </div>
 
                                         <div className="flex items-center gap-2">
-                                            <Badge variant={statusBadgeVariant(ticket.status) as any}>{ticket.status}</Badge>
+                                            <Badge variant={statusBadgeVariant(ticket.status) as any}>
+                                                {String(ticket.status || "").toUpperCase()}
+                                            </Badge>
                                             <Badge variant="secondary">{ticket.dateKey}</Badge>
                                         </div>
                                     </div>
@@ -672,12 +869,118 @@ export default function AlumniMyTicketsPage() {
                                         <div>
                                             <div className="text-sm text-muted-foreground">Queue Number</div>
                                             <div className="mt-1 text-6xl font-semibold tracking-tight">#{ticket.queueNumber}</div>
+                                            <div className="mt-2 text-sm text-muted-foreground">
+                                                Called at: {fmtTime(ticket.calledAt || displayNowServing?.calledAt)}
+                                            </div>
                                         </div>
 
                                         <div className="text-sm text-muted-foreground">
                                             Ticket ID: <span className="font-mono">{ticket._id}</span>
                                         </div>
                                     </div>
+                                </div>
+
+                                <div className="rounded-2xl border p-6">
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-2">
+                                                <MapPin className="h-4 w-4 text-muted-foreground" />
+                                                <div className="text-sm font-semibold">Where to go</div>
+                                                {isBeingCalledNow ? <Badge>YOU ARE BEING CALLED</Badge> : null}
+                                            </div>
+                                            <div className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                                                {quickInstruction}
+                                            </div>
+                                        </div>
+
+                                        <div className="flex w-full flex-col gap-2 sm:w-auto">
+                                            <Button
+                                                variant="outline"
+                                                onClick={() => void loadDepartmentDisplay()}
+                                                disabled={displayLoading || !departmentId || displayCooldown.isCoolingDown}
+                                                className="w-full gap-2 sm:w-auto"
+                                            >
+                                                <RefreshCw className="h-4 w-4" />
+                                                {displayCooldown.isCoolingDown ? `Wait ${displayCooldown.remainingSec}s` : "Refresh Display"}
+                                            </Button>
+                                        </div>
+                                    </div>
+
+                                    <Separator className="my-5" />
+
+                                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                        <InfoRow
+                                            icon={<DoorOpen className="h-4 w-4" />}
+                                            label="Window"
+                                            value={windowLabel ? windowLabel : "Check display monitor"}
+                                            hint={!windowLabel ? "Window assignment may appear when your ticket is called." : undefined}
+                                        />
+
+                                        <InfoRow
+                                            icon={<Users className="h-4 w-4" />}
+                                            label="Staff in charge"
+                                            value={pickNonEmptyString(ticketDetails?.staffName) || "—"}
+                                        />
+
+                                        <InfoRow
+                                            icon={<Building2 className="h-4 w-4" />}
+                                            label="Serves"
+                                            value={servedDepartmentsCompact.text}
+                                            hint={servedDepartmentsCompact.extra > 0 ? `+${servedDepartmentsCompact.extra} more` : undefined}
+                                        />
+
+                                        <InfoRow
+                                            icon={<ClipboardList className="h-4 w-4" />}
+                                            label="Transactions"
+                                            value={txCompact.text}
+                                            hint={txCompact.extra > 0 ? `+${txCompact.extra} more` : undefined}
+                                        />
+                                    </div>
+
+                                    {(Array.isArray(ticketDetails?.transactionLabels) && ticketDetails!.transactionLabels.length) ||
+                                    (Array.isArray(ticketDetails?.servedDepartments) && ticketDetails!.servedDepartments.length) ? (
+                                        <>
+                                            <Separator className="my-5" />
+
+                                            <div className="grid gap-4 lg:grid-cols-12">
+                                                <div className="lg:col-span-6">
+                                                    <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                                        Your Transactions
+                                                    </div>
+                                                    <div className="mt-2 flex flex-wrap gap-2">
+                                                        {(ticketDetails?.transactionLabels || []).slice(0, 12).map((t) => (
+                                                            <Badge key={t} variant="secondary">
+                                                                {t}
+                                                            </Badge>
+                                                        ))}
+                                                        {(ticketDetails?.transactionLabels || []).length > 12 ? (
+                                                            <Badge variant="outline">
+                                                                +{(ticketDetails?.transactionLabels || []).length - 12} more
+                                                            </Badge>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+
+                                                <div className="lg:col-span-6">
+                                                    <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                                        Window Serves (Departments)
+                                                    </div>
+                                                    <div className="mt-2 flex flex-wrap gap-2">
+                                                        {(ticketDetails?.servedDepartments || []).slice(0, 12).map((d) => (
+                                                            <Badge key={d} variant="outline">
+                                                                {d}
+                                                            </Badge>
+                                                        ))}
+                                                        {(ticketDetails?.servedDepartments || []).length > 12 ? (
+                                                            <Badge variant="outline">
+                                                                +{(ticketDetails?.servedDepartments || []).length - 12} more
+                                                            </Badge>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </>
+                                    ) : null}
                                 </div>
                             </CardContent>
                         </Card>
