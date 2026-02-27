@@ -103,6 +103,12 @@ function hasHeader(headers: Record<string, string>, key: string) {
     return Object.keys(headers).some((k) => k.toLowerCase() === target)
 }
 
+function getHeaderValue(headers: Record<string, string>, key: string) {
+    const target = key.toLowerCase()
+    const found = Object.entries(headers).find(([k]) => k.toLowerCase() === target)
+    return found ? found[1] : undefined
+}
+
 function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
     const mode: RequestAuthMode = auth === undefined ? true : auth
 
@@ -110,6 +116,23 @@ function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
     if (mode === true || mode === "staff") return getAuthToken()
     if (mode === "participant") return getParticipantToken()
     return getAnyAuthToken("staff")
+}
+
+function ensureSessionTokenHeader(headers: Record<string, string>) {
+    // ✅ Max compatibility across deployments:
+    // If we have Authorization: Bearer <token> but no X-Session-Token,
+    // add it so public/participant endpoints still work when proxies strip Authorization.
+    if (hasHeader(headers, "X-Session-Token")) return
+
+    const auth = getHeaderValue(headers, "Authorization")
+    if (!auth) return
+    const s = String(auth).trim()
+    if (!s.toLowerCase().startsWith("bearer ")) return
+
+    const token = s.slice(7).trim()
+    if (!token) return
+
+    headers["X-Session-Token"] = token
 }
 
 async function parseResponseSafe(res: Response) {
@@ -187,6 +210,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         const token = resolveAuthToken(auth)
         if (token) finalHeaders.Authorization = `Bearer ${token}`
     }
+
+    // ✅ Ensure X-Session-Token mirrors Bearer token when not explicitly provided
+    // (helps public/participant endpoints stay working even if Authorization is stripped)
+    ensureSessionTokenHeader(finalHeaders)
 
     let finalBody: BodyInit | undefined
 

@@ -135,6 +135,46 @@ export type Ticket = {
     [key: string]: any
 }
 
+/**
+ * ✅ User-friendly ticket “where to go” details (names > ids)
+ * Used by:
+ * - POST /public/tickets/join
+ * - GET  /public/tickets/:id
+ * - GET  /public/tickets/:id/details
+ * - GET  /public/tickets?departmentId=...&studentId=...
+ * - POST /public/tickets/present
+ */
+export type TicketDetails = {
+    ticketId: string
+    queueNumber: number
+    dateKey: string
+    status: TicketStatus
+
+    participantType?: ParticipantType | string
+    participantTypeLabel: string
+
+    departmentName?: string
+    departmentCode?: string
+    transactionManager?: string
+    officeLabel?: string
+
+    windowNumber?: number
+    windowName?: string
+
+    staffName?: string
+
+    // Which departments this window serves (codes/names)
+    servedDepartments: string[]
+
+    // Selected transactions (labels, not keys)
+    transactionLabels: string[]
+
+    // Ready-to-show instruction text for the user
+    whereToGo: string
+
+    [key: string]: any
+}
+
 export type JoinQueuePayload = {
     // Legacy/public flow
     departmentId?: string
@@ -164,6 +204,8 @@ export type JoinQueueResponse = {
         voiceAnnouncement?: string
         [key: string]: any
     }
+    // ✅ rich guidance for UI (where to go, which window, who serves it, transactions, etc.)
+    ticketDetails?: TicketDetails
     // 🔒 backend may return this
     departmentLocked?: boolean
     [key: string]: any
@@ -171,15 +213,18 @@ export type JoinQueueResponse = {
 
 export type FindActiveTicketResponse = {
     ticket: Ticket | null
+    ticketDetails?: TicketDetails | null
     [key: string]: any
 }
 
 export type GetTicketResponse = {
     ticket: Ticket | null
+    ticketDetails?: TicketDetails
     transactions?: {
         transactionKeys?: string[]
         transactionLabels?: string[]
         participantType?: string
+        participantTypeLabel?: string
     } | null
     [key: string]: any
 }
@@ -192,6 +237,8 @@ export type PresentToDisplayPayload = {
 export type PresentToDisplayResponse = {
     ok?: boolean
     ticket?: Ticket
+    // ✅ “where to go” guidance returned by backend
+    ticketDetails?: TicketDetails
     [key: string]: any
 }
 
@@ -406,6 +453,13 @@ export const studentApi = {
 
     getTicket: (id: string) =>
         api.get<GetTicketResponse>(`/public/tickets/${encodeURIComponent(String(id).trim())}`, {
+            auth: false,
+            headers: participantAuthHeaders(),
+        }),
+
+    // ✅ clearer intent alias: same backend handler, but frontend can call it explicitly
+    getTicketDetails: (id: string) =>
+        api.get<GetTicketResponse>(`/public/tickets/${encodeURIComponent(String(id).trim())}/details`, {
             auth: false,
             headers: participantAuthHeaders(),
         }),
