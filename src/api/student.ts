@@ -46,6 +46,9 @@ export type ParticipantAuthResponse = {
     sessionToken?: string
     participant?: Participant | null
     availableTransactions?: ParticipantTransaction[]
+    // 🔒 backend may return these flags
+    departmentLocked?: boolean
+    departmentChangeIgnored?: boolean
     [key: string]: any
 }
 
@@ -55,6 +58,8 @@ export type ParticipantSessionResponse = {
     } | null
     participant?: Participant | null
     availableTransactions?: ParticipantTransaction[]
+    // 🔒 backend flag to tell UI the department is immutable
+    departmentLocked?: boolean
     [key: string]: any
 }
 
@@ -159,6 +164,8 @@ export type JoinQueueResponse = {
         voiceAnnouncement?: string
         [key: string]: any
     }
+    // 🔒 backend may return this
+    departmentLocked?: boolean
     [key: string]: any
 }
 
@@ -238,6 +245,8 @@ export type HomeOverviewResponse = {
 }
 
 const PARTICIPANT_TOKEN_KEY = "qp_participant_token"
+// 🔒 persisted lock to prevent any “flash” where UI allows department edits before session loads
+const PARTICIPANT_DEPARTMENT_KEY = "qp_participant_department_id"
 
 export const participantAuthStorage = {
     getToken(): string | null {
@@ -255,6 +264,26 @@ export const participantAuthStorage = {
     clearToken() {
         if (typeof window === "undefined") return
         localStorage.removeItem(PARTICIPANT_TOKEN_KEY)
+        // keep lock in sync with token lifecycle
+        localStorage.removeItem(PARTICIPANT_DEPARTMENT_KEY)
+    },
+
+    getDepartmentId(): string | null {
+        if (typeof window === "undefined") return null
+        const v = localStorage.getItem(PARTICIPANT_DEPARTMENT_KEY)
+        return v && v.trim() ? v.trim() : null
+    },
+
+    setDepartmentId(departmentId: string) {
+        if (typeof window === "undefined") return
+        const clean = String(departmentId ?? "").trim()
+        if (!clean) return
+        localStorage.setItem(PARTICIPANT_DEPARTMENT_KEY, clean)
+    },
+
+    clearDepartmentId() {
+        if (typeof window === "undefined") return
+        localStorage.removeItem(PARTICIPANT_DEPARTMENT_KEY)
     },
 }
 

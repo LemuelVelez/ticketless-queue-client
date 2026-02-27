@@ -34,9 +34,23 @@ import {
 } from "@/components/ui/alert-dialog"
 
 const DRAFT_KEY = "qp_student_profile_draft_v1"
+const LOCK_SENTINEL = "__LOCKED__"
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
+}
+
+function pickDepartmentIdFromParticipant(p: any) {
+    const direct = pickNonEmptyString(p?.departmentId)
+    if (direct) return direct
+
+    const dept = p?.department
+    if (typeof dept === "string") return pickNonEmptyString(dept)
+    if (dept && typeof dept === "object") {
+        return pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
+    }
+
+    return ""
 }
 
 function splitName(name: string) {
@@ -111,6 +125,7 @@ export default function StudentProfilePage() {
         session404: false,
     })
 
+    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
@@ -121,21 +136,21 @@ export default function StudentProfilePage() {
     const [sessionExpiresAt, setSessionExpiresAt] = React.useState<string>("")
     const [hasSession, setHasSession] = React.useState(false)
 
-    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>("")
-
+    // 🔒 lock immediately from storage to prevent a brief “editable” state before session loads
+    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
     const [firstName, setFirstName] = React.useState("")
     const [middleName, setMiddleName] = React.useState("")
     const [lastName, setLastName] = React.useState("")
     const [studentId, setStudentId] = React.useState("")
     const [mobileNumber, setMobileNumber] = React.useState("")
-    const [departmentId, setDepartmentId] = React.useState("")
+    const [departmentId, setDepartmentId] = React.useState(initialLockedDept)
     const [smsUpdates, setSmsUpdates] = React.useState(true)
 
     const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
-        [departments, departmentId],
+        [departments, departmentId]
     )
 
     const applyDraft = React.useCallback(() => {
@@ -157,7 +172,6 @@ export default function StudentProfilePage() {
             const res = await studentApi.listDepartments()
             setDepartments(res.departments ?? [])
         } catch (e: any) {
-            // ✅ show the real 404 issue (route missing / wrong API base)
             if (e instanceof ApiError && e.status === 404 && !diagnosticsShownRef.current.depts404) {
                 diagnosticsShownRef.current.depts404 = true
                 toast.error("Departments endpoint not found (404).", {
@@ -182,48 +196,60 @@ export default function StudentProfilePage() {
             setHasSession(Boolean(p))
 
             if (p) {
-                const rawType = pickNonEmptyString(p.type)
+                const rawType = pickNonEmptyString((p as any).type)
                 if (rawType) setParticipantType(rawType)
 
-                const explicitFirstName = pickNonEmptyString(p.firstName)
-                const explicitMiddleName = pickNonEmptyString(p.middleName)
-                const explicitLastName = pickNonEmptyString(p.lastName)
+                const explicitFirstName = pickNonEmptyString((p as any).firstName)
+                const explicitMiddleName = pickNonEmptyString((p as any).middleName)
+                const explicitLastName = pickNonEmptyString((p as any).lastName)
 
                 if (explicitFirstName || explicitLastName) {
                     if (explicitFirstName) setFirstName(explicitFirstName)
                     if (explicitMiddleName) setMiddleName(explicitMiddleName)
                     if (explicitLastName) setLastName(explicitLastName)
                 } else {
-                    const composed = splitName(pickNonEmptyString(p.name))
+                    const composed = splitName(pickNonEmptyString((p as any).name))
                     if (composed.firstName) setFirstName(composed.firstName)
                     if (composed.middleName) setMiddleName(composed.middleName)
                     if (composed.lastName) setLastName(composed.lastName)
                 }
 
-                const sid = pickNonEmptyString(p.tcNumber) || pickNonEmptyString(p.studentId)
+                const sid = pickNonEmptyString((p as any).tcNumber) || pickNonEmptyString((p as any).studentId)
                 if (sid) setStudentId(sid)
 
-                const mobile = pickNonEmptyString(p.mobileNumber) || pickNonEmptyString(p.phone)
+                const mobile = pickNonEmptyString((p as any).mobileNumber) || pickNonEmptyString((p as any).phone)
                 if (mobile) setMobileNumber(mobile)
 
-                // 🔒 Lock department after registration: if session has departmentId, student can't change it
-                const deptId = pickNonEmptyString(p.departmentId)
-                if (deptId) {
-                    setLockedDepartmentId(deptId)
-                    setDepartmentId(deptId)
-                } else {
-                    setLockedDepartmentId("")
+                const deptIdFromProfile = pickDepartmentIdFromParticipant(p)
+                const deptLockedFlag = Boolean((res as any)?.departmentLocked)
+
+                // 🔒 Department is locked after registration:
+                // lock if backend says so OR if we can read department from profile OR if we already have a stored lock
+                const storedLock = participantAuthStorage.getDepartmentId() || ""
+                const shouldLock = deptLockedFlag || Boolean(deptIdFromProfile) || Boolean(storedLock)
+
+                if (deptIdFromProfile) {
+                    setDepartmentId(deptIdFromProfile)
+                    participantAuthStorage.setDepartmentId(deptIdFromProfile)
                 }
 
-                // Optional preference field if backend provides it
+                if (shouldLock) {
+                    const effective = deptIdFromProfile || storedLock || departmentId || ""
+                    setLockedDepartmentId(effective || LOCK_SENTINEL)
+                    if (effective) setDepartmentId(effective)
+                } else {
+                    setLockedDepartmentId("")
+                    participantAuthStorage.clearDepartmentId()
+                }
+
                 if (typeof (p as any).smsUpdates === "boolean") {
                     setSmsUpdates(Boolean((p as any).smsUpdates))
                 }
             } else {
                 setLockedDepartmentId("")
+                participantAuthStorage.clearDepartmentId()
             }
         } catch (err) {
-            // ✅ show the real 404 issue (route missing / wrong API base)
             if (err instanceof ApiError && err.status === 404 && !diagnosticsShownRef.current.session404) {
                 diagnosticsShownRef.current.session404 = true
                 toast.error("Session endpoint not found (404).", {
@@ -233,10 +259,11 @@ export default function StudentProfilePage() {
 
             setHasSession(false)
             setLockedDepartmentId("")
+            participantAuthStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
-    }, [])
+    }, [departmentId])
 
     React.useEffect(() => {
         applyDraft()
@@ -246,23 +273,30 @@ export default function StudentProfilePage() {
 
     const handleDepartmentChange = React.useCallback(
         (value: string) => {
+            if (loadingSession) {
+                toast.message("Loading your session…")
+                return
+            }
             if (isDepartmentLocked) {
                 toast.message("Department is locked after registration.")
                 return
             }
             setDepartmentId(value)
         },
-        [isDepartmentLocked],
+        [isDepartmentLocked, loadingSession]
     )
 
     function onSaveDraft() {
+        const effectiveLocked =
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+
         const payload: ProfileDraft = {
             firstName: firstName.trim(),
             middleName: middleName.trim(),
             lastName: lastName.trim(),
             studentId: studentId.trim(),
             mobileNumber: mobileNumber.trim(),
-            departmentId: isDepartmentLocked ? lockedDepartmentId : departmentId,
+            departmentId: isDepartmentLocked ? effectiveLocked : departmentId,
             smsUpdates,
         }
         writeDraft(payload)
@@ -277,7 +311,7 @@ export default function StudentProfilePage() {
         setLastName("")
         setStudentId("")
         setMobileNumber("")
-        setDepartmentId("")
+        setDepartmentId(isDepartmentLocked ? (participantAuthStorage.getDepartmentId() || "") : "")
         setSmsUpdates(true)
 
         if (hasSession) {
@@ -300,8 +334,6 @@ export default function StudentProfilePage() {
             const headers = getParticipantAuthHeaders()
             if (!headers) throw new Error("Not logged in. Please login again.")
 
-            // ✅ Prefer the always-mounted session route:
-            // Frontend base "/api" + "/public/auth/session" => "/api/public/auth/session"
             const candidates = ["/public/auth/session", "/public/auth/me", "/public/auth/profile"]
 
             let lastErr: unknown = null
@@ -319,7 +351,6 @@ export default function StudentProfilePage() {
                 }
             }
 
-            // ✅ Give a clear actionable error instead of a vague "Not Found"
             const tried = candidates.join(", ")
             if (lastErr instanceof ApiError && lastErr.status === 404) {
                 throw new ApiError(
@@ -332,7 +363,7 @@ export default function StudentProfilePage() {
 
             throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
         },
-        [getParticipantAuthHeaders],
+        [getParticipantAuthHeaders]
     )
 
     async function onSaveOnline() {
@@ -340,7 +371,11 @@ export default function StudentProfilePage() {
         const m = middleName.trim()
         const l = lastName.trim()
         const sid = studentId.trim()
-        const dept = (isDepartmentLocked ? lockedDepartmentId : departmentId).trim()
+
+        const effectiveLocked =
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+
+        const dept = (isDepartmentLocked ? effectiveLocked : departmentId).trim()
         const mobile = normalizeMobile(mobileNumber)
 
         if (!f) return toast.error("First name is required.")
@@ -362,21 +397,32 @@ export default function StudentProfilePage() {
                 lastName: l,
                 name,
                 tcNumber: sid,
-                studentId: sid, // alias safety
+                studentId: sid,
                 mobileNumber: mobile,
-                phone: mobile, // alias safety
+                phone: mobile,
                 departmentId: dept,
                 smsUpdates,
             }
 
-            await updateProfileOnline(payload)
+            const result = await updateProfileOnline(payload)
+
+            // 🔒 If backend reports locked, persist lock immediately
+            if (Boolean((result as any)?.departmentLocked) && dept) {
+                participantAuthStorage.setDepartmentId(dept)
+                setLockedDepartmentId(dept)
+                setDepartmentId(dept)
+            }
+
+            // Optional: show a friendly message if an attempted department change was ignored by backend
+            if (Boolean((result as any)?.departmentChangeIgnored)) {
+                toast.message("Department change ignored (locked after registration).", { id: toastId })
+            }
 
             clearDraftStorage()
             await loadSession()
 
             toast.success("Profile saved online.", { id: toastId })
         } catch (error) {
-            // ✅ show the REAL reason for 404 with full endpoint + method (from ApiError)
             if (error instanceof ApiError && error.status === 404) {
                 toast.error("Profile save failed: API endpoint not found (404).", {
                     id: toastId,
@@ -406,8 +452,8 @@ export default function StudentProfilePage() {
             setHasSession(false)
             setSessionExpiresAt("")
             setBusyLogout(false)
-
-            // Redirect immediately after token is cleared, no page refresh needed.
+            setLockedDepartmentId("")
+            setDepartmentId("")
             if (!participantAuthStorage.getToken()) {
                 navigate("/login", { replace: true })
             }
@@ -525,9 +571,13 @@ export default function StudentProfilePage() {
                                 {loadingDepts ? (
                                     <Skeleton className="h-10 w-full" />
                                 ) : (
-                                    <Select value={departmentId} onValueChange={handleDepartmentChange} disabled={isDepartmentLocked}>
+                                    <Select
+                                        value={departmentId}
+                                        onValueChange={handleDepartmentChange}
+                                        disabled={loadingSession || isDepartmentLocked || busySaveOnline}
+                                    >
                                         <SelectTrigger className="w-full">
-                                            <SelectValue placeholder="Select department" />
+                                            <SelectValue placeholder={loadingSession ? "Loading session..." : "Select department"} />
                                         </SelectTrigger>
                                         <SelectContent>
                                             {departments.map((d) => (
@@ -540,7 +590,9 @@ export default function StudentProfilePage() {
                                     </Select>
                                 )}
 
-                                {isDepartmentLocked ? (
+                                {loadingSession ? (
+                                    <div className="text-xs text-muted-foreground">Checking your registered department…</div>
+                                ) : isDepartmentLocked ? (
                                     <div className="text-xs text-muted-foreground">
                                         Your department is locked after registration. Contact staff if it needs correction.
                                     </div>

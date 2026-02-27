@@ -33,9 +33,23 @@ import {
 } from "@/components/ui/alert-dialog"
 
 const DRAFT_KEY = "qp_alumni_profile_draft_v2"
+const LOCK_SENTINEL = "__LOCKED__"
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
+}
+
+function pickDepartmentIdFromParticipant(p: any) {
+    const direct = pickNonEmptyString(p?.departmentId)
+    if (direct) return direct
+
+    const dept = p?.department
+    if (typeof dept === "string") return pickNonEmptyString(dept)
+    if (dept && typeof dept === "object") {
+        return pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
+    }
+
+    return ""
 }
 
 function splitName(name: string) {
@@ -111,6 +125,7 @@ export default function AlumniProfilePage() {
         session404: false,
     })
 
+    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
@@ -121,20 +136,21 @@ export default function AlumniProfilePage() {
     const [sessionExpiresAt, setSessionExpiresAt] = React.useState<string>("")
     const [hasSession, setHasSession] = React.useState(false)
 
-    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>("")
+    // 🔒 lock immediately from storage to prevent a brief “editable” state before session loads
+    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
 
     const [firstName, setFirstName] = React.useState("")
     const [middleName, setMiddleName] = React.useState("")
     const [lastName, setLastName] = React.useState("")
     const [mobileNumber, setMobileNumber] = React.useState("")
-    const [departmentId, setDepartmentId] = React.useState("")
+    const [departmentId, setDepartmentId] = React.useState(initialLockedDept)
     const [smsUpdates, setSmsUpdates] = React.useState(true)
 
     const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
-        [departments, departmentId],
+        [departments, departmentId]
     )
 
     const applyDraft = React.useCallback(() => {
@@ -180,40 +196,51 @@ export default function AlumniProfilePage() {
 
             if (!p) {
                 setLockedDepartmentId("")
+                participantAuthStorage.clearDepartmentId()
                 return
             }
 
-            const rawType = pickNonEmptyString(p.type)
+            const rawType = pickNonEmptyString((p as any).type)
             if (rawType) setParticipantType(rawType)
 
-            const explicitFirstName = pickNonEmptyString(p.firstName)
-            const explicitMiddleName = pickNonEmptyString(p.middleName)
-            const explicitLastName = pickNonEmptyString(p.lastName)
+            const explicitFirstName = pickNonEmptyString((p as any).firstName)
+            const explicitMiddleName = pickNonEmptyString((p as any).middleName)
+            const explicitLastName = pickNonEmptyString((p as any).lastName)
 
             if (explicitFirstName || explicitLastName) {
                 if (explicitFirstName) setFirstName(explicitFirstName)
                 if (explicitMiddleName) setMiddleName(explicitMiddleName)
                 if (explicitLastName) setLastName(explicitLastName)
             } else {
-                const composed = splitName(pickNonEmptyString(p.name))
+                const composed = splitName(pickNonEmptyString((p as any).name))
                 if (composed.firstName) setFirstName(composed.firstName)
                 if (composed.middleName) setMiddleName(composed.middleName)
                 if (composed.lastName) setLastName(composed.lastName)
             }
 
-            const mobile = pickNonEmptyString(p.mobileNumber) || pickNonEmptyString(p.phone)
+            const mobile = pickNonEmptyString((p as any).mobileNumber) || pickNonEmptyString((p as any).phone)
             if (mobile) setMobileNumber(mobile)
 
-            // 🔒 Lock department after registration: alumni/visitor can’t change it once saved in session profile
-            const deptId = pickNonEmptyString(p.departmentId)
-            if (deptId) {
-                setLockedDepartmentId(deptId)
-                setDepartmentId(deptId)
-            } else {
-                setLockedDepartmentId("")
+            const deptIdFromProfile = pickDepartmentIdFromParticipant(p)
+            const deptLockedFlag = Boolean((res as any)?.departmentLocked)
+
+            const storedLock = participantAuthStorage.getDepartmentId() || ""
+            const shouldLock = deptLockedFlag || Boolean(deptIdFromProfile) || Boolean(storedLock)
+
+            if (deptIdFromProfile) {
+                setDepartmentId(deptIdFromProfile)
+                participantAuthStorage.setDepartmentId(deptIdFromProfile)
             }
 
-            // Optional preference field if backend provides it
+            if (shouldLock) {
+                const effective = deptIdFromProfile || storedLock || departmentId || ""
+                setLockedDepartmentId(effective || LOCK_SENTINEL)
+                if (effective) setDepartmentId(effective)
+            } else {
+                setLockedDepartmentId("")
+                participantAuthStorage.clearDepartmentId()
+            }
+
             if (typeof (p as any).smsUpdates === "boolean") {
                 setSmsUpdates(Boolean((p as any).smsUpdates))
             }
@@ -227,10 +254,11 @@ export default function AlumniProfilePage() {
 
             setHasSession(false)
             setLockedDepartmentId("")
+            participantAuthStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
-    }, [])
+    }, [departmentId])
 
     React.useEffect(() => {
         applyDraft()
@@ -240,22 +268,29 @@ export default function AlumniProfilePage() {
 
     const handleDepartmentChange = React.useCallback(
         (value: string) => {
+            if (loadingSession) {
+                toast.message("Loading your session…")
+                return
+            }
             if (isDepartmentLocked) {
                 toast.message("Department is locked after registration.")
                 return
             }
             setDepartmentId(value)
         },
-        [isDepartmentLocked],
+        [isDepartmentLocked, loadingSession]
     )
 
     function onSaveDraft() {
+        const effectiveLocked =
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+
         const payload: ProfileDraft = {
             firstName: firstName.trim(),
             middleName: middleName.trim(),
             lastName: lastName.trim(),
             mobileNumber: mobileNumber.trim(),
-            departmentId: isDepartmentLocked ? lockedDepartmentId : departmentId,
+            departmentId: isDepartmentLocked ? effectiveLocked : departmentId,
             smsUpdates,
         }
 
@@ -270,7 +305,7 @@ export default function AlumniProfilePage() {
         setMiddleName("")
         setLastName("")
         setMobileNumber("")
-        setDepartmentId("")
+        setDepartmentId(isDepartmentLocked ? (participantAuthStorage.getDepartmentId() || "") : "")
         setSmsUpdates(true)
 
         if (hasSession) {
@@ -322,14 +357,18 @@ export default function AlumniProfilePage() {
 
             throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
         },
-        [getParticipantAuthHeaders],
+        [getParticipantAuthHeaders]
     )
 
     async function onSaveOnline() {
         const f = firstName.trim()
         const m = middleName.trim()
         const l = lastName.trim()
-        const dept = (isDepartmentLocked ? lockedDepartmentId : departmentId).trim()
+
+        const effectiveLocked =
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+
+        const dept = (isDepartmentLocked ? effectiveLocked : departmentId).trim()
         const mobile = normalizeMobile(mobileNumber)
 
         if (!f) return toast.error("First name is required.")
@@ -350,12 +389,22 @@ export default function AlumniProfilePage() {
                 lastName: l,
                 name,
                 mobileNumber: mobile,
-                phone: mobile, // alias safety
+                phone: mobile,
                 departmentId: dept,
                 smsUpdates,
             }
 
-            await updateProfileOnline(payload)
+            const result = await updateProfileOnline(payload)
+
+            if (Boolean((result as any)?.departmentLocked) && dept) {
+                participantAuthStorage.setDepartmentId(dept)
+                setLockedDepartmentId(dept)
+                setDepartmentId(dept)
+            }
+
+            if (Boolean((result as any)?.departmentChangeIgnored)) {
+                toast.message("Department change ignored (locked after registration).", { id: toastId })
+            }
 
             clearDraftStorage()
             await loadSession()
@@ -391,6 +440,8 @@ export default function AlumniProfilePage() {
             setHasSession(false)
             setSessionExpiresAt("")
             setBusyLogout(false)
+            setLockedDepartmentId("")
+            setDepartmentId("")
 
             if (!participantAuthStorage.getToken()) {
                 navigate("/login", { replace: true })
@@ -498,9 +549,13 @@ export default function AlumniProfilePage() {
                                 {loadingDepts ? (
                                     <Skeleton className="h-10 w-full" />
                                 ) : (
-                                    <Select value={departmentId} onValueChange={handleDepartmentChange} disabled={isDepartmentLocked}>
+                                    <Select
+                                        value={departmentId}
+                                        onValueChange={handleDepartmentChange}
+                                        disabled={loadingSession || isDepartmentLocked || busySaveOnline}
+                                    >
                                         <SelectTrigger className="w-full">
-                                            <SelectValue placeholder="Select department" />
+                                            <SelectValue placeholder={loadingSession ? "Loading session..." : "Select department"} />
                                         </SelectTrigger>
 
                                         <SelectContent>
@@ -514,7 +569,9 @@ export default function AlumniProfilePage() {
                                     </Select>
                                 )}
 
-                                {isDepartmentLocked ? (
+                                {loadingSession ? (
+                                    <div className="text-xs text-muted-foreground">Checking your registered department…</div>
+                                ) : isDepartmentLocked ? (
                                     <div className="text-xs text-muted-foreground">
                                         Your department is locked after registration. Contact staff if it needs correction.
                                     </div>

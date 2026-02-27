@@ -317,6 +317,9 @@ export default function RegisterPage() {
                 password: pin,
             })
 
+            // 🔒 Persist department lock immediately after registration (prevents any UI “flash” allowing edits)
+            participantAuthStorage.setDepartmentId(departmentId)
+
             const role = (await resolveParticipantRoleFromSession()) ?? "STUDENT"
 
             toast.success("Student account created.")
@@ -416,6 +419,9 @@ export default function RegisterPage() {
                 }
             }
 
+            // 🔒 Persist department lock immediately after registration (applies to alumni/visitor/guest)
+            participantAuthStorage.setDepartmentId(departmentId)
+
             const role = (await resolveParticipantRoleFromSession()) ?? "ALUMNI_VISITOR"
 
             toast.success("Alumni/Visitor account created.")
@@ -459,7 +465,11 @@ export default function RegisterPage() {
                             </CardHeader>
 
                             <CardContent>
-                                <Tabs.Root value={tab} onValueChange={(value) => setTab(value as RegisterTab)} className="w-full">
+                                <Tabs.Root
+                                    value={tab}
+                                    onValueChange={(value) => setTab(value as RegisterTab)}
+                                    className="w-full"
+                                >
                                     <Tabs.List className="bg-muted grid h-10 w-full grid-cols-2 rounded-lg p-1">
                                         <Tabs.Trigger
                                             value="student"
@@ -555,7 +565,11 @@ export default function RegisterPage() {
                                                 >
                                                     <SelectTrigger id="studentDepartment">
                                                         <SelectValue
-                                                            placeholder={loadingDepartments ? "Loading departments..." : "Select department"}
+                                                            placeholder={
+                                                                loadingDepartments
+                                                                    ? "Loading departments..."
+                                                                    : "Select department"
+                                                            }
                                                         />
                                                     </SelectTrigger>
                                                     <SelectContent>
@@ -625,7 +639,10 @@ export default function RegisterPage() {
                                                     inputMode="numeric"
                                                     maxLength={4}
                                                     onChange={(value) =>
-                                                        setStudent((prev) => ({ ...prev, confirmPin: normalizePin(value) }))
+                                                        setStudent((prev) => ({
+                                                            ...prev,
+                                                            confirmPin: normalizePin(value),
+                                                        }))
                                                     }
                                                 />
                                             </div>
@@ -693,7 +710,11 @@ export default function RegisterPage() {
                                                 >
                                                     <SelectTrigger id="visitorDepartment">
                                                         <SelectValue
-                                                            placeholder={loadingDepartments ? "Loading departments..." : "Select department"}
+                                                            placeholder={
+                                                                loadingDepartments
+                                                                    ? "Loading departments..."
+                                                                    : "Select department"
+                                                            }
                                                         />
                                                     </SelectTrigger>
                                                     <SelectContent>
@@ -763,7 +784,10 @@ export default function RegisterPage() {
                                                     inputMode="numeric"
                                                     maxLength={4}
                                                     onChange={(value) =>
-                                                        setVisitor((prev) => ({ ...prev, confirmPin: normalizePin(value) }))
+                                                        setVisitor((prev) => ({
+                                                            ...prev,
+                                                            confirmPin: normalizePin(value),
+                                                        }))
                                                     }
                                                 />
                                             </div>
@@ -798,7 +822,8 @@ export default function RegisterPage() {
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-xl">Skip the queue, not your turn</CardTitle>
                                 <CardDescription>
-                                    Register once and easily join queues, track status updates, and get called with confidence.
+                                    Register once and easily join queues, track status updates, and get called with
+                                    confidence.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
