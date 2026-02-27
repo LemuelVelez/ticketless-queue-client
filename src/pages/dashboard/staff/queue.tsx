@@ -190,6 +190,15 @@ function firstNonEmptyText(candidates: unknown[]) {
     return ""
 }
 
+function firstNonEmptyFromArray(value: unknown, pick: (item: any) => unknown) {
+    if (!Array.isArray(value)) return ""
+    for (const item of value) {
+        const text = String(pick(item) ?? "").trim()
+        if (text) return text
+    }
+    return ""
+}
+
 function composeName(parts: unknown[]) {
     const s = parts
         .map((p) => String(p ?? "").trim())
@@ -239,15 +248,33 @@ function getWindowMeta(ticket: TicketLike) {
 function getParticipantName(ticket: TicketLike): string {
     const t = ticket as any
 
-    // ✅ Prefer full name fields first (names > IDs)
+    // ✅ Pull from legacy/centralized fields (prefer full name)
+    const fromSelections = firstNonEmptyFromArray(t?.transactionSelections, (x) => x?.participantFullName ?? x?.participantLabel ?? x?.participantName)
+
     const name = firstNonEmptyText([
+        // ✅ legacy Ticket fields
+        t?.participantFullName,
+        t?.participant_full_name,
+        t?.participantFullname,
+
+        // ✅ sometimes nested inside selections/transactions
+        fromSelections,
+        t?.transactions?.participantFullName,
+        t?.transactions?.participantLabel,
+        t?.meta?.participantFullName,
+        t?.meta?.participantName,
+
+        // ✅ centralized TicketView / enriched participant object
         t?.participant?.fullName,
+        t?.participant?.full_name,
+        t?.participant?.fullname,
         t?.participant?.name,
+
+        // ✅ other common shapes
         t?.participantName,
         t?.__participantName,
         t?.user?.name,
         t?.name,
-        t?.meta?.participantName,
     ])
     if (name) return name
 
@@ -456,9 +483,11 @@ function ParticipantCell({ ticket }: { ticket: TicketLike }) {
             <div className="font-medium whitespace-normal wrap-break-word leading-snug">{name || "—"}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
                 {participantTypeBadge(type || "")}
-                <span className="text-xs text-muted-foreground">
-                    Student ID: <span className="tabular-nums">{sid || "—"}</span>
-                </span>
+                {sid ? (
+                    <span className="text-xs text-muted-foreground">
+                        Student ID: <span className="tabular-nums">{sid}</span>
+                    </span>
+                ) : null}
             </div>
         </div>
     )
@@ -1504,7 +1533,7 @@ export default function StaffQueuePage() {
                                                             <TableHead className="w-24">Window</TableHead>
                                                             <TableHead className="w-44">Now serving</TableHead>
                                                             <TableHead className="min-w-55">Department</TableHead>
-                                                            <TableHead>Student</TableHead>
+                                                            <TableHead>Participant</TableHead>
                                                             <TableHead className="hidden md:table-cell">Called at</TableHead>
                                                         </TableRow>
                                                     </TableHeader>
@@ -1513,6 +1542,7 @@ export default function StaffQueuePage() {
                                                             const isMine = Number(windowInfo?.number ?? 0) === windowNumber
                                                             const dep = getDepartmentMeta(ticket)
                                                             const qLabel = dep.code ? `${dep.code}-${pad3(ticket.queueNumber)}` : `#${ticket.queueNumber}`
+                                                            const sid = getStudentId(ticket)
 
                                                             return (
                                                                 <TableRow key={`${windowNumber}:${ticket.id}`} className={isMine ? "bg-muted/50" : ""}>
@@ -1526,9 +1556,11 @@ export default function StaffQueuePage() {
                                                                             <div className="font-medium whitespace-normal wrap-break-word leading-snug">
                                                                                 {getParticipantName(ticket) || "—"}
                                                                             </div>
-                                                                            <div className="text-xs text-muted-foreground">
-                                                                                Student ID: <span className="tabular-nums">{getStudentId(ticket) || "—"}</span>
-                                                                            </div>
+                                                                            {sid ? (
+                                                                                <div className="text-xs text-muted-foreground">
+                                                                                    Student ID: <span className="tabular-nums">{sid}</span>
+                                                                                </div>
+                                                                            ) : null}
                                                                         </div>
                                                                     </TableCell>
                                                                     <TableCell className="hidden md:table-cell text-muted-foreground">
@@ -1574,15 +1606,17 @@ export default function StaffQueuePage() {
                                                                 })()}
 
                                                                 <div className="mt-2 text-sm text-muted-foreground">
-                                                                    Student:{" "}
+                                                                    Participant:{" "}
                                                                     <span className="text-foreground font-medium whitespace-normal wrap-break-word">
                                                                         {getParticipantName(current) || "—"}
                                                                     </span>
                                                                 </div>
 
-                                                                <div className="text-sm text-muted-foreground">
-                                                                    Student ID: <span className="tabular-nums">{getStudentId(current) || "—"}</span>
-                                                                </div>
+                                                                {getStudentId(current) ? (
+                                                                    <div className="text-sm text-muted-foreground">
+                                                                        Student ID: <span className="tabular-nums">{getStudentId(current)}</span>
+                                                                    </div>
+                                                                ) : null}
 
                                                                 <div className="text-sm text-muted-foreground">
                                                                     Department: {getDepartmentMeta(current).name}
@@ -1652,7 +1686,7 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
-                                                                <TableHead>Student (Full name)</TableHead>
+                                                                <TableHead>Participant (Full name)</TableHead>
                                                                 <TableHead className="min-w-55">Purpose / Transaction</TableHead>
                                                                 <TableHead className="hidden xl:table-cell">Waiting since</TableHead>
                                                             </TableRow>
@@ -1702,7 +1736,7 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
-                                                                <TableHead>Student</TableHead>
+                                                                <TableHead>Participant</TableHead>
                                                                 <TableHead className="min-w-45">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Updated</TableHead>
@@ -1768,7 +1802,7 @@ export default function StaffQueuePage() {
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
-                                                                <TableHead>Student</TableHead>
+                                                                <TableHead>Participant</TableHead>
                                                                 <TableHead className="min-w-45">Purpose</TableHead>
                                                                 <TableHead className="w-28">Attempts</TableHead>
                                                                 <TableHead className="hidden md:table-cell">Out at</TableHead>
@@ -1840,7 +1874,7 @@ export default function StaffQueuePage() {
                                                             <TableRow>
                                                                 <TableHead className="w-44">Queue</TableHead>
                                                                 <TableHead className="w-28">Status</TableHead>
-                                                                <TableHead>Student</TableHead>
+                                                                <TableHead>Participant</TableHead>
                                                                 <TableHead className="min-w-55">Purpose</TableHead>
                                                                 <TableHead className="w-28">Window</TableHead>
                                                                 <TableHead className="hidden md:table-cell">When</TableHead>
