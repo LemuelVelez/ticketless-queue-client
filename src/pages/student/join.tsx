@@ -28,7 +28,8 @@ import {
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { studentApi, type Department, type Ticket as TicketType } from "@/api/student"
+import { guestApi } from "@/api/guest"
+import { studentApi, type Department, type Ticket as TicketType, participantAuthStorage } from "@/api/student"
 import { api } from "@/lib/http"
 
 import { Badge } from "@/components/ui/badge"
@@ -66,10 +67,26 @@ type SessionParticipant = {
     mobileNumber?: string
     phone?: string
     departmentId?: string
+    department?: any
 }
+
+const LOCK_SENTINEL = "__LOCKED__"
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
+}
+
+function pickDepartmentIdFromParticipant(p: any) {
+    const direct = pickNonEmptyString(p?.departmentId)
+    if (direct) return direct
+
+    const dept = p?.department
+    if (typeof dept === "string") return pickNonEmptyString(dept)
+    if (dept && typeof dept === "object") {
+        return pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
+    }
+
+    return ""
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -140,18 +157,21 @@ export default function StudentHomePage() {
     const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
     const preStudentId = React.useMemo(() => pickNonEmptyString(qs.get("studentId")), [qs])
 
+    // 🔒 lock immediately from storage to prevent brief “editable” state
+    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
+
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [loadingDisplay, setLoadingDisplay] = React.useState(false)
     const [loadingTicket, setLoadingTicket] = React.useState(false)
 
     const [departments, setDepartments] = React.useState<Department[]>([])
-    const [sessionDepartmentId, setSessionDepartmentId] = React.useState("")
-    const [departmentId, setDepartmentId] = React.useState("")
+    const [sessionDepartmentId, setSessionDepartmentId] = React.useState(initialLockedDept)
+    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
+    const [departmentId, setDepartmentId] = React.useState(initialLockedDept)
     const [studentId, setStudentId] = React.useState(preStudentId)
 
     const [participant, setParticipant] = React.useState<SessionParticipant | null>(null)
-
     const [ticket, setTicket] = React.useState<TicketType | null>(null)
 
     const [displayDateKey, setDisplayDateKey] = React.useState("")
@@ -174,10 +194,14 @@ export default function StudentHomePage() {
         return pickNonEmptyString(participant.studentId) || pickNonEmptyString(participant.tcNumber)
     }, [participant])
 
-    // ✅ Student restriction: lock department after registration/profile sync
-    const isDepartmentLocked = React.useMemo(() => {
-        return Boolean(participant && pickNonEmptyString(sessionDepartmentId))
-    }, [participant, sessionDepartmentId])
+    const effectiveLockedDeptId = React.useMemo(() => {
+        if (!lockedDepartmentId) return ""
+        if (lockedDepartmentId !== LOCK_SENTINEL) return lockedDepartmentId
+        return participantAuthStorage.getDepartmentId() || sessionDepartmentId || ""
+    }, [lockedDepartmentId, sessionDepartmentId])
+
+    // ✅ lock department after registration/profile sync (student/alumni/guest)
+    const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const hasActiveTicket = Boolean(ticket)
 
@@ -198,27 +222,65 @@ export default function StudentHomePage() {
     const loadSession = React.useCallback(async () => {
         setLoadingSession(true)
         try {
-            const res = await studentApi.getSession({})
-            const p = (res.participant ?? null) as SessionParticipant | null
+            // Use guestApi (public session) so alumni/guest/student all get the same “registered dept” lock behavior
+            const res = await guestApi.getSession()
+            const p = (res?.participant ?? null) as SessionParticipant | null
 
             setParticipant(p)
 
-            const sid = pickNonEmptyString(p?.tcNumber) || pickNonEmptyString(p?.studentId)
-            const dept = pickNonEmptyString(p?.departmentId)
+            const sid =
+                pickNonEmptyString((p as any)?.tcNumber) ||
+                pickNonEmptyString((p as any)?.studentId)
+            const deptFromProfile = p ? pickDepartmentIdFromParticipant(p) : ""
 
-            if (sid) {
-                setStudentId((prev) => prev || sid)
+            if (sid) setStudentId((prev) => prev || sid)
+
+            const storedLock = participantAuthStorage.getDepartmentId() || ""
+            const deptLockedFlag = Boolean((res as any)?.departmentLocked)
+            const shouldLock = deptLockedFlag || Boolean(deptFromProfile) || Boolean(storedLock)
+
+            const effective = deptFromProfile || storedLock
+
+            if (deptFromProfile) {
+                setSessionDepartmentId(deptFromProfile)
+                participantAuthStorage.setDepartmentId(deptFromProfile)
+            } else if (storedLock) {
+                setSessionDepartmentId(storedLock)
             }
-            if (dept) {
-                setSessionDepartmentId(dept)
+
+            if (shouldLock) {
+                setLockedDepartmentId(effective || LOCK_SENTINEL)
+                if (effective) setDepartmentId(effective)
+            } else {
+                setLockedDepartmentId("")
+                setSessionDepartmentId("")
+                participantAuthStorage.clearDepartmentId()
             }
         } catch {
-            // Guest mode is valid here.
+            // Guest mode without session is valid here.
             setParticipant(null)
+            setLockedDepartmentId("")
+            setSessionDepartmentId("")
+            participantAuthStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
     }, [])
+
+    const handleDepartmentChange = React.useCallback(
+        (value: string) => {
+            if (loadingSession) {
+                toast.message("Loading your session…")
+                return
+            }
+            if (isDepartmentLocked) {
+                toast.message("Department is locked to your registered profile.")
+                return
+            }
+            setDepartmentId(value)
+        },
+        [isDepartmentLocked, loadingSession],
+    )
 
     const loadDepartmentDisplay = React.useCallback(
         async (opts?: { silent?: boolean }) => {
@@ -281,7 +343,6 @@ export default function StudentHomePage() {
     )
 
     const refreshOverview = React.useCallback(async () => {
-        // ✅ Abuse prevention: throttle refresh (reduces display flooding)
         const key = `qp:student:home:refresh:${departmentId || "none"}`
         const remaining = cooldownRemainingMs(key, 2500)
         if (remaining > 0) {
@@ -305,8 +366,8 @@ export default function StudentHomePage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-            // ✅ Student restriction: if profile dept exists, lock & prioritize it
-            if (isDepartmentLocked && has(sessionDepartmentId)) return sessionDepartmentId
+            // ✅ If locked, always force the registered dept (ignore URL params)
+            if (isDepartmentLocked && has(effectiveLockedDeptId)) return effectiveLockedDeptId
 
             // 1) explicit query param (guest / unlocked only)
             if (has(preDeptId)) return preDeptId
@@ -317,7 +378,7 @@ export default function StudentHomePage() {
             // 3) fallback first
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId, isDepartmentLocked])
+    }, [departments, preDeptId, isDepartmentLocked, effectiveLockedDeptId])
 
     React.useEffect(() => {
         void loadDepartmentDisplay()
@@ -449,11 +510,11 @@ export default function StudentHomePage() {
 
                                         <Select
                                             value={departmentId}
-                                            onValueChange={setDepartmentId}
+                                            onValueChange={handleDepartmentChange}
                                             disabled={!departments.length || isDepartmentLocked}
                                         >
                                             <SelectTrigger className="w-full min-w-0">
-                                                <SelectValue placeholder="Select department" />
+                                                <SelectValue placeholder={loadingSession ? "Loading session..." : "Select department"} />
                                             </SelectTrigger>
                                             <SelectContent>
                                                 {departments.map((d) => (
