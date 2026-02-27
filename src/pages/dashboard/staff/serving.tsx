@@ -166,6 +166,13 @@ const MAN_VOICE_HINTS = [
     "william",
 ]
 
+/**
+ * ✅ Reliability check tokens (per request)
+ * Requirement: confirm supported networks (Globe / Smart).
+ * NOTE: Semaphore may return variants/casing; backend already matches loosely.
+ */
+const SMS_SUPPORTED_NETWORK_TOKENS = ["GLOBE", "SMART"]
+
 function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
     return {
         _id: row.id,
@@ -294,9 +301,104 @@ function departmentLabel(dep?: Partial<DepartmentAssignment> | null) {
     return name || code || "—"
 }
 
-function defaultSmsCalledMessage(queueNumber: number, windowNumber?: number) {
-    const windowText = typeof windowNumber === "number" ? ` at Window ${windowNumber}` : ""
-    return `Queue update: Your ticket #${queueNumber} is now being served${windowText}.`
+function buildCalledSmsMessage(args: {
+    departmentLabel: string
+    queueNumber: number
+    windowNumber?: number
+}) {
+    const dept = args.departmentLabel || "your office"
+    const q = args.queueNumber
+    const w = args.windowNumber
+    if (typeof w === "number") {
+        return `Queue Update (${dept}): You are now being called. Ticket #${q}. Please proceed to Window ${w}.`
+    }
+    return `Queue Update (${dept}): You are now being called. Ticket #${q}. Please proceed to the service window.`
+}
+
+function buildAdvanceNoticeSmsMessage(args: { departmentLabel: string; queueNumber: number }) {
+    const dept = args.departmentLabel || "your office"
+    const q = args.queueNumber
+    return `Queue Update (${dept}): Advance notice — you're next. Ticket #${q}. Please be ready.`
+}
+
+function pickNextWaitingTicket(afterQueueNumber: number, list: TicketType[]) {
+    const candidates = (Array.isArray(list) ? list : [])
+        .filter((t) => Number.isFinite(Number(t?.queueNumber)) && Number(t.queueNumber) > afterQueueNumber)
+        .slice()
+        .sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber))
+
+    return candidates[0] ?? null
+}
+
+function safeJson(value: unknown) {
+    try {
+        return JSON.stringify(value, null, 2)
+    } catch {
+        return String(value)
+    }
+}
+
+function summarizeReliability(result: any): {
+    statusLabel: "sent" | "skipped" | "failed" | "unknown"
+    deliveryStatus?: string
+    providerNetwork?: string
+    supportedNetwork?: boolean | null
+    providerMessageId?: number
+    reason?: string
+} {
+    if (!result) return { statusLabel: "unknown" }
+
+    if (result?.skipped) {
+        return {
+            statusLabel: "skipped",
+            reason: String(result?.reason || "skipped"),
+        }
+    }
+
+    const reliability = result?.reliability
+    const deliveryStatus = reliability?.deliveryStatus ? String(reliability.deliveryStatus) : undefined
+    const providerNetwork = reliability?.providerNetwork ? String(reliability.providerNetwork) : undefined
+    const supportedNetwork =
+        typeof reliability?.supportedNetwork === "boolean" || reliability?.supportedNetwork === null
+            ? (reliability.supportedNetwork as boolean | null)
+            : undefined
+    const providerMessageId = Number.isFinite(Number(reliability?.providerMessageId))
+        ? Number(reliability.providerMessageId)
+        : undefined
+
+    const statusLabel = deliveryStatus === "FAILED" ? "failed" : deliveryStatus ? "sent" : "unknown"
+
+    return {
+        statusLabel,
+        deliveryStatus,
+        providerNetwork,
+        supportedNetwork,
+        providerMessageId,
+    }
+}
+
+type SmsLog = {
+    at: string
+    current: {
+        ticketId: string
+        queueNumber: number
+        message: string
+        ok: boolean
+        apiResponse?: any
+        error?: string
+        reliabilitySummary?: ReturnType<typeof summarizeReliability>
+    }
+    advance?: {
+        enabled: boolean
+        attempted: boolean
+        nextTicketId?: string
+        nextQueueNumber?: number
+        message?: string
+        ok?: boolean
+        apiResponse?: any
+        error?: string
+        reliabilitySummary?: ReturnType<typeof summarizeReliability>
+    }
 }
 
 export default function StaffServingPage() {
@@ -363,11 +465,26 @@ export default function StaffServingPage() {
 
     // -------- SMS states --------
     const [autoSmsOnCall, setAutoSmsOnCall] = React.useState(false)
+    const [smsAdvanceNoticeEnabled, setSmsAdvanceNoticeEnabled] = React.useState(false)
     const [smsDialogOpen, setSmsDialogOpen] = React.useState(false)
+    const [smsLogDialogOpen, setSmsLogDialogOpen] = React.useState(false)
     const [smsBusy, setSmsBusy] = React.useState(false)
     const [smsUseDefaultMessage, setSmsUseDefaultMessage] = React.useState(true)
     const [smsCustomMessage, setSmsCustomMessage] = React.useState("")
     const [smsSenderName, setSmsSenderName] = React.useState("")
+    const [lastSmsLog, setLastSmsLog] = React.useState<SmsLog | null>(null)
+
+    const smsDepartmentLabel = React.useMemo(() => {
+        const snapName = String(snapshot?.department?.name || "").trim()
+        if (snapName) return snapName
+
+        const pools = [...assignedDepartmentItems, ...handledDepartmentItems]
+        const dep = pools.find((d) => String(d.id) === String(departmentId || ""))
+        const name = String(dep?.name || "").trim()
+        const code = String(dep?.code || "").trim()
+
+        return name || code || "your office"
+    }, [assignedDepartmentItems, handledDepartmentItems, departmentId, snapshot?.department?.name])
 
     const { voices } = useVoices()
     const { speak: speakWithPackage, stop: stopSpeech } = useSpeak({
@@ -472,70 +589,6 @@ export default function StaffServingPage() {
         if (!n) return toast.message("No ticket to announce.")
         announceCall(n)
     }, [announceCall, current?.queueNumber])
-
-    const sendCalledSms = React.useCallback(
-        async (
-            ticket: TicketType,
-            opts?: { message?: string; senderName?: string; toastOnSuccess?: boolean },
-        ) => {
-            if (!ticket?._id) {
-                toast.error("No active ticket selected for SMS.")
-                return false
-            }
-
-            setSmsBusy(true)
-            try {
-                const message = String(opts?.message ?? "").trim()
-                const senderName = String(opts?.senderName ?? "").trim()
-
-                const payload = {
-                    ...(message ? { message } : {}),
-                    ...(senderName ? { senderName } : {}),
-                }
-
-                const res = await staffApi.sendTicketCalledSms(ticket._id, payload)
-
-                if (opts?.toastOnSuccess !== false) {
-                    toast.success(
-                        `SMS sent for #${ticket.queueNumber}${res?.number ? ` to ${res.number}` : ""}.`,
-                    )
-                }
-
-                return true
-            } catch (e: any) {
-                toast.error(e?.message ?? "Failed to send SMS.")
-                return false
-            } finally {
-                setSmsBusy(false)
-            }
-        },
-        [],
-    )
-
-    const onSendSmsFromDialog = React.useCallback(async () => {
-        if (!current?._id) {
-            toast.message("No active ticket selected for SMS.")
-            return
-        }
-
-        const custom = smsUseDefaultMessage ? "" : smsCustomMessage.trim()
-        if (!smsUseDefaultMessage && !custom) {
-            toast.error("Custom message is required.")
-            return
-        }
-
-        const ok = await sendCalledSms(current, {
-            message: custom || undefined,
-            senderName: smsSenderName.trim() || undefined,
-            toastOnSuccess: true,
-        })
-
-        if (!ok) return
-
-        setSmsDialogOpen(false)
-        setSmsUseDefaultMessage(true)
-        setSmsCustomMessage("")
-    }, [current, sendCalledSms, smsCustomMessage, smsSenderName, smsUseDefaultMessage])
 
     const loadMonitorOptions = React.useCallback(async (silent = false) => {
         if (typeof window === "undefined") return
@@ -732,6 +785,230 @@ export default function StaffServingPage() {
         return () => window.clearInterval(t)
     }, [autoRefresh, refresh])
 
+    const sendCalledSms = React.useCallback(
+        async (
+            ticket: TicketType,
+            opts?: {
+                message?: string
+                senderName?: string
+                toastOnSuccess?: boolean
+                advanceNotice?: boolean
+            },
+        ) => {
+            if (!ticket?._id) {
+                toast.error("No active ticket selected for SMS.")
+                return false
+            }
+
+            const senderName = String(opts?.senderName ?? "").trim()
+            const useAdvance = Boolean(opts?.advanceNotice)
+
+            const message =
+                String(opts?.message ?? "").trim() ||
+                buildCalledSmsMessage({
+                    departmentLabel: smsDepartmentLabel,
+                    queueNumber: Number(ticket.queueNumber),
+                    windowNumber: windowInfo?.number,
+                })
+
+            setSmsBusy(true)
+
+            const nextLog: SmsLog = {
+                at: new Date().toISOString(),
+                current: {
+                    ticketId: String(ticket._id),
+                    queueNumber: Number(ticket.queueNumber),
+                    message,
+                    ok: false,
+                },
+                advance: {
+                    enabled: useAdvance,
+                    attempted: false,
+                },
+            }
+
+            try {
+                // ✅ Always send custom message for current ticket
+                // (prevents accidental backend-side auto-advance duplicates; frontend owns the toggle)
+                const res = await staffApi.sendTicketCalledSms(ticket._id, {
+                    message,
+                    ...(senderName ? { senderName } : {}),
+                    respectOptOut: true,
+                    supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
+                    meta: {
+                        source: "staff-serving",
+                        kind: "current_called",
+                        departmentLabel: smsDepartmentLabel,
+                        windowNumber: windowInfo?.number ?? null,
+                    },
+                })
+
+                nextLog.current.ok = Boolean(res?.ok)
+                nextLog.current.apiResponse = res
+                nextLog.current.reliabilitySummary = summarizeReliability(res?.result)
+
+                const sum = nextLog.current.reliabilitySummary
+                if (sum.statusLabel === "skipped") {
+                    toast.message(`SMS skipped for #${ticket.queueNumber} (opted out).`)
+                } else if (sum.statusLabel === "failed") {
+                    toast.error(
+                        `SMS failed for #${ticket.queueNumber}${sum.providerNetwork ? ` • ${sum.providerNetwork}` : ""}.`,
+                    )
+                } else {
+                    if (opts?.toastOnSuccess !== false) {
+                        const supportLabel =
+                            sum.supportedNetwork === true
+                                ? "supported"
+                                : sum.supportedNetwork === false
+                                  ? "unsupported"
+                                  : "unknown"
+
+                        toast.success(
+                            `SMS ${sum.deliveryStatus || "sent"} for #${ticket.queueNumber}` +
+                                (sum.providerNetwork ? ` • ${sum.providerNetwork}` : "") +
+                                (sum.providerMessageId ? ` • id ${sum.providerMessageId}` : ""),
+                        )
+
+                        // ✅ Reliability check: Globe / Smart confirmation
+                        if (sum.supportedNetwork !== true) {
+                            toast.message(
+                                `Network check: ${sum.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`,
+                            )
+                        }
+                    }
+                }
+
+                // ✅ Optional enhancement: advance notice SMS (toggleable)
+                if (!useAdvance) {
+                    nextLog.advance = { enabled: false, attempted: false }
+                    setLastSmsLog(nextLog)
+                    return true
+                }
+
+                // Find the next waiting ticket (fresh pull preferred)
+                let waitingList: TicketType[] = upNext
+                try {
+                    const waitingRes = await staffApi.listWaiting({ limit: 50 })
+                    waitingList = Array.isArray(waitingRes?.tickets) ? waitingRes.tickets : upNext
+                } catch {
+                    // fallback to current state
+                }
+
+                const nextTicket = pickNextWaitingTicket(Number(ticket.queueNumber), waitingList)
+
+                if (!nextTicket?._id) {
+                    nextLog.advance = {
+                        enabled: true,
+                        attempted: true,
+                        error: "No next waiting ticket found.",
+                    }
+                    setLastSmsLog(nextLog)
+                    toast.message("Advance notice: no next waiting ticket found.")
+                    return true
+                }
+
+                const nextMessage = buildAdvanceNoticeSmsMessage({
+                    departmentLabel: smsDepartmentLabel,
+                    queueNumber: Number(nextTicket.queueNumber),
+                })
+
+                nextLog.advance = {
+                    enabled: true,
+                    attempted: true,
+                    nextTicketId: String(nextTicket._id),
+                    nextQueueNumber: Number(nextTicket.queueNumber),
+                    message: nextMessage,
+                }
+
+                try {
+                    const res2 = await staffApi.sendTicketCalledSms(nextTicket._id, {
+                        message: nextMessage,
+                        ...(senderName ? { senderName } : {}),
+                        respectOptOut: true,
+                        supportedNetworkTokens: SMS_SUPPORTED_NETWORK_TOKENS,
+                        meta: {
+                            source: "staff-serving",
+                            kind: "advance_notice",
+                            relatedCurrentTicketId: String(ticket._id),
+                            relatedCurrentQueueNumber: Number(ticket.queueNumber),
+                            nextQueueNumber: Number(nextTicket.queueNumber),
+                        },
+                    })
+
+                    nextLog.advance.ok = Boolean(res2?.ok)
+                    nextLog.advance.apiResponse = res2
+                    nextLog.advance.reliabilitySummary = summarizeReliability(res2?.result)
+
+                    const sum2 = nextLog.advance.reliabilitySummary
+                    if (sum2?.statusLabel === "skipped") {
+                        toast.message(`Advance SMS skipped for next #${nextTicket.queueNumber} (opted out).`)
+                    } else if (sum2?.statusLabel === "failed") {
+                        toast.message(`Advance notice SMS failed for next #${nextTicket.queueNumber}.`)
+                    } else {
+                        const supportLabel =
+                            sum2?.supportedNetwork === true
+                                ? "supported"
+                                : sum2?.supportedNetwork === false
+                                  ? "unsupported"
+                                  : "unknown"
+
+                        toast.success(
+                            `Advance notice ${sum2?.deliveryStatus || "sent"} for next #${nextTicket.queueNumber}` +
+                                (sum2?.providerNetwork ? ` • ${sum2.providerNetwork}` : ""),
+                        )
+
+                        if (sum2?.supportedNetwork !== true) {
+                            toast.message(
+                                `Network check (advance): ${sum2?.providerNetwork || "Unknown"} is ${supportLabel}. Supported: Globe/Smart.`,
+                            )
+                        }
+                    }
+                } catch (e2: any) {
+                    nextLog.advance.error = String(e2?.message || "Advance notice failed")
+                    toast.message(`Advance notice failed: ${String(e2?.message || "Unknown error")}`)
+                }
+
+                setLastSmsLog(nextLog)
+                return true
+            } catch (e: any) {
+                nextLog.current.ok = false
+                nextLog.current.error = String(e?.message ?? "Failed to send SMS.")
+                setLastSmsLog(nextLog)
+                toast.error(nextLog.current.error)
+                return false
+            } finally {
+                setSmsBusy(false)
+            }
+        },
+        [smsDepartmentLabel, upNext, windowInfo?.number],
+    )
+
+    const onSendSmsFromDialog = React.useCallback(async () => {
+        if (!current?._id) {
+            toast.message("No active ticket selected for SMS.")
+            return
+        }
+
+        const custom = smsUseDefaultMessage ? "" : smsCustomMessage.trim()
+        if (!smsUseDefaultMessage && !custom) {
+            toast.error("Custom message is required.")
+            return
+        }
+
+        const ok = await sendCalledSms(current, {
+            message: custom || undefined,
+            senderName: smsSenderName.trim() || undefined,
+            toastOnSuccess: true,
+            advanceNotice: smsAdvanceNoticeEnabled,
+        })
+
+        if (!ok) return
+
+        setSmsDialogOpen(false)
+        setSmsUseDefaultMessage(true)
+        setSmsCustomMessage("")
+    }, [current, sendCalledSms, smsCustomMessage, smsSenderName, smsUseDefaultMessage, smsAdvanceNoticeEnabled])
+
     async function onCallNext() {
         if (!assignedOk) return toast.error("You are not assigned to a department/window.")
         setBusy(true)
@@ -742,7 +1019,11 @@ export default function StaffServingPage() {
             announceCall(res.ticket.queueNumber)
 
             if (autoSmsOnCall) {
-                await sendCalledSms(res.ticket, { toastOnSuccess: true })
+                await sendCalledSms(res.ticket, {
+                    senderName: smsSenderName.trim() || undefined,
+                    toastOnSuccess: true,
+                    advanceNotice: smsAdvanceNoticeEnabled,
+                })
             }
 
             await refresh()
@@ -986,6 +1267,18 @@ export default function StaffServingPage() {
         )
     }
 
+    const lastSmsCurrent = lastSmsLog?.current?.reliabilitySummary
+    const lastSmsBadgeText =
+        lastSmsLog && lastSmsCurrent
+            ? lastSmsCurrent.statusLabel === "failed"
+                ? "Last SMS: Failed"
+                : lastSmsCurrent.statusLabel === "skipped"
+                  ? "Last SMS: Skipped"
+                  : lastSmsCurrent.statusLabel === "sent"
+                    ? `Last SMS: ${lastSmsCurrent.deliveryStatus || "Sent"}`
+                    : "Last SMS: Logged"
+            : "Last SMS: —"
+
     return (
         <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
@@ -1053,10 +1346,10 @@ export default function StaffServingPage() {
                                         <DialogHeader>
                                             <DialogTitle>Send SMS notification</DialogTitle>
                                             <DialogDescription>
-                                                Notify the current ticket via Semaphore SMS.
-                                                {current
-                                                    ? ` Ticket #${current.queueNumber} • Student ID: ${current.studentId || "—"}`
-                                                    : " No active ticket selected."}
+                                                Sends a reliable Semaphore SMS via backend. Includes:
+                                                {" "}
+                                                <strong>network check (Globe/Smart)</strong> and optional{" "}
+                                                <strong>advance notice</strong> to the next queue number.
                                             </DialogDescription>
                                         </DialogHeader>
 
@@ -1068,6 +1361,17 @@ export default function StaffServingPage() {
                                                     value={smsSenderName}
                                                     onChange={(e) => setSmsSenderName(e.target.value)}
                                                     placeholder="e.g. QUEUE"
+                                                />
+                                            </div>
+
+                                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                                                <Label htmlFor="smsAdvanceNoticeToggleDialog" className="text-sm">
+                                                    Advance notice SMS (next queue)
+                                                </Label>
+                                                <Switch
+                                                    id="smsAdvanceNoticeToggleDialog"
+                                                    checked={smsAdvanceNoticeEnabled}
+                                                    onCheckedChange={(v) => setSmsAdvanceNoticeEnabled(Boolean(v))}
                                                 />
                                             </div>
 
@@ -1085,7 +1389,11 @@ export default function StaffServingPage() {
                                             {smsUseDefaultMessage ? (
                                                 <div className="rounded-md border bg-muted p-3 text-sm text-muted-foreground">
                                                     {current
-                                                        ? defaultSmsCalledMessage(current.queueNumber, windowInfo?.number)
+                                                        ? buildCalledSmsMessage({
+                                                            departmentLabel: smsDepartmentLabel,
+                                                            queueNumber: current.queueNumber,
+                                                            windowNumber: windowInfo?.number,
+                                                        })
                                                         : "Queue update message preview will appear when an active ticket is selected."}
                                                 </div>
                                             ) : (
@@ -1100,6 +1408,16 @@ export default function StaffServingPage() {
                                                     />
                                                 </div>
                                             )}
+
+                                            <div className="rounded-md border p-3 text-xs text-muted-foreground">
+                                                Reliability checks enabled:
+                                                {" "}
+                                                <strong>Supported networks:</strong> Globe / Smart •
+                                                {" "}
+                                                <strong>Status:</strong> queued/sent/failed •
+                                                {" "}
+                                                <strong>Provider response:</strong> logged to SMS Log.
+                                            </div>
                                         </div>
 
                                         <DialogFooter>
@@ -1123,6 +1441,63 @@ export default function StaffServingPage() {
                                         </DialogFooter>
                                     </DialogContent>
                                 </Dialog>
+
+                                <Dialog open={smsLogDialogOpen} onOpenChange={setSmsLogDialogOpen}>
+                                    <DialogTrigger asChild>
+                                        <Button
+                                            variant="outline"
+                                            disabled={!lastSmsLog}
+                                            className="w-full gap-2 sm:w-auto"
+                                        >
+                                            <MessageSquare className="h-4 w-4" />
+                                            SMS Log
+                                        </Button>
+                                    </DialogTrigger>
+                                    <DialogContent className="sm:max-w-170">
+                                        <DialogHeader>
+                                            <DialogTitle>SMS Log (Reliability + Provider Response)</DialogTitle>
+                                            <DialogDescription>
+                                                Last send attempt details for auditing and troubleshooting.
+                                            </DialogDescription>
+                                        </DialogHeader>
+
+                                        {!lastSmsLog ? (
+                                            <div className="rounded-md border p-4 text-sm text-muted-foreground">
+                                                No SMS logs yet.
+                                            </div>
+                                        ) : (
+                                            <div className="grid gap-3">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <Badge variant="secondary">At: {fmtTime(lastSmsLog.at)}</Badge>
+                                                    <Badge variant="secondary">
+                                                        Current: #{lastSmsLog.current.queueNumber}
+                                                    </Badge>
+                                                    <Badge variant="secondary">
+                                                        Advance: {lastSmsLog.advance?.enabled ? "Enabled" : "Disabled"}
+                                                    </Badge>
+                                                    <Badge variant="secondary">
+                                                        Networks: {SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}
+                                                    </Badge>
+                                                </div>
+
+                                                <div className="grid gap-2">
+                                                    <Label>Raw provider response (JSON)</Label>
+                                                    <Textarea
+                                                        value={safeJson(lastSmsLog)}
+                                                        readOnly
+                                                        className="min-h-80 font-mono text-xs"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <DialogFooter>
+                                            <Button type="button" onClick={() => setSmsLogDialogOpen(false)}>
+                                                Close
+                                            </Button>
+                                        </DialogFooter>
+                                    </DialogContent>
+                                </Dialog>
                             </div>
                         </div>
 
@@ -1140,9 +1515,7 @@ export default function StaffServingPage() {
                                 <Badge variant="secondary">
                                     Managed windows: {snapshot?.board?.windows?.length ?? 0}
                                 </Badge>
-                                <Badge variant="secondary">
-                                    SMS: {smsBusy ? "Sending..." : autoSmsOnCall ? "Auto on call" : "Manual"}
-                                </Badge>
+                                <Badge variant="secondary">{lastSmsBadgeText}</Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
@@ -1181,6 +1554,18 @@ export default function StaffServingPage() {
                                     />
                                     <Label htmlFor="autoSmsOnCall" className="text-sm">
                                         Auto SMS on call
+                                    </Label>
+                                </div>
+
+                                <div className="flex items-center gap-2 rounded-md border px-3 py-2">
+                                    <Switch
+                                        id="smsAdvanceNoticeToggle"
+                                        checked={smsAdvanceNoticeEnabled}
+                                        onCheckedChange={(v) => setSmsAdvanceNoticeEnabled(Boolean(v))}
+                                        disabled={busy || smsBusy || !assignedOk}
+                                    />
+                                    <Label htmlFor="smsAdvanceNoticeToggle" className="text-sm">
+                                        Advance notice SMS
                                     </Label>
                                 </div>
                             </div>
@@ -1318,7 +1703,11 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                SMS engine: Semaphore via backend • {autoSmsOnCall ? "Auto send is enabled when calling next." : "Manual send mode is enabled."}
+                                SMS engine: Semaphore via backend •
+                                {" "}
+                                <strong>Reliability:</strong> network check ({SMS_SUPPORTED_NETWORK_TOKENS.join(" / ")}) + status + provider response log •
+                                {" "}
+                                <strong>Advance notice:</strong> {smsAdvanceNoticeEnabled ? "Enabled" : "Disabled"}
                             </div>
                         </div>
                     </CardHeader>
