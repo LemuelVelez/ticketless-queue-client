@@ -4,6 +4,19 @@ import { api } from "@/lib/http"
 export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
 export type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 
+export type TicketGuidanceDetails = {
+    whereToGo: string
+    participantTypeLabel: string
+    departmentName?: string | null
+    departmentCode?: string | null
+    transactionManager?: string | null
+    windowNumber?: number | null
+    windowName?: string | null
+    staffName?: string | null
+    servedDepartments: string[]
+    transactionLabels: string[]
+}
+
 export type ServiceWindow = {
     _id: string
     id?: string
@@ -35,6 +48,12 @@ export type Ticket = {
      * ✅ Full name (Student / Alumni-Visitor / Guest)
      */
     participantFullName?: string | null
+
+    /**
+     * ✅ Optional richer helpers returned by backend enrichers
+     */
+    guidance?: TicketGuidanceDetails | null
+    voiceAnnouncement?: string | null
 
     /**
      * Queue purpose / transaction context.
@@ -130,6 +149,14 @@ export type DepartmentAssignment = {
     enabled?: boolean
 }
 
+export type WindowAssignmentsResponse = {
+    /**
+     * Map: windowNumber -> department codes (strings).
+     * JSON object keys will be strings when returned by Express.
+     */
+    assignments: Record<string, string[]>
+}
+
 export type MyAssignmentResponse = {
     departmentId: string | null
     departmentName?: string | null
@@ -164,6 +191,10 @@ export type StaffDisplayNowServing = {
     participantType: TicketParticipantType | string | null
     participantTypeLabel: string | null
 
+    // ✅ guidance/voice (added by staffController enrichTickets)
+    guidance?: TicketGuidanceDetails | null
+    voiceAnnouncement?: string | null
+
     calledAt: string | null
 }
 
@@ -179,6 +210,9 @@ export type StaffDisplayUpNextItem = {
     participantLabel: string | null
     participantType: TicketParticipantType | string | null
     participantTypeLabel: string | null
+
+    // ✅ guidance (added by staffController enrichTickets)
+    guidance?: TicketGuidanceDetails | null
 }
 
 export type StaffDisplayBoardWindow = {
@@ -203,6 +237,10 @@ export type StaffDisplayBoardWindow = {
         participantLabel: string | null
         participantType: TicketParticipantType | string | null
         participantTypeLabel: string | null
+
+        // ✅ guidance/voice
+        guidance?: TicketGuidanceDetails | null
+        voiceAnnouncement?: string | null
 
         calledAt: string | null
     } | null
@@ -657,6 +695,10 @@ const STAFF_AUTH_NO_THROW = { auth: "staff" as const, throwOnError: false as con
 export const staffApi = {
     myAssignment: () =>
         api.getData<MyAssignmentResponse>("/staff/me/assignment", STAFF_AUTH).then((res) => normalizeMyAssignmentPayload(res)),
+
+    // ✅ Department-to-window assignment map
+    getWindowAssignments: () =>
+        api.getData<WindowAssignmentsResponse>("/staff/queue/window-assignments", STAFF_AUTH),
 
     // ✅ Dedicated backend snapshot for staff presentation/monitor pages
     getDisplaySnapshot: () =>

@@ -144,9 +144,23 @@ function joinUrl(base: string, path: string) {
     return `${b}${p}`
 }
 
+function isAbsoluteUrl(input: string) {
+    const s = String(input ?? "").trim()
+    return /^https?:\/\//i.test(s) || s.startsWith("//")
+}
+
 function buildUrl(path: string) {
+    const raw = String(path ?? "").trim()
+    if (!raw) return ""
+
+    // ✅ Allow passing a fully-qualified URL (useful for presigned/absolute endpoints).
+    if (isAbsoluteUrl(raw)) {
+        // Normalize protocol-relative urls (//host/path) into https? based on current protocol.
+        return raw.startsWith("//") ? normalizeApiBaseUrl(raw) : raw
+    }
+
     const base = normalizeApiBaseUrl(getApiBaseUrl())
-    const cleanPath = path.startsWith("/") ? path : `/${path}`
+    const cleanPath = raw.startsWith("/") ? raw : `/${raw}`
     return joinUrl(base, cleanPath)
 }
 
