@@ -634,6 +634,12 @@ export type StaffSmsResponse = {
     outcome?: "sent" | "skipped" | "failed" | "unknown"
     reason?: string
 
+    /**
+     * ✅ Compatibility: some backends return `message` instead of (or alongside) `reason/error`.
+     * Keeping it optional prevents TS errors in UI code that reads `res.message`.
+     */
+    message?: string
+
     // present on raw send (legacy helper behavior)
     number?: string
 
