@@ -7,7 +7,7 @@ import { Lock } from "lucide-react"
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { guestApi } from "@/api/guest"
+import { guestApi, participantAuthStorage } from "@/api/guest"
 import { studentApi, type Department, type ParticipantTransaction, type Ticket } from "@/api/student"
 
 import { Button } from "@/components/ui/button"
@@ -316,8 +316,12 @@ export default function AlumniJoinPage() {
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
 
+    // 🔒 lock department immediately from storage (prevents URL tampering + “editable flicker”)
+    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
+    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
+
     const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
-    const [departmentId, setDepartmentId] = React.useState<string>("")
+    const [departmentId, setDepartmentId] = React.useState<string>(initialLockedDept || "")
     const [didManuallySelectDepartment, setDidManuallySelectDepartment] = React.useState(false)
 
     const [participantId, setParticipantId] = React.useState<string>(preParticipantId)
@@ -335,7 +339,9 @@ export default function AlumniJoinPage() {
     const [checkingActive, setCheckingActive] = React.useState(false)
 
     const isSessionFlow = Boolean(participant)
-    const isDepartmentLocked = Boolean(isSessionFlow && sessionDepartmentId)
+
+    // ✅ lock applies to ANY registered participant type (student/alumni/guest) as long as the session/storage has a department
+    const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
@@ -419,6 +425,15 @@ export default function AlumniJoinPage() {
                 setAvailableTransactions(tx)
                 setSelectedTransactions((prev) => mapSelectionToAvailableKeys(prev, tx))
 
+                if (!p) {
+                    if (!silent) {
+                        setSessionDepartmentId("")
+                        setLockedDepartmentId("")
+                        participantAuthStorage.clearDepartmentId()
+                    }
+                    return
+                }
+
                 const pid = readParticipantIdFromObject(p)
                 const mobile = readPhoneFromObject(p)
                 const dept = pickNonEmptyString(p?.departmentId)
@@ -426,14 +441,14 @@ export default function AlumniJoinPage() {
                 if (pid) setParticipantId((prev) => prev || pid)
                 if (mobile) setPhone((prev) => prev || mobile)
 
-                // 🔒 lock department if profile has departmentId
+                // 🔒 lock department if profile has departmentId (student/alumni/guest)
                 if (dept) {
                     setSessionDepartmentId(dept)
+                    setLockedDepartmentId(dept)
+                    participantAuthStorage.setDepartmentId(dept)
+
                     setDepartmentId(dept)
                     setDidManuallySelectDepartment(false)
-                } else if (!opts?.preserveDepartment && dept) {
-                    setSessionDepartmentId(dept)
-                    setDepartmentId((prev) => prev || dept)
                 }
             } catch {
                 if (!silent) {
@@ -441,6 +456,8 @@ export default function AlumniJoinPage() {
                     setAvailableTransactions([])
                     setSelectedTransactions([])
                     setSessionDepartmentId("")
+                    setLockedDepartmentId("")
+                    participantAuthStorage.clearDepartmentId()
                 }
             } finally {
                 if (!silent) setLoadingSession(false)
@@ -461,6 +478,7 @@ export default function AlumniJoinPage() {
             const deptIdFromTicket =
                 typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
 
+            // ✅ never allow ticket query to override locked department
             if (deptIdFromTicket && !isDepartmentLocked) {
                 setDidManuallySelectDepartment(true)
                 setDepartmentId(deptIdFromTicket)
@@ -530,8 +548,8 @@ export default function AlumniJoinPage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-            // 🔒 locked wins
-            if (isDepartmentLocked && has(sessionDepartmentId)) return sessionDepartmentId
+            // 🔒 locked wins (ignore query param & manual changes)
+            if (isDepartmentLocked && has(lockedDepartmentId)) return lockedDepartmentId
 
             // preDeptId is allowed only if not locked
             if (has(preDeptId)) return preDeptId
@@ -541,7 +559,7 @@ export default function AlumniJoinPage() {
             if (has(prev)) return prev
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId, didManuallySelectDepartment, isDepartmentLocked])
+    }, [departments, preDeptId, sessionDepartmentId, didManuallySelectDepartment, isDepartmentLocked, lockedDepartmentId])
 
     React.useEffect(() => {
         void loadTicketById()

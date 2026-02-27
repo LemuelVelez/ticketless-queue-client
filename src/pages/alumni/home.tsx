@@ -29,7 +29,7 @@ import {
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { guestApi } from "@/api/guest"
+import { guestApi, participantAuthStorage } from "@/api/guest"
 import { studentApi, type Department, type Ticket as TicketType } from "@/api/student"
 import { api } from "@/lib/http"
 
@@ -180,8 +180,13 @@ export default function AlumniHomePage() {
     const [loadingTicket, setLoadingTicket] = React.useState(false)
 
     const [departments, setDepartments] = React.useState<Department[]>([])
+
+    // 🔒 lock department immediately from storage (prevents URL tampering + “editable flicker”)
+    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
+    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
+
     const [sessionDepartmentId, setSessionDepartmentId] = React.useState("")
-    const [departmentId, setDepartmentId] = React.useState("")
+    const [departmentId, setDepartmentId] = React.useState(initialLockedDept || "")
     const [referenceId, setReferenceId] = React.useState(preReferenceId)
 
     const debouncedReferenceId = useDebouncedValue(referenceId, 600)
@@ -199,7 +204,8 @@ export default function AlumniHomePage() {
         [departments, departmentId],
     )
 
-    const isDepartmentLocked = Boolean(sessionDepartmentId && participant)
+    // ✅ lock applies to ANY registered participant type (student/alumni/guest) as long as the session/storage has a department
+    const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const sessionDisplayName = React.useMemo(() => {
         if (!participant) return ""
@@ -245,22 +251,38 @@ export default function AlumniHomePage() {
 
             setParticipant(p)
 
+            if (!p) {
+                // no session -> unlock and clear stored lock
+                setSessionDepartmentId("")
+                setLockedDepartmentId("")
+                participantAuthStorage.clearDepartmentId()
+                return
+            }
+
             const rid =
                 pickNonEmptyString(p?.tcNumber) ||
                 pickNonEmptyString(p?.studentId) ||
                 pickNonEmptyString(p?.mobileNumber) ||
                 pickNonEmptyString(p?.phone)
+
             const dept = pickNonEmptyString(p?.departmentId)
 
             if (rid) {
                 setReferenceId((prev) => prev || rid)
             }
+
             if (dept) {
                 setSessionDepartmentId(dept)
+                setLockedDepartmentId(dept)
+                participantAuthStorage.setDepartmentId(dept)
+                setDepartmentId(dept)
             }
         } catch {
             // Guest mode is valid here.
             setParticipant(null)
+            setSessionDepartmentId("")
+            setLockedDepartmentId("")
+            participantAuthStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
@@ -348,8 +370,8 @@ export default function AlumniHomePage() {
         setDepartmentId((prev) => {
             const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-            // 🔒 if registered/profile has department -> lock it (ignore query param)
-            if (isDepartmentLocked && has(sessionDepartmentId)) return sessionDepartmentId
+            // 🔒 locked wins (ignore query param & manual changes)
+            if (isDepartmentLocked && has(lockedDepartmentId)) return lockedDepartmentId
 
             // 1) explicit query param (only when not locked)
             if (has(preDeptId)) return preDeptId
@@ -363,7 +385,7 @@ export default function AlumniHomePage() {
             // 4) fallback first
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId, isDepartmentLocked])
+    }, [departments, preDeptId, sessionDepartmentId, isDepartmentLocked, lockedDepartmentId])
 
     React.useEffect(() => {
         void loadDepartmentDisplay()
