@@ -487,6 +487,43 @@ function summarizeReliability(result: any): {
     }
 }
 
+/**
+ * ✅ Updated API alignment:
+ * Prefer the centralized, pollable queue state endpoint:
+ *   GET /staff/queue/state-full
+ * It may return data at root OR inside { state: ... }.
+ */
+function isTicketLikeLocal(value: any): value is TicketType {
+    if (!value || typeof value !== "object") return false
+    const id = value?._id ?? value?.id
+    const hasId = typeof id === "string" || (id && typeof id === "object")
+    const hasQueueNumber = typeof value?.queueNumber === "number" || typeof value?.queueNumber === "string"
+    const hasStatus = typeof value?.status === "string"
+    return Boolean(hasId && hasQueueNumber && hasStatus)
+}
+
+function normalizeTicketArrayLocal(value: any): TicketType[] {
+    if (!Array.isArray(value)) return []
+    return value.filter((x) => isTicketLikeLocal(x)).map((x) => x as TicketType)
+}
+
+function extractQueueStateTickets(payload: any): { current: TicketType | null; upNext: TicketType[]; hold: TicketType[] } {
+    const root = payload && typeof payload === "object" ? payload : {}
+    const state = root?.state && typeof root.state === "object" ? root.state : root
+
+    const currentRaw = state?.nowServing ?? state?.current ?? null
+    const current = isTicketLikeLocal(currentRaw) ? (currentRaw as TicketType) : null
+
+    const upNextRaw = Array.isArray(state?.upNext) ? state.upNext : Array.isArray(state?.waiting) ? state.waiting : []
+    const holdRaw = Array.isArray(state?.hold) ? state.hold : []
+
+    return {
+        current,
+        upNext: normalizeTicketArrayLocal(upNextRaw),
+        hold: normalizeTicketArrayLocal(holdRaw),
+    }
+}
+
 type SmsLog = {
     at: string
     current: {
@@ -881,17 +918,12 @@ export default function StaffServingPage() {
                 setAssignedDepartments(normalizedAssigned)
                 setHandledDepartments(normalizedHandled.length ? normalizedHandled : normalizedAssigned)
 
-                const [snapshotResult, currentResult, waitingResult, holdResult] = await Promise.all([
+                const assignedReady = Boolean(a.departmentId && a.window?._id)
+
+                // ✅ Updated: prefer centralized queue state for current/upNext/hold
+                const [snapshotResult, queueStateResult] = await Promise.all([
                     staffApi.getDisplaySnapshot().catch(() => null),
-                    a.departmentId && a.window?._id
-                        ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null }))
-                        : Promise.resolve({ ticket: null }),
-                    a.departmentId && a.window?._id
-                        ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] }))
-                        : Promise.resolve({ tickets: [] }),
-                    a.departmentId && a.window?._id
-                        ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] }))
-                        : Promise.resolve({ tickets: [] }),
+                    assignedReady ? staffApi.getQueueState().catch(() => null) : Promise.resolve(null),
                 ])
 
                 const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
@@ -903,19 +935,54 @@ export default function StaffServingPage() {
                 }
 
                 setSnapshot(snapshotResult ?? null)
-                setCurrent(currentResult.ticket ?? null)
 
-                // Prefer explicit queue list for operator mode, but fallback to snapshot upNext if needed.
-                const explicit = waitingResult.tickets ?? []
-                if (explicit.length) {
-                    setUpNext(explicit)
+                // ✅ Extract current/upNext/hold from the centralized state response
+                const extracted = queueStateResult ? extractQueueStateTickets(queueStateResult) : null
+
+                // Fallbacks for older backends or partial payloads
+                let currentTicket: TicketType | null = extracted?.current ?? null
+                let upNextTickets: TicketType[] = extracted?.upNext ?? []
+                let holdList: TicketType[] = extracted?.hold ?? []
+
+                if (assignedReady && !currentTicket) {
+                    try {
+                        const legacyCurrent = await staffApi.currentCalledForWindow()
+                        currentTicket = legacyCurrent.ticket ?? null
+                    } catch {
+                        // ignore
+                    }
+                }
+
+                if (assignedReady && upNextTickets.length === 0) {
+                    try {
+                        const waitingRes = await staffApi.listWaiting({ limit: 16 })
+                        upNextTickets = Array.isArray(waitingRes?.tickets) ? waitingRes.tickets : []
+                    } catch {
+                        // ignore
+                    }
+                }
+
+                if (assignedReady && holdList.length === 0) {
+                    try {
+                        const holdRes = await staffApi.listHold({ limit: 16 })
+                        holdList = Array.isArray(holdRes?.tickets) ? holdRes.tickets : []
+                    } catch {
+                        // ignore
+                    }
+                }
+
+                setCurrent(currentTicket)
+
+                // If we still have no waiting list, use snapshot upNext (board shape) as last resort.
+                if (upNextTickets.length) {
+                    setUpNext(upNextTickets)
                 } else if (snapshotResult?.upNext?.length) {
                     setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
                 } else {
                     setUpNext([])
                 }
 
-                setHoldTickets(holdResult.tickets ?? [])
+                setHoldTickets(holdList)
 
                 const tickTs =
                     typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
@@ -934,13 +1001,13 @@ export default function StaffServingPage() {
                             a.handledDepartments?.length ? a.handledDepartments : a.assignedDepartments
                         ),
                         snapshot: snapshotResult ?? null,
-                        current: (currentResult.ticket ?? null) as any,
-                        upNext: (explicit.length
-                            ? explicit
+                        current: (currentTicket ?? null) as any,
+                        upNext: (upNextTickets.length
+                            ? upNextTickets
                             : snapshotResult?.upNext?.length
                               ? snapshotResult.upNext.map(mapBoardWindowToTicketLike)
                               : []) as any,
-                        holdTickets: (holdResult.tickets ?? []) as any,
+                        holdTickets: (holdList ?? []) as any,
                     }
                     broadcastServingState(payload)
                 }
@@ -1242,12 +1309,20 @@ export default function StaffServingPage() {
                     return true
                 }
 
+                // ✅ Updated API alignment: prefer centralized queue state for the waiting list (then fallback)
                 let waitingList: TicketType[] = upNext
                 try {
-                    const waitingRes = await staffApi.listWaiting({ limit: 50 })
-                    waitingList = Array.isArray(waitingRes?.tickets) ? waitingRes.tickets : upNext
+                    const qs = await staffApi.getQueueState()
+                    const extracted = extractQueueStateTickets(qs)
+                    waitingList = extracted.upNext.length ? extracted.upNext : waitingList
                 } catch {
-                    // fallback to current state
+                    // fallback to legacy list
+                    try {
+                        const waitingRes = await staffApi.listWaiting({ limit: 50 })
+                        waitingList = Array.isArray(waitingRes?.tickets) ? waitingRes.tickets : waitingList
+                    } catch {
+                        // ignore
+                    }
                 }
 
                 const nextTicket = pickNextWaitingTicket(Number(ticket.queueNumber), waitingList)
@@ -1470,7 +1545,9 @@ export default function StaffServingPage() {
                                 <Badge variant={autoRefresh ? "default" : "secondary"}>
                                     Auto-refresh: {autoRefresh ? `ON (${(POLL_MS / 1000).toFixed(1)}s)` : "OFF"}
                                 </Badge>
-                                {lastSyncedAtIso ? <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge> : null}
+                                {lastSyncedAtIso ? (
+                                    <Badge variant="secondary">Last sync: {shortTime(lastSyncedAtIso)}</Badge>
+                                ) : null}
                                 {stateLoading ? <Badge variant="secondary">Syncing…</Badge> : null}
                                 {autoRefresh ? (
                                     <Badge variant={isServingLeader ? "default" : "secondary"}>
@@ -1480,7 +1557,9 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="mt-2">
-                                <div className="text-xs uppercase tracking-widest text-muted-foreground">Assigned departments</div>
+                                <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                                    Assigned departments
+                                </div>
                                 {assignedDepartmentItems.length ? (
                                     <div className="mt-1 flex flex-wrap gap-2">
                                         {assignedDepartmentItems.map((dep) => (
@@ -1603,7 +1682,8 @@ export default function StaffServingPage() {
                                 const previewUpNext = getTwoNumberSlice(globalUpNextNumbers, idx)
                                 const previewHold = getTwoNumberSlice(globalHoldNumbers, idx)
 
-                                const currentForThisWindow = current && (current as any).windowNumber === row.number ? current : null
+                                const currentForThisWindow =
+                                    current && (current as any).windowNumber === row.number ? current : null
 
                                 const nowServingName = getStudentFullName(row.nowServing as any)
                                 const nowServingSid = getStudentId(row.nowServing as any)
@@ -1613,7 +1693,11 @@ export default function StaffServingPage() {
                                 const participantLabel =
                                     nowServingName ||
                                     currentName ||
-                                    (nowServingSid ? `ID/Phone: ${nowServingSid}` : currentSid ? `ID/Phone: ${currentSid}` : "")
+                                    (nowServingSid
+                                        ? `ID/Phone: ${nowServingSid}`
+                                        : currentSid
+                                          ? `ID/Phone: ${currentSid}`
+                                          : "")
 
                                 return (
                                     <Card key={row.id || `window-${idx}`} className="min-h-95">
@@ -1640,7 +1724,9 @@ export default function StaffServingPage() {
                                                         <div className="font-medium">up next:</div>
                                                         <div className="mt-1 leading-6">
                                                             {previewUpNext.length ? (
-                                                                previewUpNext.map((n) => <div key={`up-${row.id}-${n}`}>#{n}</div>)
+                                                                previewUpNext.map((n) => (
+                                                                    <div key={`up-${row.id}-${n}`}>#{n}</div>
+                                                                ))
                                                             ) : (
                                                                 <div>—</div>
                                                             )}
@@ -1651,7 +1737,9 @@ export default function StaffServingPage() {
                                                         <div className="font-medium">on hold:</div>
                                                         <div className="mt-1 leading-6">
                                                             {previewHold.length ? (
-                                                                previewHold.map((n) => <div key={`hold-${row.id}-${n}`}>#{n}</div>)
+                                                                previewHold.map((n) => (
+                                                                    <div key={`hold-${row.id}-${n}`}>#{n}</div>
+                                                                ))
                                                             ) : (
                                                                 <div>—</div>
                                                             )}
@@ -1660,7 +1748,9 @@ export default function StaffServingPage() {
                                                 </div>
 
                                                 <div className="mt-5 text-center text-xs text-muted-foreground">
-                                                    {row.nowServing ? `Called at ${fmtTime(row.nowServing.calledAt)}` : "No active called ticket"}
+                                                    {row.nowServing
+                                                        ? `Called at ${fmtTime(row.nowServing.calledAt)}`
+                                                        : "No active called ticket"}
                                                 </div>
                                             </div>
                                         </CardContent>
@@ -1851,7 +1941,12 @@ export default function StaffServingPage() {
                                         </div>
 
                                         <DialogFooter>
-                                            <Button type="button" variant="outline" onClick={() => setSmsDialogOpen(false)} disabled={smsBusy}>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                onClick={() => setSmsDialogOpen(false)}
+                                                disabled={smsBusy}
+                                            >
                                                 Cancel
                                             </Button>
                                             <Button

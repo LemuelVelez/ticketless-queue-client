@@ -447,10 +447,7 @@ function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnaps
         nowServing: res.nowServing
             ? {
                   ...res.nowServing,
-                  participantFullName: normalizeName(
-                      res.nowServing.participantFullName,
-                      res.nowServing.participantLabel
-                  ),
+                  participantFullName: normalizeName(res.nowServing.participantFullName, res.nowServing.participantLabel),
               }
             : null,
         upNext: Array.isArray(res.upNext)
@@ -467,10 +464,7 @@ function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnaps
                       nowServing: w.nowServing
                           ? {
                                 ...w.nowServing,
-                                participantFullName: normalizeName(
-                                    w.nowServing.participantFullName,
-                                    w.nowServing.participantLabel
-                                ),
+                                participantFullName: normalizeName(w.nowServing.participantFullName, w.nowServing.participantLabel),
                             }
                           : null,
                   }))
@@ -651,50 +645,36 @@ export type StaffSmsResponse = {
 }
 
 const STAFF_AUTH = { auth: "staff" as const }
+// ✅ For SMS + provider-style endpoints, never throw on non-2xx (let UI render `{ ok:false, ... }`)
+const STAFF_AUTH_NO_THROW = { auth: "staff" as const, throwOnError: false as const }
 
 export const staffApi = {
     myAssignment: () =>
-        api
-            .getData<MyAssignmentResponse>("/staff/me/assignment", STAFF_AUTH)
-            .then((res) => normalizeMyAssignmentPayload(res)),
+        api.getData<MyAssignmentResponse>("/staff/me/assignment", STAFF_AUTH).then((res) => normalizeMyAssignmentPayload(res)),
 
     // ✅ Dedicated backend snapshot for staff presentation/monitor pages
     getDisplaySnapshot: () =>
-        api
-            .getData<StaffDisplaySnapshotResponse>("/staff/display/snapshot-full", STAFF_AUTH)
-            .then((res) => normalizeSnapshot(res)),
+        api.getData<StaffDisplaySnapshotResponse>("/staff/display/snapshot-full", STAFF_AUTH).then((res) => normalizeSnapshot(res)),
 
     listWaiting: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(
-                `/staff/queue/waiting-full${toQuery(opts as any)}`,
-                STAFF_AUTH
-            )
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/waiting-full${toQuery(opts as any)}`, STAFF_AUTH)
             .then((res) => normalizeTicketsResponse(res)),
 
     listHold: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(
-                `/staff/queue/hold-full${toQuery(opts as any)}`,
-                STAFF_AUTH
-            )
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/hold-full${toQuery(opts as any)}`, STAFF_AUTH)
             .then((res) => normalizeTicketsResponse(res)),
 
     listOut: (opts?: { limit?: number }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(
-                `/staff/queue/out-full${toQuery(opts as any)}`,
-                STAFF_AUTH
-            )
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/out-full${toQuery(opts as any)}`, STAFF_AUTH)
             .then((res) => normalizeTicketsResponse(res)),
 
     // ✅ mine=true => only tickets for this staff's assigned window
     listHistory: (opts?: { limit?: number; mine?: boolean }) =>
         api
-            .getData<ListTicketsResponse & { context?: any }>(
-                `/staff/queue/history-full${toQuery(opts as any)}`,
-                STAFF_AUTH
-            )
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/history-full${toQuery(opts as any)}`, STAFF_AUTH)
             .then((res) => normalizeTicketsResponse(res)),
 
     /**
@@ -702,30 +682,24 @@ export const staffApi = {
      * One unified queue state shared across all staff/windows (single DB truth).
      */
     getQueueState: () =>
-        api
-            .getData<StaffQueueStateResponse>("/staff/queue/state-full", STAFF_AUTH)
-            .then((res) => normalizeQueueStatePayload(res)),
+        api.getData<StaffQueueStateResponse>("/staff/queue/state-full", STAFF_AUTH).then((res) => normalizeQueueStatePayload(res)),
 
     /**
      * ✅ Primary "Next Queue" action (centralized, race-safe)
      * Route: POST /staff/queue/call-next-central
      */
     callNext: () =>
-        api
-            .postData<TicketResponse>("/staff/queue/call-next-central", undefined, STAFF_AUTH)
-            .then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>("/staff/queue/call-next-central", {}, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     /**
      * Legacy "Next Queue" (window-based)
      * Route: POST /staff/queue/call-next
      */
     callNextLegacy: () =>
-        api.postData<TicketResponse>("/staff/queue/call-next", undefined, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>("/staff/queue/call-next", {}, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     currentCalledForWindow: () =>
-        api
-            .getData<CurrentCalledResponse>("/staff/queue/current-called-full", STAFF_AUTH)
-            .then((res) => normalizeCurrentCalledResponse(res)),
+        api.getData<CurrentCalledResponse>("/staff/queue/current-called-full", STAFF_AUTH).then((res) => normalizeCurrentCalledResponse(res)),
 
     /**
      * ✅ Centralized queue operations
@@ -737,64 +711,46 @@ export const staffApi = {
      * Payload: { ticketId } (we also include { id } for extra backend compatibility)
      */
     markServed: (ticketId: string) =>
-        api
-            .postData<TicketResponse>("/staff/queue/serve", { ticketId, id: ticketId }, STAFF_AUTH)
-            .then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>("/staff/queue/serve", { ticketId, id: ticketId }, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     holdNoShow: (ticketId: string) =>
-        api
-            .postData<TicketResponse>("/staff/queue/hold", { ticketId, id: ticketId }, STAFF_AUTH)
-            .then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>("/staff/queue/hold", { ticketId, id: ticketId }, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     markOut: (ticketId: string) =>
-        api
-            .postData<TicketResponse>("/staff/queue/out", { ticketId, id: ticketId }, STAFF_AUTH)
-            .then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>("/staff/queue/out", { ticketId, id: ticketId }, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     /**
      * Legacy ticket operations (kept for backwards compatibility)
      */
     markServedLegacy: (ticketId: string) =>
         api
-            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/served`, undefined, STAFF_AUTH)
+            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/served`, {}, STAFF_AUTH)
             .then((res) => normalizeTicketResponse(res)),
 
     holdNoShowLegacy: (ticketId: string) =>
         api
-            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/hold`, undefined, STAFF_AUTH)
+            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/hold`, {}, STAFF_AUTH)
             .then((res) => normalizeTicketResponse(res)),
 
     returnFromHold: (ticketId: string) =>
         api
-            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/return`, undefined, STAFF_AUTH)
+            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/return`, {}, STAFF_AUTH)
             .then((res) => normalizeTicketResponse(res)),
 
-    // ✅ SMS endpoints
-    sendSms: (payload: StaffSendSmsRequest) => api.postData<StaffSmsResponse>("/staff/sms/send", payload, STAFF_AUTH),
+    // ✅ SMS endpoints (never throw on provider failures)
+    sendSms: (payload: StaffSendSmsRequest) => api.postData<StaffSmsResponse>("/staff/sms/send", payload, STAFF_AUTH_NO_THROW),
 
     // Legacy alias: sends CALLED status (or custom message if provided)
     sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketSmsBaseRequest) =>
-        api.postData<StaffSmsResponse>(
-            `/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`,
-            payload ?? {},
-            STAFF_AUTH
-        ),
+        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}, STAFF_AUTH_NO_THROW),
 
     // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED) + optional custom message override
     sendTicketStatusSms: (ticketId: string, payload: StaffSendTicketStatusSmsRequest) =>
-        api.postData<StaffSmsResponse>(
-            `/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`,
-            payload,
-            STAFF_AUTH
-        ),
+        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload, STAFF_AUTH_NO_THROW),
 
     // ✅ Best DX: unified alias (status OR custom message, defaults to CALLED if none)
     sendTicketSms: (ticketId: string, payload?: StaffSendTicketSmsRequest) =>
-        api.postData<StaffSmsResponse>(
-            `/staff/tickets/${encodeURIComponent(ticketId)}/sms`,
-            payload ?? {},
-            STAFF_AUTH
-        ),
+        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms`, payload ?? {}, STAFF_AUTH_NO_THROW),
 
     // ✅ Staff reports (scoped to assigned department on backend)
     getReportsSummary: (opts?: { from?: string; to?: string }) =>

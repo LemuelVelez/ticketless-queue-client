@@ -161,6 +161,14 @@ function getHeaderValue(headers: Record<string, string>, key: string) {
     return found ? found[1] : undefined
 }
 
+function hasSessionTokenHeader(headers: Record<string, string>) {
+    return hasHeader(headers, "X-Session-Token") || hasHeader(headers, "X-SessionToken")
+}
+
+function getSessionTokenHeaderValue(headers: Record<string, string>) {
+    return getHeaderValue(headers, "X-Session-Token") || getHeaderValue(headers, "X-SessionToken")
+}
+
 function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
     const mode: RequestAuthMode = auth === undefined ? "auto" : auth
 
@@ -176,7 +184,7 @@ function ensureSessionTokenHeader(headers: Record<string, string>) {
     // ✅ Max compatibility across deployments:
     // If we have Authorization: Bearer <token> but no X-Session-Token,
     // add it so public/participant endpoints still work when proxies strip Authorization.
-    if (hasHeader(headers, "X-Session-Token")) return
+    if (hasSessionTokenHeader(headers)) return
 
     const auth = getHeaderValue(headers, "Authorization")
     if (!auth) return
@@ -186,7 +194,9 @@ function ensureSessionTokenHeader(headers: Record<string, string>) {
     const token = s.slice(7).trim()
     if (!token) return
 
+    // ✅ set both variants for maximum backend/proxy compatibility
     headers["X-Session-Token"] = token
+    headers["X-SessionToken"] = token
 }
 
 function ensureAuthorizationFromSessionToken(headers: Record<string, string>) {
@@ -194,7 +204,7 @@ function ensureAuthorizationFromSessionToken(headers: Record<string, string>) {
     // mirror it back into Authorization (but never override an explicit Authorization).
     if (hasHeader(headers, "Authorization")) return
 
-    const session = getHeaderValue(headers, "X-Session-Token")
+    const session = getSessionTokenHeaderValue(headers)
     const token = String(session || "").trim()
     if (!token) return
 
