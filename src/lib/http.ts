@@ -208,6 +208,7 @@ async function parseResponseSafe(res: Response) {
 }
 
 function isBlobBody(body: unknown): body is Blob {
+    // File is also a Blob in browsers
     return typeof Blob !== "undefined" && body instanceof Blob
 }
 
@@ -230,12 +231,16 @@ function snippet(val: unknown, max = 220) {
 function resolveCredentials(url: string, explicit?: RequestCredentials): RequestCredentials {
     if (explicit) return explicit
 
+    // In SSR / Node contexts, omit by default.
     if (typeof window === "undefined") return "omit"
 
+    // If API is same-origin, keep include (supports cookie-based admin/staff sessions if any).
+    // If cross-origin, omit to avoid common CORS failures (wildcard origins + credentials is blocked by browsers).
     try {
         const u = new URL(url, window.location.origin)
         return u.origin === window.location.origin ? "include" : "omit"
     } catch {
+        // Safe fallback
         return "omit"
     }
 }
@@ -254,16 +259,19 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         if (token) finalHeaders.Authorization = `Bearer ${token}`
     }
 
-    // ✅ Mirror tokens both ways (fixes missing auth on some proxies)
+    // ✅ Ensure X-Session-Token mirrors Bearer token when not explicitly provided
     ensureSessionTokenHeader(finalHeaders)
+    // ✅ And the other way around (if only X-Session-Token is set)
     ensureAuthorizationFromSessionToken(finalHeaders)
 
     let finalBody: BodyInit | undefined
 
+    // Support FormData
     if (body instanceof FormData) {
         finalBody = body
     } else if (isBlobBody(body)) {
         finalBody = body
+        // Only set content-type if caller didn't already set it
         if (!hasHeader(finalHeaders, "Content-Type") && body.type) {
             finalHeaders["Content-Type"] = body.type
         }
@@ -305,10 +313,17 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
     if (!res.ok) {
         const responseHeaderMsg = res.headers.get("x-error-message") || res.headers.get("X-Error-Message") || ""
-        const serverMsg = (data as any)?.message || (data as any)?.error || (data as any)?.detail || (data as any)?.title
+        const serverMsg =
+            (data as any)?.message ||
+            (data as any)?.error ||
+            (data as any)?.detail ||
+            (data as any)?.title
 
         const default404 = `Endpoint not found (404): ${method} ${url}. This usually means the backend route is missing or the API base URL is wrong.`
-        const baseMessage = serverMsg || responseHeaderMsg || (res.status === 404 ? default404 : res.statusText || "Request failed")
+        const baseMessage =
+            serverMsg ||
+            responseHeaderMsg ||
+            (res.status === 404 ? default404 : res.statusText || "Request failed")
 
         const bodyHint =
             typeof data === "string" && data.includes("<html")
@@ -324,7 +339,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 }
 
 export const api = {
-    get: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) => apiRequest<T>(path, { ...opts, method: "GET" }),
+    get: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
+        apiRequest<T>(path, { ...opts, method: "GET" }),
 
     post: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "POST", body }),
@@ -340,4 +356,24 @@ export const api = {
 
     del: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "DELETE" }),
+
+    /**
+     * ✅ Convenience methods:
+     * Some backends respond with `{ data: ... }`. These helpers unwrap automatically
+     * so participantFullName (and other enriched fields) always reach the UI.
+     */
+    getData: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "GET" }).then((res) => unwrapApiData<T>(res)),
+
+    postData: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "POST", body }).then((res) => unwrapApiData<T>(res)),
+
+    putData: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "PUT", body }).then((res) => unwrapApiData<T>(res)),
+
+    patchData: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "PATCH", body }).then((res) => unwrapApiData<T>(res)),
+
+    deleteData: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "DELETE" }).then((res) => unwrapApiData<T>(res)),
 }

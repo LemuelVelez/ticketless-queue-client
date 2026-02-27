@@ -576,6 +576,9 @@ export default function StaffQueuePage() {
     const [queueState, setQueueState] = React.useState<StaffQueueState | null>(null)
     const [stateLoading, setStateLoading] = React.useState(false)
 
+    // ✅ Display snapshot (used to backfill participant FULL NAME for other windows)
+    const [displaySnapshot, setDisplaySnapshot] = React.useState<any>(null)
+
     // ✅ Auto-refresh (AJAX polling every 2.5 seconds)
     const [liveSync, setLiveSync] = React.useState(true)
 
@@ -920,17 +923,21 @@ export default function StaffQueuePage() {
         if (!windowInfo?.id) {
             setOut([])
             setHistory([])
+            setDisplaySnapshot(null)
             return
         }
 
         try {
-            const [o, his] = await Promise.all([
+            const [o, his, snap] = await Promise.all([
                 staffApi.listOut({ limit: 25 }).catch(() => ({ tickets: [] as any[] })),
                 staffApi.listHistory({ limit: 25, mine: historyMine }).catch(() => ({ tickets: [] as any[] })),
+                staffApi.getDisplaySnapshot().catch(() => null),
             ])
 
             setOut(((o as any).tickets ?? []) as TicketLike[])
             setHistory(((his as any).tickets ?? []) as TicketLike[])
+
+            if (snap) setDisplaySnapshot(snap)
         } catch {
             // non-critical
         }
@@ -956,6 +963,7 @@ export default function StaffQueuePage() {
             setQueueState(null)
             setOut([])
             setHistory([])
+            setDisplaySnapshot(null)
             return
         }
         scheduleNextRefresh(Date.now())
@@ -1129,12 +1137,16 @@ export default function StaffQueuePage() {
                 const tb = new Date(b.calledAt ?? b.updatedAt ?? b.createdAt ?? 0).getTime()
                 return ta - tb
             })
-            .filter((t) => !announced.has(String(t.id)))
+            .filter((t) => {
+                const id = getTicketId(t)
+                return id ? !announced.has(id) : false
+            })
 
         if (!newlyCalled.length) return
 
         for (const t of newlyCalled.slice(-3)) {
-            announced.add(String(t.id))
+            const id = getTicketId(t)
+            if (id) announced.add(id)
             announceTicket(t)
         }
     }, [announceTicket, centralAudio, isAudioLeader, queueState?.called, voiceEnabled, voiceSupported])
@@ -1143,6 +1155,66 @@ export default function StaffQueuePage() {
     const waiting = React.useMemo(() => (queueState?.waiting ?? []).slice(), [queueState?.waiting])
     const hold = React.useMemo(() => (queueState?.hold ?? []).slice(), [queueState?.hold])
     const called = React.useMemo(() => (queueState?.called ?? []).slice(), [queueState?.called])
+
+    // ✅ Build fallback name map from snapshot-full (fix: participant missing on other windows)
+    const snapshotNowServingByWindow = React.useMemo(() => {
+        const map = new Map<
+            number,
+            { name: string; studentId?: string; queueNumber?: number; ticketId?: string }
+        >()
+
+        const windows = (displaySnapshot?.board?.windows ?? []) as any[]
+        for (const w of windows) {
+            const wn = Number(w?.number ?? 0)
+            if (!Number.isFinite(wn) || wn <= 0) continue
+
+            const ns = w?.nowServing
+            if (!ns) continue
+
+            const sid = String(ns?.participantStudentId ?? ns?.studentId ?? ns?.tcNumber ?? "").trim()
+            const full = String(ns?.participantFullName ?? "").trim()
+            const label = String(ns?.participantLabel ?? "").trim()
+            const name = full || (isLikelyHumanName(label, sid) ? label : "")
+
+            if (!name) continue
+
+            const qn = Number(ns?.queueNumber ?? NaN)
+            const id = String(ns?.id ?? ns?._id ?? "").trim()
+
+            map.set(wn, {
+                name,
+                studentId: sid || undefined,
+                queueNumber: Number.isFinite(qn) ? qn : undefined,
+                ticketId: id || undefined,
+            })
+        }
+
+        return map
+    }, [displaySnapshot])
+
+    const resolveNowServingParticipant = React.useCallback(
+        (ticket: TicketLike) => {
+            const direct = getParticipantName(ticket)
+            const directSid = getStudentId(ticket)
+            if (direct || directSid) {
+                return { name: direct, studentId: directSid }
+            }
+
+            const win = getWindowMeta(ticket)
+            if (!win.number) return { name: "", studentId: "" }
+
+            const fallback = snapshotNowServingByWindow.get(win.number)
+            if (!fallback) return { name: "", studentId: "" }
+
+            const qn = Number((ticket as any)?.queueNumber ?? NaN)
+            if (Number.isFinite(fallback.queueNumber) && Number.isFinite(qn) && fallback.queueNumber !== qn) {
+                return { name: "", studentId: "" }
+            }
+
+            return { name: fallback.name || "", studentId: fallback.studentId || "" }
+        },
+        [snapshotNowServingByWindow],
+    )
 
     const nowServingBoard = React.useMemo(() => {
         const map = new Map<number, TicketView>()
@@ -1593,10 +1665,16 @@ export default function StaffQueuePage() {
                                                             const isMine = Number(windowInfo?.number ?? 0) === windowNumber
                                                             const dep = getDepartmentMeta(ticket)
                                                             const qLabel = dep.code ? `${dep.code}-${pad3(ticket.queueNumber)}` : `#${ticket.queueNumber}`
-                                                            const sid = getStudentId(ticket)
+
+                                                            const resolved = resolveNowServingParticipant(ticket)
+                                                            const displayName = resolved.name || "—"
+                                                            const displaySid = resolved.studentId || ""
 
                                                             return (
-                                                                <TableRow key={`${windowNumber}:${ticket.id}`} className={isMine ? "bg-muted/50" : ""}>
+                                                                <TableRow
+                                                                    key={`${windowNumber}:${getTicketId(ticket) || ticketKey(ticket)}`}
+                                                                    className={isMine ? "bg-muted/50" : ""}
+                                                                >
                                                                     <TableCell className="font-medium">#{windowNumber}</TableCell>
                                                                     <TableCell className="font-medium tabular-nums">{qLabel}</TableCell>
                                                                     <TableCell className="text-muted-foreground">
@@ -1605,11 +1683,11 @@ export default function StaffQueuePage() {
                                                                     <TableCell>
                                                                         <div className="min-w-0">
                                                                             <div className="font-medium whitespace-normal wrap-break-word leading-snug">
-                                                                                {getParticipantName(ticket) || "—"}
+                                                                                {displayName}
                                                                             </div>
-                                                                            {sid ? (
+                                                                            {displaySid ? (
                                                                                 <div className="text-xs text-muted-foreground">
-                                                                                    Student ID: <span className="tabular-nums">{sid}</span>
+                                                                                    Student ID: <span className="tabular-nums">{displaySid}</span>
                                                                                 </div>
                                                                             ) : null}
                                                                         </div>

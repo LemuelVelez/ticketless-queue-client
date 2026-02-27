@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { api, unwrapApiData } from "@/lib/http"
+import { api } from "@/lib/http"
 
 export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
 export type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
@@ -25,12 +25,20 @@ export type Ticket = {
     studentId: string
     phone?: string
 
+    /**
+     * Who joined the queue.
+     */
     participantType?: TicketParticipantType
     participantLabel?: string | null
 
-    // ✅ Full name (preferred for display)
+    /**
+     * ✅ Full name (Student / Alumni-Visitor / Guest)
+     */
     participantFullName?: string | null
 
+    /**
+     * Queue purpose / transaction context.
+     */
     transactionCategory?: string
     transactionKey?: string
     transactionKeys?: string[]
@@ -41,6 +49,9 @@ export type Ticket = {
     purpose?: string
     queuePurpose?: string | null
 
+    /**
+     * Optional richer payloads that may come from backend enrichers.
+     */
     participant?: string
     userType?: string
     role?: string
@@ -71,9 +82,17 @@ export type Ticket = {
         labels?: string[]
         [key: string]: any
     } | null
-
-    selection?: { transactionKeys?: string[]; transactionLabels?: string[]; [key: string]: any } | null
-    join?: { transactionKeys?: string[]; transactionLabels?: string[]; participantType?: string; [key: string]: any } | null
+    selection?: {
+        transactionKeys?: string[]
+        transactionLabels?: string[]
+        [key: string]: any
+    } | null
+    join?: {
+        transactionKeys?: string[]
+        transactionLabels?: string[]
+        participantType?: string
+        [key: string]: any
+    } | null
     meta?: {
         purpose?: string
         transactionKey?: string
@@ -139,6 +158,7 @@ export type StaffDisplayNowServing = {
     windowName: string | null
     windowNumber: number | null
 
+    // ✅ participant
     participantFullName: string | null
     participantLabel: string | null
     participantType: TicketParticipantType | string | null
@@ -154,6 +174,7 @@ export type StaffDisplayUpNextItem = {
     departmentName: string | null
     departmentCode: string | null
 
+    // ✅ participant
     participantFullName: string | null
     participantLabel: string | null
     participantType: TicketParticipantType | string | null
@@ -165,7 +186,11 @@ export type StaffDisplayBoardWindow = {
     name: string
     number: number
     departmentIds: string[]
-    departments: Array<{ id: string; name: string; code: string | null }>
+    departments: Array<{
+        id: string
+        name: string
+        code: string | null
+    }>
     nowServing: {
         id: string
         queueNumber: number
@@ -173,6 +198,7 @@ export type StaffDisplayBoardWindow = {
         departmentName: string | null
         departmentCode: string | null
 
+        // ✅ participant
         participantFullName: string | null
         participantLabel: string | null
         participantType: TicketParticipantType | string | null
@@ -256,17 +282,25 @@ function normalizeWindowPayload(windowRaw: any): ServiceWindow | null {
     const id = toIdString(windowRaw?._id ?? windowRaw?.id)
     if (!id) return null
 
-    const numberRaw = typeof windowRaw?.number === "number" ? Number(windowRaw.number) : Number(windowRaw?.number ?? NaN)
+    const numberRaw =
+        typeof windowRaw?.number === "number" ? Number(windowRaw.number) : Number(windowRaw?.number ?? NaN)
 
     const department = toIdString(windowRaw?.department)
-    const departmentIds = Array.isArray(windowRaw?.departmentIds) ? uniqueIds(windowRaw.departmentIds) : department ? [department] : undefined
+    const departmentIds = Array.isArray(windowRaw?.departmentIds)
+        ? uniqueIds(windowRaw.departmentIds)
+        : department
+            ? [department]
+            : undefined
 
     return {
         _id: id,
         id,
         department: department || null,
         departmentIds,
-        name: typeof windowRaw?.name === "string" && windowRaw.name.trim() ? String(windowRaw.name) : "Window",
+        name:
+            typeof windowRaw?.name === "string" && windowRaw.name.trim()
+                ? String(windowRaw.name)
+                : "Window",
         number: Number.isFinite(numberRaw) ? numberRaw : 0,
         enabled: windowRaw?.enabled !== false,
         createdAt: typeof windowRaw?.createdAt === "string" ? windowRaw.createdAt : undefined,
@@ -285,7 +319,8 @@ function normalizeDepartmentList(raw: any): DepartmentAssignment[] | undefined {
                 id,
                 name: typeof d?.name === "string" ? d.name : undefined,
                 code: typeof d?.code === "string" ? d.code : null,
-                transactionManager: typeof d?.transactionManager === "string" ? d.transactionManager : null,
+                transactionManager:
+                    typeof d?.transactionManager === "string" ? d.transactionManager : null,
                 enabled: d?.enabled !== false,
             } satisfies DepartmentAssignment
         })
@@ -323,6 +358,7 @@ function normalizeMyAssignmentPayload(payload: any): MyAssignmentResponse {
 /** =========================
  * PARTICIPANT DISPLAY NORMALIZATION
  * ========================= */
+
 function isLikelyHumanName(label: unknown, identifier?: string) {
     const s = String(label ?? "").trim()
     if (!s) return false
@@ -358,6 +394,7 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
     return {
         ...t,
         participantFullName: finalFullName,
+        // Keep label, but prefer full name for best UX
         participantLabel: finalFullName || (t.participantLabel ?? null),
     }
 }
@@ -393,66 +430,217 @@ function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnaps
     return {
         ...res,
         nowServing: res.nowServing
-            ? { ...res.nowServing, participantFullName: normalizeName(res.nowServing.participantFullName, res.nowServing.participantLabel) }
+            ? {
+                ...res.nowServing,
+                participantFullName: normalizeName(res.nowServing.participantFullName, res.nowServing.participantLabel),
+            }
             : null,
         upNext: Array.isArray(res.upNext)
             ? res.upNext.map((x) => ({
-                  ...x,
-                  participantFullName: normalizeName(x.participantFullName, x.participantLabel),
-              }))
+                ...x,
+                participantFullName: normalizeName(x.participantFullName, x.participantLabel),
+            }))
             : [],
         board: {
             ...(res.board as any),
             windows: Array.isArray(res?.board?.windows)
                 ? res.board.windows.map((w) => ({
-                      ...w,
-                      nowServing: w.nowServing
-                          ? {
-                                ...w.nowServing,
-                                participantFullName: normalizeName(w.nowServing.participantFullName, w.nowServing.participantLabel),
-                            }
-                          : null,
-                  }))
+                    ...w,
+                    nowServing: w.nowServing
+                        ? {
+                            ...w.nowServing,
+                            participantFullName: normalizeName(w.nowServing.participantFullName, w.nowServing.participantLabel),
+                        }
+                        : null,
+                }))
                 : [],
         },
     }
 }
 
+/** =========================
+ * REPORTS TYPES (STAFF-SCOPED)
+ * ========================= */
+
+export type ReportRange = {
+    from: string // YYYY-MM-DD
+    to: string // YYYY-MM-DD
+}
+
+export type StatusCounts = Partial<Record<TicketStatus, number>>
+
+export type DepartmentReportRow = {
+    departmentId: string
+    name?: string
+    code?: string
+
+    total: number
+    waiting: number
+    called: number
+    hold: number
+    out: number
+    served: number
+
+    avgWaitMs: number | null
+    avgServiceMs: number | null
+}
+
+export type ReportsSummaryResponse = {
+    range: ReportRange
+    totals: {
+        total: number
+        byStatus: StatusCounts
+        avgWaitMs: number | null
+        avgServiceMs: number | null
+    }
+    departments: DepartmentReportRow[]
+}
+
+export type ReportsTimeseriesPoint = {
+    dateKey: string // YYYY-MM-DD
+    total: number
+    waiting: number
+    called: number
+    hold: number
+    out: number
+    served: number
+}
+
+export type ReportsTimeseriesResponse = {
+    range: ReportRange
+    series: ReportsTimeseriesPoint[]
+}
+
+/** =========================
+ * SMS TYPES (STAFF)
+ * ========================= */
+
+export type StaffSendSmsRequest = {
+    /**
+     * Backend accepts `numbers` (preferred) OR `number` (legacy).
+     * You can pass a string, comma-separated string, or string[].
+     */
+    numbers?: string | string[]
+    number?: string
+
+    message: string
+    senderName?: string
+
+    priority?: boolean
+    otp?: boolean
+    otpCode?: string | number
+
+    respectOptOut?: boolean
+    supportedNetworkTokens?: string[]
+
+    entityType?: string
+    entityId?: string
+    meta?: Record<string, any>
+}
+
+export type StaffSendTicketSmsBaseRequest = {
+    message?: string
+    senderName?: string
+
+    priority?: boolean
+    otp?: boolean
+    otpCode?: string | number
+
+    respectOptOut?: boolean
+    supportedNetworkTokens?: string[]
+    meta?: Record<string, any>
+}
+
+export type StaffTicketSmsStatus = "CALLED" | "HOLD" | "OUT" | "SERVED"
+
+export type StaffSendTicketStatusSmsRequest = StaffSendTicketSmsBaseRequest & {
+    status: StaffTicketSmsStatus
+}
+
+export type StaffSmsResponse = {
+    ok: boolean
+    provider?: string
+
+    // present on ticket-based endpoints
+    ticketId?: string
+    status?: StaffTicketSmsStatus
+
+    // present on raw send
+    number?: string
+
+    // server may include this on /staff/sms/send
+    statusSummary?: Record<string, number>
+
+    result?: any
+    error?: string
+}
+
 export const staffApi = {
     myAssignment: () =>
         api
-            .get<MyAssignmentResponse | { data: MyAssignmentResponse }>("/staff/me/assignment")
-            .then((res) => normalizeMyAssignmentPayload(unwrapApiData(res))),
+            .getData<MyAssignmentResponse>("/staff/me/assignment")
+            .then((res) => normalizeMyAssignmentPayload(res)),
 
-    // ✅ Use the explicit “full” endpoint for monitor/presenter (includes participantFullName)
+    // ✅ Dedicated backend snapshot for staff presentation/monitor pages
     getDisplaySnapshot: () =>
         api
-            .get<StaffDisplaySnapshotResponse | { data: StaffDisplaySnapshotResponse }>("/staff/display/snapshot-full")
-            .then((res) => normalizeSnapshot(unwrapApiData(res))),
+            .getData<StaffDisplaySnapshotResponse>("/staff/display/snapshot-full")
+            .then((res) => normalizeSnapshot(res)),
 
     listWaiting: (opts?: { limit?: number }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/waiting${toQuery(opts as any)}`).then((res) => normalizeTicketsResponse(res)),
+        api
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/waiting${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
     listHold: (opts?: { limit?: number }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/hold${toQuery(opts as any)}`).then((res) => normalizeTicketsResponse(res)),
+        api
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/hold${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
     listOut: (opts?: { limit?: number }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/out${toQuery(opts as any)}`).then((res) => normalizeTicketsResponse(res)),
+        api
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/out${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
+    // ✅ mine=true => only tickets for this staff's assigned window
     listHistory: (opts?: { limit?: number; mine?: boolean }) =>
-        api.get<ListTicketsResponse>(`/staff/queue/history${toQuery(opts as any)}`).then((res) => normalizeTicketsResponse(res)),
+        api
+            .getData<ListTicketsResponse & { context?: any }>(`/staff/queue/history${toQuery(opts as any)}`)
+            .then((res) => normalizeTicketsResponse(res)),
 
-    callNext: () => api.post<TicketResponse>("/staff/queue/call-next").then((res) => normalizeTicketResponse(res)),
+    callNext: () =>
+        api.postData<TicketResponse>("/staff/queue/call-next").then((res) => normalizeTicketResponse(res)),
 
     currentCalledForWindow: () =>
-        api.get<CurrentCalledResponse>("/staff/queue/current-called").then((res) => normalizeCurrentCalledResponse(res)),
+        api
+            .getData<CurrentCalledResponse>("/staff/queue/current-called")
+            .then((res) => normalizeCurrentCalledResponse(res)),
 
     markServed: (ticketId: string) =>
-        api.post<TicketResponse>(`/staff/tickets/${ticketId}/served`).then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>(`/staff/tickets/${ticketId}/served`).then((res) => normalizeTicketResponse(res)),
 
     holdNoShow: (ticketId: string) =>
-        api.post<TicketResponse>(`/staff/tickets/${ticketId}/hold`).then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>(`/staff/tickets/${ticketId}/hold`).then((res) => normalizeTicketResponse(res)),
 
     returnFromHold: (ticketId: string) =>
-        api.post<TicketResponse>(`/staff/tickets/${ticketId}/return`).then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>(`/staff/tickets/${ticketId}/return`).then((res) => normalizeTicketResponse(res)),
+
+    // ✅ SMS endpoints
+    sendSms: (payload: StaffSendSmsRequest) =>
+        api.postData<StaffSmsResponse>("/staff/sms/send", payload),
+
+    // Legacy alias: sends CALLED status (or custom message if provided)
+    sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketSmsBaseRequest) =>
+        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}),
+
+    // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED) + optional custom message override
+    sendTicketStatusSms: (ticketId: string, payload: StaffSendTicketStatusSmsRequest) =>
+        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload),
+
+    // ✅ Staff reports (scoped to assigned department on backend)
+    getReportsSummary: (opts?: { from?: string; to?: string }) =>
+        api.getData<ReportsSummaryResponse>(`/staff/reports/summary${toQuery(opts as any)}`),
+
+    getReportsTimeseries: (opts?: { from?: string; to?: string }) =>
+        api.getData<ReportsTimeseriesResponse>(`/staff/reports/timeseries${toQuery(opts as any)}`),
 }
