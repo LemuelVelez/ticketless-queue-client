@@ -2,7 +2,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { Lock } from "lucide-react"
+import { Lock, Ticket as TicketIcon } from "lucide-react"
 
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
@@ -265,7 +265,11 @@ async function findActiveByParticipant(args: { departmentId: string; participant
         () => maybeInvoke(guestApi, "findActiveByParticipant", payload),
         () => maybeInvoke(guestApi, "findActiveByStudent", payload),
         () => maybeInvoke(studentApi, "findActiveByParticipant", payload),
-        () => maybeInvoke(studentApi, "findActiveByStudent", { departmentId: args.departmentId, studentId: args.participantId }),
+        () =>
+            maybeInvoke(studentApi, "findActiveByStudent", {
+                departmentId: args.departmentId,
+                studentId: args.participantId,
+            }),
     ])
 }
 
@@ -306,7 +310,11 @@ export default function AlumniJoinPage() {
     const preParticipantId = React.useMemo(
         () =>
             pickNonEmptyString(
-                qs.get("participantId") || qs.get("studentId") || qs.get("idNumber") || qs.get("visitorId") || qs.get("alumniId"),
+                qs.get("participantId") ||
+                    qs.get("studentId") ||
+                    qs.get("idNumber") ||
+                    qs.get("visitorId") ||
+                    qs.get("alumniId"),
             ),
         [qs],
     )
@@ -338,6 +346,9 @@ export default function AlumniJoinPage() {
     const [activeTicket, setActiveTicket] = React.useState<Ticket | null>(null)
     const [checkingActive, setCheckingActive] = React.useState(false)
 
+    // ✅ transaction labels (names-first) fetched from /tickets/:id when available
+    const [ticketTransactionLabels, setTicketTransactionLabels] = React.useState<string[]>([])
+
     const isSessionFlow = Boolean(participant)
 
     // ✅ lock applies to ANY registered participant type (student/alumni/guest) as long as the session/storage has a department
@@ -364,10 +375,7 @@ export default function AlumniJoinPage() {
         [selectedTransactions, availableTransactions],
     )
 
-    const selectedTransactionSet = React.useMemo(
-        () => new Set(selectedForSubmit),
-        [selectedForSubmit],
-    )
+    const selectedTransactionSet = React.useMemo(() => new Set(selectedForSubmit), [selectedForSubmit])
 
     const joinCooldownKey = React.useMemo(() => {
         const pid = participantId.trim() || "none"
@@ -381,6 +389,23 @@ export default function AlumniJoinPage() {
 
     const joinCooldown = useActionCooldown(joinCooldownKey, 15000)
     const findCooldown = useActionCooldown(findCooldownKey, 5000)
+
+    const selectedTransactionLabels = React.useMemo(() => {
+        if (!selectedForSubmit.length) return []
+        const map = new Map<string, string>()
+        for (const tx of availableTransactions) {
+            const k = readTransactionKey(tx)
+            if (!k) continue
+            map.set(k, readTransactionLabel(tx, k))
+        }
+        return selectedForSubmit.map((k) => map.get(k) || k)
+    }, [selectedForSubmit, availableTransactions])
+
+    const purposeLabelsToShow = React.useMemo(() => {
+        const fromTicket = ticketTransactionLabels.map((x) => String(x ?? "").trim()).filter(Boolean)
+        if (fromTicket.length) return fromTicket
+        return selectedTransactionLabels
+    }, [ticketTransactionLabels, selectedTransactionLabels])
 
     const handleDepartmentChange = React.useCallback(
         (value: string) => {
@@ -472,9 +497,10 @@ export default function AlumniJoinPage() {
         setBusy(true)
         try {
             const res = await getParticipantTicket(ticketId)
-            setTicket((res?.ticket ?? null) as Ticket | null)
+            const t = (res?.ticket ?? null) as Ticket | null
+            setTicket(t)
 
-            const dept = (res?.ticket as any)?.department
+            const dept = (t as any)?.department
             const deptIdFromTicket =
                 typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
 
@@ -484,21 +510,25 @@ export default function AlumniJoinPage() {
                 setDepartmentId(deptIdFromTicket)
             }
 
-            const idFromTicket = readParticipantIdFromObject(res?.ticket)
+            const idFromTicket = readParticipantIdFromObject(t)
             if (idFromTicket) setParticipantId(idFromTicket)
 
-            const phoneFromTicket = readPhoneFromObject(res?.ticket)
+            const phoneFromTicket = readPhoneFromObject(t)
             if (phoneFromTicket) setPhone(phoneFromTicket)
 
+            const txLabelsRaw = Array.isArray(res?.transactions?.transactionLabels)
+                ? (res.transactions!.transactionLabels! as any[])
+                : []
+
+            const cleanedLabels = txLabelsRaw.map((x) => String(x ?? "").trim()).filter(Boolean)
+            setTicketTransactionLabels(cleanedLabels)
+
             const txKeysRaw = [
-                ...(Array.isArray(res?.transactions?.transactionKeys) ? res.transactions.transactionKeys : []),
-                ...(Array.isArray((res?.ticket as any)?.transactionKeys) ? (res.ticket as any).transactionKeys : []),
+                ...(Array.isArray(res?.transactions?.transactionKeys) ? res.transactions!.transactionKeys! : []),
+                ...(Array.isArray((t as any)?.transactionKeys) ? ((t as any).transactionKeys as any[]) : []),
             ]
 
-            const txKeys = txKeysRaw
-                .map((k) => pickNonEmptyString(k))
-                .filter((k) => !!k)
-
+            const txKeys = txKeysRaw.map((k) => pickNonEmptyString(k)).filter((k) => !!k)
             if (txKeys.length) setSelectedTransactions(txKeys)
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load ticket.")
@@ -506,6 +536,19 @@ export default function AlumniJoinPage() {
             setBusy(false)
         }
     }, [ticketId, isDepartmentLocked])
+
+    const fetchTicketPurposeIfPossible = React.useCallback(async (t: Ticket) => {
+        try {
+            const res = await getParticipantTicket(t._id)
+            const labelsRaw = Array.isArray(res?.transactions?.transactionLabels)
+                ? (res.transactions!.transactionLabels! as any[])
+                : []
+            const cleaned = labelsRaw.map((x) => String(x ?? "").trim()).filter(Boolean)
+            setTicketTransactionLabels(cleaned)
+        } catch {
+            // ignore (purpose display is best-effort)
+        }
+    }, [])
 
     const checkActiveTicket = React.useCallback(
         async (opts?: { silent?: boolean }) => {
@@ -525,6 +568,10 @@ export default function AlumniJoinPage() {
 
                 // If there is an active ticket, always surface it for UX clarity
                 if (t) setTicket(t)
+                if (t && !silent) {
+                    // ✅ names-first: fetch transaction labels when user explicitly requests refresh
+                    void fetchTicketPurposeIfPossible(t)
+                }
 
                 return t
             } catch {
@@ -534,7 +581,7 @@ export default function AlumniJoinPage() {
                 if (!silent) setCheckingActive(false)
             }
         },
-        [departmentId, participantId],
+        [departmentId, participantId, fetchTicketPurposeIfPossible],
     )
 
     React.useEffect(() => {
@@ -559,7 +606,14 @@ export default function AlumniJoinPage() {
             if (has(prev)) return prev
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId, didManuallySelectDepartment, isDepartmentLocked, lockedDepartmentId])
+    }, [
+        departments,
+        preDeptId,
+        sessionDepartmentId,
+        didManuallySelectDepartment,
+        isDepartmentLocked,
+        lockedDepartmentId,
+    ])
 
     React.useEffect(() => {
         void loadTicketById()
@@ -608,6 +662,7 @@ export default function AlumniJoinPage() {
             toast.success("Active ticket found.")
         } else {
             toast.message("No active ticket found for today.")
+            setTicketTransactionLabels([])
         }
     }
 
@@ -657,21 +712,25 @@ export default function AlumniJoinPage() {
             const res = await joinParticipantQueue(
                 isSessionFlow
                     ? {
-                        departmentId,
-                        participantId: pid,
-                        phone: ph,
-                        transactionKeys: selectedForSubmit,
-                    }
+                          departmentId,
+                          participantId: pid,
+                          phone: ph,
+                          transactionKeys: selectedForSubmit,
+                      }
                     : {
-                        departmentId,
-                        participantId: pid,
-                        phone: ph,
-                    },
+                          departmentId,
+                          participantId: pid,
+                          phone: ph,
+                      },
             )
 
             const t = (res?.ticket ?? null) as Ticket | null
             setTicket(t)
             setActiveTicket(t)
+
+            // ✅ names-first: show what the user selected immediately (no extra request needed)
+            setTicketTransactionLabels(isSessionFlow ? selectedTransactionLabels : [])
+
             toast.success("You are now in the queue.")
         } catch (e: any) {
             const status = (e as any)?.status
@@ -681,6 +740,8 @@ export default function AlumniJoinPage() {
                 setTicket(existingTicket as Ticket)
                 setActiveTicket(existingTicket as Ticket)
                 toast.message("You already have an active ticket for today.")
+                // best-effort: load labels if possible
+                void fetchTicketPurposeIfPossible(existingTicket as Ticket)
                 return
             }
 
@@ -691,7 +752,9 @@ export default function AlumniJoinPage() {
                     silent: true,
                     preserveDepartment: true,
                 })
-                toast.error("Selected queue purpose is not available for the chosen department. Please reselect and try again.")
+                toast.error(
+                    "Selected queue purpose is not available for the chosen department. Please reselect and try again.",
+                )
                 return
             }
 
@@ -770,7 +833,13 @@ export default function AlumniJoinPage() {
                                                 <Button asChild variant="secondary" className="w-full">
                                                     <Link to={myTicketsUrl}>Go to My Tickets</Link>
                                                 </Button>
-                                                <Button type="button" variant="outline" className="w-full" onClick={() => void onFindActive()} disabled={busy}>
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    className="w-full"
+                                                    onClick={() => void onFindActive()}
+                                                    disabled={busy}
+                                                >
                                                     Refresh my ticket
                                                 </Button>
                                             </div>
@@ -917,10 +986,10 @@ export default function AlumniJoinPage() {
                                             {joinCooldown.isCoolingDown
                                                 ? `Try again in ${joinCooldown.remainingSec}s`
                                                 : busy || checkingActive
-                                                    ? "Please wait…"
-                                                    : activeTicket
-                                                        ? "Ticket already active"
-                                                        : "Join Queue"}
+                                                  ? "Please wait…"
+                                                  : activeTicket
+                                                    ? "Ticket already active"
+                                                    : "Join Queue"}
                                         </Button>
                                     </div>
 
@@ -935,7 +1004,10 @@ export default function AlumniJoinPage() {
                     {ticketToShow ? (
                         <Card className="min-w-0">
                             <CardHeader>
-                                <CardTitle>Your Ticket</CardTitle>
+                                <CardTitle className="flex items-center gap-2">
+                                    <TicketIcon className="h-5 w-5" />
+                                    Your Ticket
+                                </CardTitle>
                                 <CardDescription>Keep this page open or take a screenshot.</CardDescription>
                             </CardHeader>
 
@@ -948,17 +1020,37 @@ export default function AlumniJoinPage() {
                                         </div>
 
                                         <div className="flex items-center gap-2">
-                                            <Badge variant={statusBadgeVariant(ticketToShow.status) as any}>{ticketToShow.status}</Badge>
+                                            <Badge variant={statusBadgeVariant(ticketToShow.status) as any}>
+                                                {ticketToShow.status}
+                                            </Badge>
                                             <Badge variant="secondary">{ticketToShow.dateKey}</Badge>
                                         </div>
                                     </div>
+
+                                    {purposeLabelsToShow.length ? (
+                                        <>
+                                            <Separator className="my-5" />
+                                            <div className="space-y-2">
+                                                <div className="text-sm text-muted-foreground">Purpose(s)</div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {purposeLabelsToShow.map((label) => (
+                                                        <Badge key={label} variant="outline">
+                                                            {label}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </>
+                                    ) : null}
 
                                     <Separator className="my-5" />
 
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                                         <div>
                                             <div className="text-sm text-muted-foreground">Queue Number</div>
-                                            <div className="mt-1 text-6xl font-semibold tracking-tight">#{ticketToShow.queueNumber}</div>
+                                            <div className="mt-1 text-6xl font-semibold tracking-tight">
+                                                #{ticketToShow.queueNumber}
+                                            </div>
                                         </div>
 
                                         <div className="text-sm text-muted-foreground">
@@ -967,9 +1059,18 @@ export default function AlumniJoinPage() {
                                     </div>
                                 </div>
 
-                                <div className="grid gap-2">
+                                <div className="grid gap-2 sm:grid-cols-2">
                                     <Button asChild variant="secondary" className="w-full">
                                         <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="w-full"
+                                        onClick={() => void onFindActive()}
+                                        disabled={busy || checkingActive}
+                                    >
+                                        Refresh status
                                     </Button>
                                 </div>
                             </CardContent>
