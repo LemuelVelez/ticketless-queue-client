@@ -44,13 +44,25 @@ export type PublicDisplayState = {
     announcements: Announcement[]
 }
 
+export type PublicManagerDepartmentsResponse = {
+    manager: string
+    departments: Array<{ id: string; name: string; code?: string; transactionManager?: string }>
+}
+
+export type PublicManagerWindowsResponse = {
+    manager: string
+    windows: Array<{
+        id: string
+        name: string
+        number: number
+        enabled: boolean
+        departments: Array<{ id: string; name: string; code?: string }>
+    }>
+}
+
 type ApiEnvelope<T> = { ok: boolean; data?: T; error?: { code: string; message: string } }
 
-// ✅ IMPORTANT:
-// Your `api` client is already prefixed with "/api" (baseURL), so using "/api/queue" here
-// becomes "/api/api/queue" and causes 404.
-// With QUEUE_BASE="/queue", requests become: "/api/queue/..."
-const QUEUE_BASE = "/queue"
+const DISPLAY_BASE = "/display"
 
 function isApiEnvelope<T>(v: unknown): v is ApiEnvelope<T> {
     if (!v || typeof v !== "object") return false
@@ -58,13 +70,11 @@ function isApiEnvelope<T>(v: unknown): v is ApiEnvelope<T> {
 }
 
 /**
- * Your http wrapper may return either:
- *  - ApiEnvelope<T> (enveloped)
- *  - T (already unwrapped)
- *  - { data: ApiEnvelope<T> } (axios-like)
- *  - { data: T } (axios-like already unwrapped)
- *
- * So we accept unknown and normalize safely with type guards.
+ * Normalizes common API shapes:
+ *  - ApiEnvelope<T>
+ *  - T
+ *  - { data: ApiEnvelope<T> }
+ *  - { data: T }
  */
 function unwrap<T>(res: unknown): T {
     const payload = res && typeof res === "object" && "data" in (res as any) ? (res as any).data : res
@@ -88,19 +98,64 @@ function unwrap<T>(res: unknown): T {
 }
 
 export const landingApi = {
+    /**
+     * PUBLIC DISPLAY: managers for the dropdown/tabs.
+     * GET /display/managers -> { managers: string[] }
+     */
     async listManagers(): Promise<string[]> {
-        const res = await api.get(`${QUEUE_BASE}/managers`)
-        return unwrap<string[]>(res) ?? []
+        const res = await api.get<{ managers: string[] }>(`${DISPLAY_BASE}/managers`, { auth: false })
+        const data = unwrap<{ managers: string[] }>(res)
+        return Array.isArray(data?.managers) ? data.managers : []
     },
 
-    async getPublicDisplayState(manager: string, since?: string): Promise<PublicDisplayState> {
-        const qs = new URLSearchParams()
-        qs.set("manager", manager)
-        if (since) qs.set("since", since)
+    /**
+     * PUBLIC DISPLAY: departments under manager (names first).
+     * GET /display/manager/:manager/departments
+     */
+    async listDepartmentsByManager(manager: string): Promise<PublicManagerDepartmentsResponse> {
+        const safe = encodeURIComponent(String(manager ?? "").trim())
+        const res = await api.get<PublicManagerDepartmentsResponse>(`${DISPLAY_BASE}/manager/${safe}/departments`, {
+            auth: false,
+        })
+        return unwrap<PublicManagerDepartmentsResponse>(res)
+    },
 
-        // ✅ Build query string manually because this http wrapper doesn't support `params`
-        const url = `${QUEUE_BASE}/public-display?${qs.toString()}`
-        const res = await api.get(url)
+    /**
+     * PUBLIC DISPLAY: windows under manager (includes mapped departments).
+     * GET /display/manager/:manager/windows
+     */
+    async listWindowsByManager(manager: string): Promise<PublicManagerWindowsResponse> {
+        const safe = encodeURIComponent(String(manager ?? "").trim())
+        const res = await api.get<PublicManagerWindowsResponse>(`${DISPLAY_BASE}/manager/${safe}/windows`, { auth: false })
+        return unwrap<PublicManagerWindowsResponse>(res)
+    },
+
+    /**
+     * PUBLIC DISPLAY: centralized state for big screen.
+     * GET /display/manager/:manager/state?since=ISO
+     */
+    async getPublicDisplayState(manager: string, since?: string): Promise<PublicDisplayState> {
+        const safe = encodeURIComponent(String(manager ?? "").trim())
+        const res = await api.get<PublicDisplayState>(`${DISPLAY_BASE}/manager/${safe}/state`, {
+            auth: false,
+            params: since ? { since } : undefined,
+        })
         return unwrap<PublicDisplayState>(res)
+    },
+
+    /**
+     * PUBLIC DISPLAY: announcements only (for voice polling).
+     * GET /display/manager/:manager/announcements?since=ISO
+     */
+    async getManagerAnnouncements(manager: string, since?: string): Promise<Pick<PublicDisplayState, "manager" | "dateKey" | "serverTime" | "announcements">> {
+        const safe = encodeURIComponent(String(manager ?? "").trim())
+        const res = await api.get<Pick<PublicDisplayState, "manager" | "dateKey" | "serverTime" | "announcements">>(
+            `${DISPLAY_BASE}/manager/${safe}/announcements`,
+            {
+                auth: false,
+                params: since ? { since } : undefined,
+            }
+        )
+        return unwrap<Pick<PublicDisplayState, "manager" | "dateKey" | "serverTime" | "announcements">>(res)
     },
 }

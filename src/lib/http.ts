@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { getApiBaseUrl } from "@/lib/env"
-import { getAnyAuthToken, getAuthToken, getParticipantToken } from "@/lib/auth"
+import { getAuthToken, getParticipantToken } from "@/lib/auth"
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
 export type RequestAuthMode = boolean | "staff" | "participant" | "auto"
@@ -28,6 +28,8 @@ export class ApiError extends Error {
     }
 }
 
+type QueryParamValue = string | number | boolean | null | undefined
+
 type RequestOptions = {
     method?: HttpMethod
     body?: unknown
@@ -40,6 +42,11 @@ type RequestOptions = {
      * - false: no token
      */
     auth?: RequestAuthMode
+    /**
+     * Optional query params. Automatically merged with existing query string.
+     * Example: { since: "2026-02-27T00:00:00.000Z" }
+     */
+    params?: Record<string, QueryParamValue>
     /**
      * Fetch credentials behavior.
      * Default is smart:
@@ -115,7 +122,9 @@ function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
     if (mode === false) return null
     if (mode === true || mode === "staff") return getAuthToken()
     if (mode === "participant") return getParticipantToken()
-    return getAnyAuthToken("staff")
+
+    // ✅ auto: prefer staff, fallback to participant
+    return getAuthToken() || getParticipantToken() || null
 }
 
 function ensureSessionTokenHeader(headers: Record<string, string>) {
@@ -133,6 +142,24 @@ function ensureSessionTokenHeader(headers: Record<string, string>) {
     if (!token) return
 
     headers["X-Session-Token"] = token
+}
+
+function withQuery(path: string, params?: Record<string, QueryParamValue>) {
+    if (!params) return path
+
+    const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null)
+    if (!entries.length) return path
+
+    const [beforeHash, hash] = path.split("#", 2)
+    const [base, existingQs] = beforeHash.split("?", 2)
+
+    const qs = new URLSearchParams(existingQs || "")
+    for (const [k, v] of entries) {
+        qs.set(k, String(v))
+    }
+
+    const next = `${base}?${qs.toString()}`
+    return hash ? `${next}#${hash}` : next
 }
 
 async function parseResponseSafe(res: Response) {
@@ -198,7 +225,7 @@ function resolveCredentials(url: string, explicit?: RequestCredentials): Request
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = "GET", body, headers = {}, auth = true, credentials, signal } = options
+    const { method = "GET", body, headers = {}, auth = true, params, credentials, signal } = options
 
     const finalHeaders: Record<string, string> = {
         Accept: "application/json",
@@ -212,7 +239,6 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     }
 
     // ✅ Ensure X-Session-Token mirrors Bearer token when not explicitly provided
-    // (helps public/participant endpoints stay working even if Authorization is stripped)
     ensureSessionTokenHeader(finalHeaders)
 
     let finalBody: BodyInit | undefined
@@ -240,7 +266,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         }
     }
 
-    const url = buildUrl(path)
+    const url = buildUrl(withQuery(path, params))
 
     let res: Response
     try {
@@ -249,7 +275,6 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
             headers: finalHeaders,
             body: finalBody,
             signal,
-            // ✅ FIX: Smart credentials to prevent cross-origin CORS blocks on Join Queue
             credentials: resolveCredentials(url, credentials),
         })
     } catch (err: any) {
@@ -273,7 +298,6 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
             responseHeaderMsg ||
             (res.status === 404 ? default404 : res.statusText || "Request failed")
 
-        // Add a tiny hint if server returned an HTML 404 page
         const bodyHint =
             typeof data === "string" && data.includes("<html")
                 ? ` Server returned an HTML error page: "${snippet(data)}"`
