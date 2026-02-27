@@ -218,7 +218,7 @@ function isLikelyHumanName(label: unknown, identifier?: string) {
     if (!s) return false
     if (identifier && s === String(identifier).trim()) return false
 
-    // Reject pure participant-type labels (robust to spacing/slashes)
+    // Reject participant-type labels (robust to spacing/slashes)
     const typeKey = normalizeParticipantTypeKey(s)
     if (typeKey === "STUDENT" || typeKey === "ALUMNI_VISITOR" || typeKey === "GUEST") return false
 
@@ -338,10 +338,7 @@ function getParticipantName(ticket: TicketLike): string {
 }
 
 /**
- * ✅ Ensure we ALWAYS have `participantFullName` for UI, even when the backend only sends:
- * - participantLabel (sometimes full name)
- * - nested selection payloads
- * This normalizes BOTH centralized and legacy shapes.
+ * ✅ Ensure we ALWAYS have `participantFullName` for UI.
  */
 function normalizeTicketForDisplay<T>(ticket: T): T {
     if (!ticket || typeof ticket !== "object") return ticket
@@ -372,7 +369,10 @@ function normalizeTicketForDisplay<T>(ticket: T): T {
         next.transactions = {
             ...tx,
             participantFullName: String(tx?.participantFullName ?? "").trim() || fullName,
-            participantLabel: isLikelyHumanName(tx?.participantLabel) ? String(tx?.participantLabel ?? "").trim() : tx?.participantLabel,
+            participantLabel:
+                String(tx?.participantLabel ?? "").trim() && isLikelyHumanName(tx?.participantLabel)
+                    ? String(tx?.participantLabel ?? "").trim()
+                    : tx?.participantLabel,
         }
     }
 
@@ -405,7 +405,6 @@ function getParticipantType(ticket: TicketLike): string {
     const t = ticket as any
     const studentId = String(t?.participant?.studentId ?? t?.studentId ?? t?.tcNumber ?? "").trim()
 
-    // Prefer explicit "type" fields first
     const explicit = firstNonEmptyText([
         t?.participant?.type,
         t?.participantType,
@@ -418,7 +417,6 @@ function getParticipantType(ticket: TicketLike): string {
     ])
     if (explicit) return explicit
 
-    // Fallback to label only when it doesn't look like a human name
     const label = firstNonEmptyText([t?.participantLabel, t?.transactions?.participantLabel, t?.meta?.participantLabel])
     if (label && !isLikelyHumanName(label, studentId)) return label
 
@@ -434,11 +432,9 @@ function ticketPurpose(ticket?: TicketLike | null) {
     if (!ticket) return "—"
     const t = ticket as any
 
-    // Centralized TicketView path
     const fromView = firstNonEmptyText([t?.transaction?.purpose, t?.transaction?.label, t?.transaction?.category])
     if (fromView) return fromView
 
-    // 1) Array label candidates
     const arrayLabelCandidates = [
         t.transactionLabels,
         t.selectedTransactionLabels,
@@ -453,7 +449,6 @@ function ticketPurpose(ticket?: TicketLike | null) {
         if (labels.length) return labels.join(" • ")
     }
 
-    // 2) Array-of-object candidates
     const objectArrayCandidates = [t.selectedTransactions, t.transactionSelections, t.transactions?.items, t.transactions?.selected]
     for (const candidate of objectArrayCandidates) {
         if (!Array.isArray(candidate)) continue
@@ -463,7 +458,6 @@ function ticketPurpose(ticket?: TicketLike | null) {
         if (labels.length) return labels.join(" • ")
     }
 
-    // 3) Direct string candidates
     const direct = firstNonEmptyText([
         t.queuePurpose,
         t.purpose,
@@ -478,7 +472,6 @@ function ticketPurpose(ticket?: TicketLike | null) {
     ])
     if (direct) return direct
 
-    // 4) Key arrays -> humanized labels
     const keyArrayCandidates = [
         t.transactionKeys,
         t.selectedTransactionKeys,
@@ -493,7 +486,6 @@ function ticketPurpose(ticket?: TicketLike | null) {
         if (keys.length) return keys.join(" • ")
     }
 
-    // 5) Single key fallback
     const key = firstNonEmptyText([t.transactionKey, t.transaction?.key, t.meta?.transactionKey, t.transactionCode])
     if (key) return humanizeTransactionKey(key)
 
@@ -594,7 +586,6 @@ function ParticipantCell({ ticket }: { ticket: TicketLike }) {
 
     return (
         <div className="min-w-0">
-            {/* ✅ show full name (no forced truncate) */}
             <div className="font-medium whitespace-normal wrap-break-word leading-snug">{name || "—"}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
                 {participantTypeBadge(type || "")}
@@ -643,17 +634,14 @@ export default function StaffQueuePage() {
     // ✅ Display snapshot (used to backfill participant FULL NAME for other windows)
     const [displaySnapshot, setDisplaySnapshot] = React.useState<any>(null)
 
-    // ✅ Auto-refresh (AJAX polling every 2.5 seconds)
     const [liveSync, setLiveSync] = React.useState(true)
 
-    // ✅ Cross-tab sync: one tab polls (leader), all open windows receive updates
     const [isQueueLeader, setIsQueueLeader] = React.useState(false)
     const lastAppliedStateTsRef = React.useRef<number>(0)
     const lastToastSyncErrorAtRef = React.useRef<number>(0)
     const bcRef = React.useRef<BroadcastChannel | null>(null)
     const [lastSyncedAtIso, setLastSyncedAtIso] = React.useState<string>("")
 
-    // ✅ 2.5s countdown loop (visual + numeric)
     const nextRefreshAtRef = React.useRef<number>(0)
     const [refreshRemainingMs, setRefreshRemainingMs] = React.useState<number>(0)
 
@@ -680,7 +668,6 @@ export default function StaffQueuePage() {
     const voicesRef = React.useRef<SpeechSynthesisVoice[]>([])
     const voiceWarnedRef = React.useRef(false)
 
-    // ✅ Centralized Audio Trigger (single shared announcer per device via leader election)
     const [centralAudio, setCentralAudio] = React.useState(true)
     const [isAudioLeader, setIsAudioLeader] = React.useState(false)
 
@@ -846,7 +833,6 @@ export default function StaffQueuePage() {
                     setIsAudioLeader(false)
                 }
             } catch {
-                // If storage is blocked, fall back to "single tab" behavior
                 setIsAudioLeader(true)
             }
         }
@@ -883,7 +869,6 @@ export default function StaffQueuePage() {
         (payload: { ts: number; windowId: string; state: StaffQueueState }) => {
             if (typeof window === "undefined") return
 
-            // Prefer BroadcastChannel; fallback to localStorage snapshot for cross-tab sync.
             if (canUseBroadcastChannel()) {
                 try {
                     bcRef.current?.postMessage({ type: "QUEUE_STATE", ...payload })
@@ -944,7 +929,6 @@ export default function StaffQueuePage() {
                     broadcastQueueState({ ts: baseTs, windowId: windowInfo.id, state })
                 }
 
-                // Duplicate-active-number detection (quick warning)
                 const active = [...(state?.waiting ?? []), ...(state?.hold ?? []), ...(state?.called ?? [])]
                 const seen = new Map<string, number>()
                 let hasDup = false
@@ -966,8 +950,6 @@ export default function StaffQueuePage() {
                 if (!hasDup) duplicateWarnedRef.current = false
             } catch (e: any) {
                 const msg = safeErrorMessage(e, "Failed to load centralized queue state.")
-
-                // ✅ Avoid toast spam during 2.5s polling
                 if (!opts?.silent) {
                     toast.error(msg)
                 } else {
@@ -1036,7 +1018,6 @@ export default function StaffQueuePage() {
         void fetchSecondary()
     }, [scheduleNextRefresh, windowInfo?.id, fetchCentralState, fetchSecondary])
 
-    // ✅ Countdown loop updater (smooth)
     React.useEffect(() => {
         if (typeof window === "undefined") return
         if (!liveSync || !assignedOk) {
@@ -1056,11 +1037,9 @@ export default function StaffQueuePage() {
         return () => window.clearInterval(iv)
     }, [assignedOk, liveSync, scheduleNextRefresh])
 
-    // ✅ Cross-tab receive: BroadcastChannel + localStorage fallback
     React.useEffect(() => {
         if (typeof window === "undefined") return
 
-        // BroadcastChannel
         if (canUseBroadcastChannel()) {
             try {
                 const bc = new BroadcastChannel(QUEUE_SYNC_CHANNEL)
@@ -1084,11 +1063,10 @@ export default function StaffQueuePage() {
                     bcRef.current = null
                 }
             } catch {
-                // fall through to storage listener only
+                // fall through
             }
         }
 
-        // localStorage snapshot listener (fallback)
         const onStorage = (e: StorageEvent) => {
             if (e.key !== QUEUE_SYNC_SNAPSHOT_KEY) return
             if (!e.newValue) return
@@ -1109,13 +1087,11 @@ export default function StaffQueuePage() {
         return () => window.removeEventListener("storage", onStorage)
     }, [applyRemoteQueueState])
 
-    // ✅ Queue poll leader election (one tab polls, all tabs stay in sync)
     const claimQueueLeadership = React.useCallback(() => {
         try {
             localStorage.setItem(QUEUE_POLL_LEADER_KEY, JSON.stringify({ id: tabIdRef.current, ts: Date.now() }))
             setIsQueueLeader(true)
         } catch {
-            // If blocked, allow polling in this tab
             setIsQueueLeader(true)
         }
     }, [])
@@ -1157,7 +1133,6 @@ export default function StaffQueuePage() {
         return () => window.clearInterval(iv)
     }, [liveSync, windowInfo?.id])
 
-    // ✅ Leader polling: every 2.5 seconds; broadcasts state to all tabs/windows
     React.useEffect(() => {
         if (!liveSync) return
         if (!windowInfo?.id) return
@@ -1173,7 +1148,6 @@ export default function StaffQueuePage() {
         return () => window.clearInterval(iv)
     }, [fetchCentralState, isQueueLeader, liveSync, scheduleNextRefresh, windowInfo?.id])
 
-    // Secondary refresh can be less frequent; no need to spam server
     React.useEffect(() => {
         if (!liveSync) return
         if (!windowInfo?.id) return
@@ -1221,7 +1195,7 @@ export default function StaffQueuePage() {
     const hold = React.useMemo(() => (queueState?.hold ?? []).slice(), [queueState?.hold])
     const called = React.useMemo(() => (queueState?.called ?? []).slice(), [queueState?.called])
 
-    // ✅ Build fallback name map from snapshot-full (fix: participant missing on other windows)
+    // ✅ Build fallback name map from snapshot-full
     const snapshotNowServingByWindow = React.useMemo(() => {
         const map = new Map<number, { name: string; studentId?: string; queueNumber?: number; ticketId?: string }>()
 
@@ -1230,13 +1204,23 @@ export default function StaffQueuePage() {
             const wn = Number(w?.number ?? 0)
             if (!Number.isFinite(wn) || wn <= 0) continue
 
-            const ns = w?.nowServing
-            if (!ns) continue
+            const nsRaw = w?.nowServing
+            if (!nsRaw) continue
 
-            const sid = String(ns?.participantStudentId ?? ns?.studentId ?? ns?.tcNumber ?? "").trim()
-            const full = String(ns?.participantFullName ?? "").trim()
+            // ✅ normalize snapshot row so participantFullName is derived when possible
+            const ns = normalizeTicketForDisplay(nsRaw as any) as any
+
+            const sid = String(
+                ns?.participantStudentId ??
+                    ns?.studentId ??
+                    ns?.participant?.studentId ??
+                    ns?.tcNumber ??
+                    "",
+            ).trim()
+
+            const normalizedName = String(ns?.participantFullName ?? "").trim() || String(getParticipantName(ns as any) ?? "").trim()
             const label = String(ns?.participantLabel ?? "").trim()
-            const name = full || (isLikelyHumanName(label, sid) ? label : "")
+            const name = normalizedName || (isLikelyHumanName(label, sid) ? label : "")
 
             if (!name) continue
 
@@ -1254,26 +1238,28 @@ export default function StaffQueuePage() {
         return map
     }, [displaySnapshot])
 
+    // ✅ FIX: DO NOT early-return when only studentId exists; still try snapshot fallback for FULL NAME
     const resolveNowServingParticipant = React.useCallback(
         (ticket: TicketLike) => {
-            const direct = getParticipantName(ticket)
+            const directName = getParticipantName(ticket)
             const directSid = getStudentId(ticket)
-            if (direct || directSid) {
-                return { name: direct, studentId: directSid }
-            }
 
+            // If we already have a name, use it (and keep sid if present)
+            if (directName) return { name: directName, studentId: directSid }
+
+            // Otherwise: try snapshot fallback (name might exist there even if this ticket has only studentId)
             const win = getWindowMeta(ticket)
-            if (!win.number) return { name: "", studentId: "" }
+            if (!win.number) return { name: "", studentId: directSid }
 
             const fallback = snapshotNowServingByWindow.get(win.number)
-            if (!fallback) return { name: "", studentId: "" }
+            if (!fallback) return { name: "", studentId: directSid }
 
             const qn = Number((ticket as any)?.queueNumber ?? NaN)
             if (Number.isFinite(fallback.queueNumber) && Number.isFinite(qn) && fallback.queueNumber !== qn) {
-                return { name: "", studentId: "" }
+                return { name: "", studentId: directSid }
             }
 
-            return { name: fallback.name || "", studentId: fallback.studentId || "" }
+            return { name: fallback.name || "", studentId: directSid || fallback.studentId || "" }
         },
         [snapshotNowServingByWindow],
     )
@@ -1300,7 +1286,6 @@ export default function StaffQueuePage() {
             .map(([windowNumber, ticket]) => ({ windowNumber, ticket }))
     }, [called])
 
-    // ✅ FIX: standardize the shape to ONE type (DuplicateActivePair) to avoid TS union property errors
     const duplicateActivePairs = React.useMemo<DuplicateActivePair[]>(() => {
         const state = queueState
         if (!state) return []
@@ -1487,7 +1472,6 @@ export default function StaffQueuePage() {
                                                 </CardDescription>
                                             </div>
 
-                                            {/* ✅ Optional actions tucked away (no manual refresh needed) */}
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button variant="outline" size="icon" className="shrink-0" aria-label="Queue options">
@@ -1548,7 +1532,6 @@ export default function StaffQueuePage() {
                                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
 
                                                 <Badge variant={liveSync ? "default" : "secondary"}>{syncBadgeText}</Badge>
-
                                                 <Badge variant="secondary">{countdownText}</Badge>
 
                                                 <Badge variant="secondary">
@@ -1577,7 +1560,6 @@ export default function StaffQueuePage() {
                                                 )}
                                             </div>
 
-                                            {/* ✅ 2.5s loop progress bar (smooth visual countdown) */}
                                             {assignedOk && liveSync ? (
                                                 <div className="space-y-2">
                                                     <Progress value={refreshProgress} className="h-2" />
