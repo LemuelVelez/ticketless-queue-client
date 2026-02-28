@@ -76,8 +76,6 @@ export type PublicManagerWindowsResponse = {
 
 type ApiEnvelope<T> = { ok: boolean; data?: T; error?: { code: string; message: string } }
 
-const DISPLAY_BASE = "/display"
-
 function isApiEnvelope<T>(v: unknown): v is ApiEnvelope<T> {
     if (!v || typeof v !== "object") return false
     return "ok" in (v as any)
@@ -111,10 +109,21 @@ function unwrap<T>(res: unknown): T {
     return payload as T
 }
 
+/**
+ * ✅ FIX: Public Display routes live under `publicRoutes.ts`,
+ * which is designed to expose them at `/api/public/...` across environments.
+ *
+ * Your API base is already `/api`, so we use `/public/display` here to avoid:
+ *   GET /api/display/:manager/state  -> 404
+ * and correctly call:
+ *   GET /api/public/display/:manager/state
+ */
+const DISPLAY_BASE = "/public/display"
+
 export const landingApi = {
     /**
      * PUBLIC DISPLAY: managers for the dropdown/tabs.
-     * GET /display/managers -> { managers: string[] }
+     * GET /public/display/managers -> { managers: string[] }
      */
     async listManagers(): Promise<string[]> {
         const res = await api.get<{ managers: string[] }>(`${DISPLAY_BASE}/managers`, { auth: false })
@@ -124,8 +133,7 @@ export const landingApi = {
 
     /**
      * PUBLIC DISPLAY: departments under manager (names first).
-     * ✅ Updated route per publicRoutes.ts:
-     * GET /display/:manager/departments
+     * GET /public/display/:manager/departments
      */
     async listDepartmentsByManager(manager: string): Promise<PublicManagerDepartmentsResponse> {
         const safe = encodeURIComponent(String(manager ?? "").trim())
@@ -137,8 +145,7 @@ export const landingApi = {
 
     /**
      * PUBLIC DISPLAY: windows under manager (includes mapped departments).
-     * ✅ Updated route per publicRoutes.ts:
-     * GET /display/:manager/windows
+     * GET /public/display/:manager/windows
      */
     async listWindowsByManager(manager: string): Promise<PublicManagerWindowsResponse> {
         const safe = encodeURIComponent(String(manager ?? "").trim())
@@ -148,8 +155,7 @@ export const landingApi = {
 
     /**
      * PUBLIC DISPLAY: centralized state for big screen.
-     * ✅ Updated route per publicRoutes.ts:
-     * GET /display/:manager/state?since=ISO
+     * GET /public/display/:manager/state?since=ISO
      */
     async getPublicDisplayState(manager: string, since?: string): Promise<PublicDisplayState> {
         const safe = encodeURIComponent(String(manager ?? "").trim())
@@ -162,8 +168,7 @@ export const landingApi = {
 
     /**
      * PUBLIC DISPLAY: announcements only (for voice polling).
-     * ✅ Updated route per publicRoutes.ts:
-     * GET /display/:manager/announcements?since=ISO
+     * GET /public/display/:manager/announcements?since=ISO
      */
     async getManagerAnnouncements(
         manager: string,
