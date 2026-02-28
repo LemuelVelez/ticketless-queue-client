@@ -29,7 +29,6 @@ import {
     type StaffDisplaySnapshotResponse,
     type Ticket as TicketType,
 } from "@/api/staff"
-import { validateSemaphoreReceipts } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -80,13 +79,38 @@ function isSpeechSupported() {
     )
 }
 
+/**
+ * ✅ More strict than "10 digits" to avoid mistaking Student IDs as phone numbers.
+ * Prefers common PH mobile formats:
+ * - 09XXXXXXXXX (11 digits, starts with 09)
+ * - 639XXXXXXXXX (12 digits, starts with 639)
+ * Also treats explicit "+" international formats as phone numbers.
+ */
 function looksLikePhoneNumber(input?: string | null) {
     const raw = String(input || "").trim()
     if (!raw) return false
     if (raw.includes("@")) return false
-    if (!/^[\d+\-\s()]+$/.test(raw)) return false
+
+    // if user explicitly typed +, treat as phone-ish
+    if (raw.includes("+")) {
+        const digits = raw.replace(/[^\d]/g, "")
+        return digits.length >= 10 && digits.length <= 15
+    }
+
+    if (!/^[\d\-\s()]+$/.test(raw)) return false
+
     const digits = raw.replace(/[^\d]/g, "")
-    return digits.length >= 10
+    if (digits.length === 11 && digits.startsWith("09")) return true
+    if (digits.length === 12 && digits.startsWith("639")) return true
+
+    // fallback (other locales) but still conservative
+    if (digits.length >= 10 && digits.length <= 15) {
+        // prefer those starting with 0 or country-like prefix to reduce StudentID false positives
+        if (digits.startsWith("0")) return true
+        if (digits.startsWith("63")) return true
+    }
+
+    return false
 }
 
 type ParticipantLike = {
@@ -129,27 +153,33 @@ function getParticipantDetails(source?: ParticipantLike | null) {
         String(source?.participantDisplay ?? "").trim() ||
         String(source?.participantLabel ?? "").trim()
 
-    const nameRaw =
+    let nameRaw =
         String(source?.participantFullName ?? "").trim() ||
         firstSegment(displayRaw)
 
+    // ✅ Never allow the "name" to become a mobile number on public boards
+    if (looksLikePhoneNumber(nameRaw)) nameRaw = ""
+
     const legacyIdentifier = String(source?.studentId ?? "").trim()
 
-    const name =
-        nameRaw ||
-        (legacyIdentifier && !looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : "") ||
-        "Participant"
+    const legacyStudentId = legacyIdentifier && !looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : ""
+    const legacyPhone = legacyIdentifier && looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : ""
 
     const studentId =
         isStudent
-            ? String(source?.participantStudentId ?? "").trim() ||
-              (legacyIdentifier && !looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : "")
+            ? String(source?.participantStudentId ?? "").trim() || (legacyStudentId ? legacyStudentId : "")
             : ""
 
     const mobile =
         String(source?.participantMobileNumber ?? "").trim() ||
         String(source?.phone ?? "").trim() ||
-        (legacyIdentifier && looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : "")
+        (legacyPhone ? legacyPhone : "")
+
+    const name =
+        nameRaw ||
+        (isStudent && studentId ? studentId : "") ||
+        (legacyStudentId ? legacyStudentId : "") ||
+        "Participant"
 
     const display = displayRaw || buildParticipantDisplay({ name, isStudent, studentId: studentId || null, mobile: mobile || null })
 
@@ -160,6 +190,19 @@ function getParticipantDetails(source?: ParticipantLike | null) {
         mobile: mobile || null,
         display: display || null,
     }
+}
+
+/**
+ * ✅ Queue board privacy rule:
+ * Never show mobile number on the public display.
+ * Only show: Full Name + Student ID (if student).
+ */
+function participantBoardLabel(p: ReturnType<typeof getParticipantDetails>) {
+    const parts: string[] = []
+    const name = String(p?.name || "").trim()
+    if (name) parts.push(name)
+    if (p?.isStudent && p?.studentId) parts.push(String(p.studentId).trim())
+    return parts.join(" • ") || "Participant"
 }
 
 type MonitorOption = {
@@ -433,43 +476,32 @@ function buildNowServingAnnouncement(queueNumber: number, windowNumber?: number)
     return `Now serving... ticket number ${n}.`
 }
 
-/** =========================
- * SMS RECEIPT VALIDATION (UI DEFENSIVE)
- * - Prevent "false success" toasts when backend returns 200 but receipts are FAILED/REFUNDED/empty.
- * - staffApi already normalizes, but we add UI-level validation as a safety net.
- * ========================= */
+type SmsSenderOption = "default" | "QUEUE" | "JRMSU" | "REGISTRAR" | "CASHIER" | "GUIDANCE" | "custom"
 
-function extractSemaphoreProviderResponseFromSmsResponse(res: any): unknown | undefined {
-    const anyRes: any = res
-    if (!anyRes || typeof anyRes !== "object") return undefined
+const SMS_SENDER_OPTIONS: Array<{ value: SmsSenderOption; label: string; hint?: string }> = [
+    { value: "default", label: "Default (server)", hint: "Use backend default sender name (recommended)." },
+    { value: "QUEUE", label: "QUEUE" },
+    { value: "JRMSU", label: "JRMSU" },
+    { value: "REGISTRAR", label: "REGISTRAR" },
+    { value: "CASHIER", label: "CASHIER" },
+    { value: "GUIDANCE", label: "GUIDANCE" },
+    { value: "custom", label: "Custom..." },
+]
 
-    // Some endpoints return the raw receipts array directly in `result`
-    if (Array.isArray(anyRes?.result)) return anyRes.result
-
-    // Others nest receipts under `result.providerResponse`
-    if (Array.isArray(anyRes?.result?.providerResponse)) return anyRes.result.providerResponse
-
-    // Rare older shapes (kept safe)
-    if (Array.isArray(anyRes?.providerResponse)) return anyRes.providerResponse
-    if (Array.isArray(anyRes?.receipts)) return anyRes.receipts
-    if (Array.isArray(anyRes?.result?.result)) return anyRes.result.result
-
-    return undefined
+function normalizeSmsSenderOption(v: unknown): SmsSenderOption {
+    const s = String(v ?? "").trim()
+    const allowed = new Set<SmsSenderOption>(["default", "QUEUE", "JRMSU", "REGISTRAR", "CASHIER", "GUIDANCE", "custom"])
+    return (allowed.has(s as any) ? (s as SmsSenderOption) : "default")
 }
 
-function formatSmsStatusSummary(summary?: Record<string, number>) {
+function formatStatusSummary(summary?: Record<string, number>) {
     if (!summary || typeof summary !== "object") return ""
     const entries = Object.entries(summary).filter(([, v]) => Number(v) > 0)
     if (!entries.length) return ""
-    entries.sort((a, b) => Number(b[1]) - Number(a[1]) || String(a[0]).localeCompare(String(b[0])))
-    return entries.map(([k, v]) => `${k}:${v}`).join(", ")
-}
-
-function joinToastDescription(parts: Array<string | null | undefined>) {
-    return parts
-        .map((p) => String(p ?? "").trim())
-        .filter(Boolean)
-        .join(" • ")
+    return entries
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([k, v]) => `${k}:${v}`)
+        .join(", ")
 }
 
 export default function StaffServingPage() {
@@ -548,7 +580,38 @@ export default function StaffServingPage() {
     const [smsBusy, setSmsBusy] = React.useState(false)
     const [smsUseDefaultMessage, setSmsUseDefaultMessage] = React.useState(true)
     const [smsCustomMessage, setSmsCustomMessage] = React.useState("")
-    const [smsSenderName, setSmsSenderName] = React.useState("")
+
+    // ✅ Sender name: dropdown + custom input
+    const [smsSenderOption, setSmsSenderOption] = React.useState<SmsSenderOption>("default")
+    const [smsSenderCustom, setSmsSenderCustom] = React.useState("")
+
+    const resolvedSenderName = React.useMemo(() => {
+        if (smsSenderOption === "custom") return String(smsSenderCustom || "").trim()
+        if (smsSenderOption === "default") return ""
+        return String(smsSenderOption || "").trim()
+    }, [smsSenderCustom, smsSenderOption])
+
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        try {
+            const savedOpt = window.localStorage.getItem("staff_sms_sender_option")
+            const savedCustom = window.localStorage.getItem("staff_sms_sender_custom")
+            if (savedOpt) setSmsSenderOption(normalizeSmsSenderOption(savedOpt))
+            if (savedCustom) setSmsSenderCustom(String(savedCustom))
+        } catch {
+            // ignore
+        }
+    }, [])
+
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        try {
+            window.localStorage.setItem("staff_sms_sender_option", smsSenderOption)
+            window.localStorage.setItem("staff_sms_sender_custom", smsSenderCustom)
+        } catch {
+            // ignore
+        }
+    }, [smsSenderCustom, smsSenderOption])
 
     const { voices } = useVoices()
     const { speak: speakWithPackage, stop: stopSpeech } = useSpeak({
@@ -715,83 +778,50 @@ export default function StaffServingPage() {
                     ...(senderName ? { senderName } : {}),
                 }
 
-                // ✅ NOTE: staffApi SMS endpoints use throwOnError:false
-                // so "provider failures" may return 200 with `{ ok:false }`.
-                const res: any = await staffApi.sendTicketCalledSms(ticket._id, payload)
+                // ✅ IMPORTANT:
+                // staffApi SMS calls are configured with throwOnError=false.
+                // That means failures can still return HTTP 200 with { ok:false }.
+                // We MUST validate `ok/outcome/receipts` here to prevent false success toasts.
+                const res = await staffApi.sendTicketCalledSms(ticket._id, payload)
 
-                // ---------- Defensive receipt validation (prevents false success) ----------
-                const providerResponse = extractSemaphoreProviderResponseFromSmsResponse(res)
-                const receipt = providerResponse !== undefined ? validateSemaphoreReceipts(providerResponse) : null
+                const summaryText = formatStatusSummary(res?.statusSummary)
+                const summarySuffix = summaryText ? ` (${summaryText})` : ""
 
-                const rawOutcome = String(res?.outcome ?? "").trim().toLowerCase()
-                const rawOk = res?.ok === true
+                // ✅ Confirmed success only when normalized response says so
+                const confirmedSent = res?.ok === true && res?.outcome === "sent"
 
-                // Treat "skipped" as a handled outcome (not success toast)
-                const isSkipped = rawOutcome === "skipped"
-
-                // If receipts exist, require them to be OK for a "sent" success
-                const receiptOk = receipt?.ok === true
-                const canConfirmByReceipt = receipt !== null
-
-                const statusSummary = (res?.statusSummary ?? receipt?.statusSummary) as Record<string, number> | undefined
-                const receiptsCount =
-                    typeof res?.receiptsCount === "number"
-                        ? (res.receiptsCount as number)
-                        : typeof receipt?.receiptsCount === "number"
-                          ? receipt.receiptsCount
-                          : undefined
-
-                const number = String(res?.number ?? "").trim()
-                const statusText = formatSmsStatusSummary(statusSummary)
-                const metaDesc = joinToastDescription([
-                    number ? `Number: ${number}` : null,
-                    typeof receiptsCount === "number" ? `Receipts: ${receiptsCount}` : null,
-                    statusText ? `Status: ${statusText}` : null,
-                ])
-
-                const reasonText = String(res?.message ?? res?.reason ?? res?.error ?? "").trim()
-
-                // ✅ Strict success rule:
-                // - If receipts exist: must be receiptOk AND server ok AND not skipped
-                // - If receipts do NOT exist: do NOT show success (cannot confirm delivery)
-                const isConfirmedSent =
-                    !isSkipped &&
-                    rawOk === true &&
-                    (canConfirmByReceipt ? receiptOk : false) &&
-                    (rawOutcome ? rawOutcome === "sent" : true)
-
-                if (isConfirmedSent) {
+                if (confirmedSent) {
                     if (opts?.toastOnSuccess !== false) {
-                        toast.success(`SMS confirmed for #${ticket.queueNumber}.`, {
-                            description: metaDesc || "Provider receipt confirmed delivery status.",
-                        })
+                        toast.success(
+                            `SMS sent for #${ticket.queueNumber}${res?.number ? ` to ${res.number}` : ""}.${summarySuffix}`,
+                        )
                     }
                     return true
                 }
 
-                if (isSkipped) {
-                    toast.message(`SMS skipped for #${ticket.queueNumber}.`, {
-                        description:
-                            joinToastDescription([
-                                reasonText || null,
-                                metaDesc || null,
-                            ]) || "SMS was skipped by server rules (e.g., missing/opt-out number).",
-                    })
-                    return true
+                // Skipped flows (opt-out / no number / policy) should not appear as "success"
+                if (res?.outcome === "skipped") {
+                    toast.message(res?.message || res?.reason || "SMS was skipped by server policy.")
+                    return false
                 }
 
-                // Not confirmed / failed / unknown
-                const receiptError = receipt?.ok === false ? receipt.error : ""
-                const failDesc =
-                    joinToastDescription([
-                        reasonText || receiptError || null,
-                        metaDesc || null,
-                    ]) || "SMS was not confirmed by the provider receipt."
+                // If backend claims ok=true but we can't verify receipts, treat as NOT confirmed (no success toast)
+                const hasReceiptsSignal =
+                    typeof res?.receiptsCount === "number" ? res.receiptsCount > 0 : Boolean(res?.statusSummary && Object.keys(res.statusSummary).length)
 
-                toast.error(`SMS not confirmed for #${ticket.queueNumber}.`, {
-                    description: failDesc,
-                })
+                if (res?.ok === true && !hasReceiptsSignal) {
+                    toast.message("SMS request was accepted, but provider receipt was not returned. Not confirmed.")
+                    return false
+                }
 
+                // Explicit failure
+                const errMsg =
+                    res?.message ||
+                    res?.reason ||
+                    res?.error ||
+                    "SMS not confirmed by provider receipt."
+
+                toast.error(`${errMsg}${summarySuffix}`)
                 return false
             } catch (e: any) {
                 toast.error(e?.message ?? "Failed to send SMS.")
@@ -817,7 +847,7 @@ export default function StaffServingPage() {
 
         const ok = await sendCalledSms(current, {
             message: custom || undefined,
-            senderName: smsSenderName.trim() || undefined,
+            senderName: resolvedSenderName || undefined,
             toastOnSuccess: true,
         })
 
@@ -826,7 +856,7 @@ export default function StaffServingPage() {
         setSmsDialogOpen(false)
         setSmsUseDefaultMessage(true)
         setSmsCustomMessage("")
-    }, [current, sendCalledSms, smsCustomMessage, smsSenderName, smsUseDefaultMessage])
+    }, [current, resolvedSenderName, sendCalledSms, smsCustomMessage, smsUseDefaultMessage])
 
     const loadMonitorOptions = React.useCallback(async (silent = false) => {
         if (typeof window === "undefined") return
@@ -1033,7 +1063,7 @@ export default function StaffServingPage() {
             announceCall(res.ticket.queueNumber)
 
             if (autoSmsOnCall) {
-                await sendCalledSms(res.ticket, { toastOnSuccess: true })
+                await sendCalledSms(res.ticket, { toastOnSuccess: true, senderName: resolvedSenderName || undefined })
             }
 
             await refresh()
@@ -1229,8 +1259,9 @@ export default function StaffServingPage() {
                                                     {queueNumberLabel(row.nowServing?.queueNumber)}
                                                 </div>
 
+                                                {/* ✅ Privacy: do NOT display mobile on public board */}
                                                 <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide">
-                                                    {p.display || p.name}
+                                                    {participantBoardLabel(p)}
                                                 </div>
 
                                                 <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
@@ -1359,13 +1390,38 @@ export default function StaffServingPage() {
 
                                         <div className="grid gap-4 py-1">
                                             <div className="grid gap-2">
-                                                <Label htmlFor="smsSenderName">Sender name (optional)</Label>
-                                                <Input
-                                                    id="smsSenderName"
-                                                    value={smsSenderName}
-                                                    onChange={(e) => setSmsSenderName(e.target.value)}
-                                                    placeholder="e.g. QUEUE"
-                                                />
+                                                <Label htmlFor="smsSenderSelect">Sender name</Label>
+                                                <Select
+                                                    value={smsSenderOption}
+                                                    onValueChange={(v) => setSmsSenderOption(normalizeSmsSenderOption(v))}
+                                                >
+                                                    <SelectTrigger id="smsSenderSelect" className="w-full">
+                                                        <SelectValue placeholder="Select sender" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {SMS_SENDER_OPTIONS.map((opt) => (
+                                                            <SelectItem key={opt.value} value={opt.value}>
+                                                                {opt.label}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+
+                                                {smsSenderOption === "custom" ? (
+                                                    <Input
+                                                        value={smsSenderCustom}
+                                                        onChange={(e) => setSmsSenderCustom(e.target.value)}
+                                                        placeholder="Type custom sender name..."
+                                                    />
+                                                ) : null}
+
+                                                <div className="text-xs text-muted-foreground">
+                                                    {smsSenderOption === "default"
+                                                        ? "Uses backend default sender name."
+                                                        : smsSenderOption === "custom"
+                                                          ? "Custom sender names may be restricted by your SMS provider."
+                                                          : "Preset sender selected."}
+                                                </div>
                                             </div>
 
                                             <div className="flex items-center justify-between rounded-md border px-3 py-2">
@@ -1524,7 +1580,7 @@ export default function StaffServingPage() {
                         </div>
 
                         <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-12">
-                            <div className="lg:col-span-3">
+                            <div className="lg:col-span-4">
                                 <Label htmlFor="monitorSelect" className="mb-2 block text-sm">Display monitor</Label>
                                 <Select
                                     value={selectedMonitorId || undefined}
@@ -1560,7 +1616,7 @@ export default function StaffServingPage() {
                                 </Select>
                             </div>
 
-                            <div className="lg:col-span-3">
+                            <div className="lg:col-span-4">
                                 <Label htmlFor="voiceTypeSelect" className="mb-2 block text-sm">
                                     Announcement voice (English • United States preferred)
                                 </Label>
@@ -1585,6 +1641,17 @@ export default function StaffServingPage() {
 
                             <div className="flex flex-col justify-end gap-2 lg:col-span-2">
                                 <Button
+                                    className="w-full gap-2"
+                                    onClick={openBoardOnSelectedMonitor}
+                                    disabled={!monitorOptions.length}
+                                >
+                                    <ExternalLink className="h-4 w-4" />
+                                    Open queue board
+                                </Button>
+                            </div>
+
+                            <div className="flex flex-col justify-end gap-2 lg:col-span-2">
+                                <Button
                                     variant="outline"
                                     className="w-full gap-2"
                                     onClick={() => void loadMonitorOptions(false)}
@@ -1595,15 +1662,38 @@ export default function StaffServingPage() {
                                 </Button>
                             </div>
 
-                            <div className="flex flex-col justify-end gap-2 lg:col-span-2">
-                                <Button
-                                    className="w-full gap-2"
-                                    onClick={openBoardOnSelectedMonitor}
-                                    disabled={!monitorOptions.length}
-                                >
-                                    <ExternalLink className="h-4 w-4" />
-                                    Open queue board
-                                </Button>
+                            <div className="lg:col-span-10">
+                                <Label htmlFor="smsSenderSelectInline" className="mb-2 block text-sm">SMS sender name</Label>
+                                <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                                    <Select
+                                        value={smsSenderOption}
+                                        onValueChange={(v) => setSmsSenderOption(normalizeSmsSenderOption(v))}
+                                    >
+                                        <SelectTrigger id="smsSenderSelectInline" className="w-full md:w-80">
+                                            <SelectValue placeholder="Select sender" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {SMS_SENDER_OPTIONS.map((opt) => (
+                                                <SelectItem key={opt.value} value={opt.value}>
+                                                    {opt.label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+
+                                    {smsSenderOption === "custom" ? (
+                                        <Input
+                                            value={smsSenderCustom}
+                                            onChange={(e) => setSmsSenderCustom(e.target.value)}
+                                            placeholder="Custom sender..."
+                                            className="w-full md:w-80"
+                                        />
+                                    ) : (
+                                        <div className="text-xs text-muted-foreground">
+                                            {smsSenderOption === "default" ? "Backend default sender will be used." : "Preset sender selected."}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
@@ -1617,7 +1707,7 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                SMS engine: Semaphore via backend • {autoSmsOnCall ? "Auto send is enabled when calling next." : "Manual send mode is enabled."}
+                                SMS engine: Semaphore via backend • Receipt validation enabled • {autoSmsOnCall ? "Auto send is enabled when calling next." : "Manual send mode is enabled."}
                             </div>
                         </div>
                     </CardHeader>
@@ -1804,8 +1894,10 @@ export default function StaffServingPage() {
                                                             <div className="mt-2 text-center text-[clamp(3.4rem,8vw,6rem)] font-bold leading-none">
                                                                 {queueNumberLabel(w.nowServing?.queueNumber)}
                                                             </div>
+
+                                                            {/* ✅ Privacy: do NOT display mobile in "board-like" preview */}
                                                             <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide">
-                                                                {p.display || p.name}
+                                                                {participantBoardLabel(p)}
                                                             </div>
 
                                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
