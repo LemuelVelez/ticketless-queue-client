@@ -158,7 +158,7 @@
   }
 
   [data-sonner-toast][data-rich-colors="false"] [data-description] {
-    color: var(--muted-foreground);
+    color: var(--primary);
   }
 
   /* WebKit (Chrome, Edge, Safari) */
