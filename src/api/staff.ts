@@ -369,8 +369,7 @@ function normalizeWindowPayload(windowRaw: any): ServiceWindow | null {
     const id = toIdString(windowRaw?._id ?? windowRaw?.id)
     if (!id) return null
 
-    const numberRaw =
-        typeof windowRaw?.number === "number" ? Number(windowRaw.number) : Number(windowRaw?.number ?? NaN)
+    const numberRaw = typeof windowRaw?.number === "number" ? Number(windowRaw.number) : Number(windowRaw?.number ?? NaN)
 
     const department = toIdString(windowRaw?.department)
     const departmentIds = Array.isArray(windowRaw?.departmentIds)
@@ -384,10 +383,7 @@ function normalizeWindowPayload(windowRaw: any): ServiceWindow | null {
         id,
         department: department || null,
         departmentIds,
-        name:
-            typeof windowRaw?.name === "string" && windowRaw.name.trim()
-                ? String(windowRaw.name)
-                : "Window",
+        name: typeof windowRaw?.name === "string" && windowRaw.name.trim() ? String(windowRaw.name) : "Window",
         number: Number.isFinite(numberRaw) ? numberRaw : 0,
         enabled: windowRaw?.enabled !== false,
         createdAt: typeof windowRaw?.createdAt === "string" ? windowRaw.createdAt : undefined,
@@ -522,9 +518,7 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
     const label = String(t?.participantLabel ?? "").trim()
 
     const participantFullName =
-        String(t?.participantFullName ?? "").trim() ||
-        (selectionName ? selectionName : "") ||
-        (isLikelyHumanName(label, identifier) ? label : "")
+        String(t?.participantFullName ?? "").trim() || (selectionName ? selectionName : "") || (isLikelyHumanName(label, identifier) ? label : "")
 
     const finalFullName = participantFullName ? participantFullName : null
 
@@ -538,15 +532,10 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
     // ✅ Mobile should show for anyone if we can infer it
     const phone = String(t?.phone ?? "").trim()
     const participantMobileNumber =
-        String(t?.participantMobileNumber ?? "").trim() ||
-        (phone ? phone : "") ||
-        (looksLikePhoneNumber(identifier) ? identifier : "")
+        String(t?.participantMobileNumber ?? "").trim() || (phone ? phone : "") || (looksLikePhoneNumber(identifier) ? identifier : "")
 
     const baseName =
-        (finalFullName && finalFullName.trim()) ||
-        (isLikelyHumanName(label, identifier) ? label : "") ||
-        (identifier ? identifier : "") ||
-        "Participant"
+        (finalFullName && finalFullName.trim()) || (isLikelyHumanName(label, identifier) ? label : "") || (identifier ? identifier : "") || "Participant"
 
     const participantDisplay =
         String(t?.participantDisplay ?? "").trim() ||
@@ -821,11 +810,24 @@ export type StaffSmsResponse = {
 
     result?: any
     error?: string
+
+    // ✅ optional diagnostic fields (safe to ignore)
+    httpStatus?: number
+    url?: string
+    path?: string
+    method?: string
+    detail?: any
 }
 
 const STAFF_AUTH = { auth: "staff" as const }
 // ✅ For SMS + provider-style endpoints, never throw on non-2xx (let UI render `{ ok:false, ... }`)
 const STAFF_AUTH_NO_THROW = { auth: "staff" as const, throwOnError: false as const }
+
+function snippetText(val: unknown, max = 220) {
+    const s = String(val ?? "").replace(/\s+/g, " ").trim()
+    if (!s) return ""
+    return s.length > max ? `${s.slice(0, max)}…` : s
+}
 
 /**
  * ✅ Client-side receipt validation (defensive)
@@ -850,8 +852,49 @@ function extractSemaphoreProviderResponse(res: StaffSmsResponse): unknown | unde
     return undefined
 }
 
-function normalizeStaffSmsResponse(res: StaffSmsResponse): StaffSmsResponse {
-    const next: StaffSmsResponse = { ...(res || ({} as any)) }
+function coerceStaffSmsResponse(input: unknown): StaffSmsResponse {
+    if (input && typeof input === "object" && !Array.isArray(input)) {
+        const obj: any = { ...(input as any) }
+
+        // ✅ Avoid type conflict: some safe network payloads include numeric `status` (HTTP status),
+        // but `status` in StaffSmsResponse is reserved for ticket status (CALLED/HOLD/OUT/SERVED).
+        if (typeof obj.status === "number") {
+            obj.httpStatus = obj.status
+            delete obj.status
+        }
+
+        return obj as StaffSmsResponse
+    }
+
+    const raw =
+        typeof input === "string"
+            ? input
+            : input === null || input === undefined
+              ? ""
+              : (() => {
+                    try {
+                        return JSON.stringify(input)
+                    } catch {
+                        return String(input)
+                    }
+                })()
+
+    const msg = raw ? `Invalid SMS response from server: "${snippetText(raw)}"` : "Invalid SMS response from server."
+
+    return {
+        ok: false,
+        provider: "semaphore",
+        outcome: "failed",
+        reason: "invalid_response",
+        error: "invalid_response",
+        message: msg,
+        result: input as any,
+    }
+}
+
+function normalizeStaffSmsResponse(res: unknown): StaffSmsResponse {
+    const safe = coerceStaffSmsResponse(res)
+    const next: StaffSmsResponse = { ...(safe || ({} as any)) }
 
     // Ensure UI always has something to display
     if (!next.message) next.message = next.reason || next.error || ""
@@ -973,41 +1016,40 @@ export const staffApi = {
      * Legacy ticket operations (kept for backwards compatibility)
      */
     markServedLegacy: (ticketId: string) =>
-        api
-            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/served`, {}, STAFF_AUTH)
-            .then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/served`, {}, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     holdNoShowLegacy: (ticketId: string) =>
-        api
-            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/hold`, {}, STAFF_AUTH)
-            .then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/hold`, {}, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     returnFromHold: (ticketId: string) =>
-        api
-            .postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/return`, {}, STAFF_AUTH)
-            .then((res) => normalizeTicketResponse(res)),
+        api.postData<TicketResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/return`, {}, STAFF_AUTH).then((res) => normalizeTicketResponse(res)),
 
     // ✅ SMS endpoints (never throw on provider failures)
     sendSms: (payload: StaffSendSmsRequest) =>
-        api.postData<StaffSmsResponse>("/staff/sms/send", payload, STAFF_AUTH_NO_THROW).then((res) => normalizeStaffSmsResponse(res)),
+        api.postData<unknown>("/staff/sms/send", payload, STAFF_AUTH_NO_THROW).then((res) => normalizeStaffSmsResponse(res)),
 
-    // Legacy alias: sends CALLED status (or custom message if provided)
+    /**
+     * ✅ Legacy alias name, but now calls the unified safe endpoint:
+     * POST /staff/tickets/:id/sms  with { status:"CALLED", ...payload }
+     *
+     * This prevents /sms-called-specific failures and always returns safe JSON (ok:false) instead of throwing.
+     */
     sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketSmsBaseRequest) =>
         api
-            .postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}, STAFF_AUTH_NO_THROW)
+            .postData<unknown>(
+                `/staff/tickets/${encodeURIComponent(ticketId)}/sms`,
+                { ...(payload ?? {}), status: "CALLED" },
+                STAFF_AUTH_NO_THROW
+            )
             .then((res) => normalizeStaffSmsResponse(res)),
 
     // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED) + optional custom message override
     sendTicketStatusSms: (ticketId: string, payload: StaffSendTicketStatusSmsRequest) =>
-        api
-            .postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload, STAFF_AUTH_NO_THROW)
-            .then((res) => normalizeStaffSmsResponse(res)),
+        api.postData<unknown>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload, STAFF_AUTH_NO_THROW).then((res) => normalizeStaffSmsResponse(res)),
 
     // ✅ Best DX: unified alias (status OR custom message, defaults to CALLED if none)
     sendTicketSms: (ticketId: string, payload?: StaffSendTicketSmsRequest) =>
-        api
-            .postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms`, payload ?? {}, STAFF_AUTH_NO_THROW)
-            .then((res) => normalizeStaffSmsResponse(res)),
+        api.postData<unknown>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms`, payload ?? {}, STAFF_AUTH_NO_THROW).then((res) => normalizeStaffSmsResponse(res)),
 
     // ✅ Staff reports (scoped to assigned department on backend)
     getReportsSummary: (opts?: { from?: string; to?: string }) =>

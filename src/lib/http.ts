@@ -466,12 +466,25 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
             credentials: resolveCredentials(url, credentials),
         })
     } catch (err: any) {
-        throw new ApiError(
-            `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`,
-            0,
-            err,
-            { method, url, path }
-        )
+        const msg = `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`
+
+        // ✅ When caller explicitly opts out of throwing, return a safe JSON-ish payload
+        // (prevents UI crashes on SMS endpoints that are designed to be "no throw".)
+        if (throwOnError === false) {
+            return ({
+                ok: false,
+                error: "network_error",
+                reason: "network_error",
+                message: msg,
+                status: 0,
+                method,
+                url,
+                path,
+                detail: String(err?.message || err || ""),
+            } as any) as T
+        }
+
+        throw new ApiError(msg, 0, err, { method, url, path })
     }
 
     const data = await parseResponseSafe(res)
