@@ -31,6 +31,44 @@ export class ApiError extends Error {
 type QueryParamValue = string | number | boolean | null | undefined
 
 /**
+ * ✅ Public-display friendly participant name picker (frontend mirror of displayController behavior).
+ * Tries in order:
+ * - ticket.participantFullName / ticket.participantLabel
+ * - ticket.participant.fullName / ticket.participant.name
+ * - common fallbacks: fullName/displayName/name
+ * - participantDisplay ("Full Name • StudentId • Mobile") -> take first segment
+ */
+export function pickParticipantFullName(anyObj?: any): string | undefined {
+    if (!anyObj) return undefined
+
+    const directCandidates = [
+        anyObj.participantFullName,
+        anyObj.participantLabel,
+        anyObj?.participant?.fullName,
+        anyObj?.participant?.name,
+        anyObj.fullName,
+        anyObj.displayName,
+        anyObj.name,
+    ]
+        .map((x) => String(x ?? "").trim())
+        .filter(Boolean)
+
+    if (directCandidates.length) return directCandidates[0]
+
+    const composed = [anyObj.firstName, anyObj.middleName, anyObj.lastName]
+        .map((x) => String(x ?? "").trim())
+        .filter(Boolean)
+        .join(" ")
+        .trim()
+    if (composed) return composed
+
+    const display = String(anyObj.participantDisplay ?? "").trim()
+    if (display) return display.split("•")[0]?.trim() || display
+
+    return undefined
+}
+
+/**
  * ✅ Supports:
  * - Plain payload: T
  * - Wrapped payload: { data: T }

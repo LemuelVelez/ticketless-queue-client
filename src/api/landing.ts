@@ -7,8 +7,22 @@ export type TicketView = {
     dateKey: string
     queueNumber: number
     status: string
-    department: { id: string; name: string; code?: string; transactionManager: string }
-    participant: { studentId: string; name?: string; phone?: string; type?: TicketParticipantType }
+    department: { id: string; name: string; code?: string; transactionManager?: string }
+    participant: {
+        studentId?: string
+        name?: string
+        fullName?: string
+        phone?: string
+        type?: TicketParticipantType
+    }
+    /**
+     * ✅ New fields from updated displayController:
+     * - participantFullName (computed/backfilled)
+     * - participantLabel (persisted by queue.service.ts)
+     */
+    participantFullName?: string
+    participantLabel?: string
+    participantDisplay?: string
     window?: { id: string; name: string; number: number }
     createdAt: string
     updatedAt: string
@@ -110,11 +124,12 @@ export const landingApi = {
 
     /**
      * PUBLIC DISPLAY: departments under manager (names first).
-     * GET /display/manager/:manager/departments
+     * ✅ Updated route per publicRoutes.ts:
+     * GET /display/:manager/departments
      */
     async listDepartmentsByManager(manager: string): Promise<PublicManagerDepartmentsResponse> {
         const safe = encodeURIComponent(String(manager ?? "").trim())
-        const res = await api.get<PublicManagerDepartmentsResponse>(`${DISPLAY_BASE}/manager/${safe}/departments`, {
+        const res = await api.get<PublicManagerDepartmentsResponse>(`${DISPLAY_BASE}/${safe}/departments`, {
             auth: false,
         })
         return unwrap<PublicManagerDepartmentsResponse>(res)
@@ -122,21 +137,23 @@ export const landingApi = {
 
     /**
      * PUBLIC DISPLAY: windows under manager (includes mapped departments).
-     * GET /display/manager/:manager/windows
+     * ✅ Updated route per publicRoutes.ts:
+     * GET /display/:manager/windows
      */
     async listWindowsByManager(manager: string): Promise<PublicManagerWindowsResponse> {
         const safe = encodeURIComponent(String(manager ?? "").trim())
-        const res = await api.get<PublicManagerWindowsResponse>(`${DISPLAY_BASE}/manager/${safe}/windows`, { auth: false })
+        const res = await api.get<PublicManagerWindowsResponse>(`${DISPLAY_BASE}/${safe}/windows`, { auth: false })
         return unwrap<PublicManagerWindowsResponse>(res)
     },
 
     /**
      * PUBLIC DISPLAY: centralized state for big screen.
-     * GET /display/manager/:manager/state?since=ISO
+     * ✅ Updated route per publicRoutes.ts:
+     * GET /display/:manager/state?since=ISO
      */
     async getPublicDisplayState(manager: string, since?: string): Promise<PublicDisplayState> {
         const safe = encodeURIComponent(String(manager ?? "").trim())
-        const res = await api.get<PublicDisplayState>(`${DISPLAY_BASE}/manager/${safe}/state`, {
+        const res = await api.get<PublicDisplayState>(`${DISPLAY_BASE}/${safe}/state`, {
             auth: false,
             params: since ? { since } : undefined,
         })
@@ -145,12 +162,16 @@ export const landingApi = {
 
     /**
      * PUBLIC DISPLAY: announcements only (for voice polling).
-     * GET /display/manager/:manager/announcements?since=ISO
+     * ✅ Updated route per publicRoutes.ts:
+     * GET /display/:manager/announcements?since=ISO
      */
-    async getManagerAnnouncements(manager: string, since?: string): Promise<Pick<PublicDisplayState, "manager" | "dateKey" | "serverTime" | "announcements">> {
+    async getManagerAnnouncements(
+        manager: string,
+        since?: string
+    ): Promise<Pick<PublicDisplayState, "manager" | "dateKey" | "serverTime" | "announcements">> {
         const safe = encodeURIComponent(String(manager ?? "").trim())
         const res = await api.get<Pick<PublicDisplayState, "manager" | "dateKey" | "serverTime" | "announcements">>(
-            `${DISPLAY_BASE}/manager/${safe}/announcements`,
+            `${DISPLAY_BASE}/${safe}/announcements`,
             {
                 auth: false,
                 params: since ? { since } : undefined,

@@ -3,6 +3,7 @@ import { toast } from "sonner"
 import { Expand, History, Pause, Play, RefreshCcw, WifiOff, X } from "lucide-react"
 
 import { landingApi, type Announcement, type PublicDisplayState, type TicketView } from "@/api/landing"
+import { pickParticipantFullName } from "@/lib/http"
 import { cn } from "@/lib/utils"
 
 import { Badge } from "@/components/ui/badge"
@@ -39,8 +40,11 @@ function formatTime(iso?: string) {
 
 function getTicketDisplayName(t?: TicketView) {
     if (!t) return "—"
-    const n = String(t.participant?.name ?? "").trim()
-    if (n) return n
+
+    // ✅ Names first (matches updated displayController behavior)
+    const fullName = pickParticipantFullName(t)
+    if (fullName) return fullName
+
     const sid = String(t.participant?.studentId ?? "").trim()
     return sid ? `ID: ${sid}` : "—"
 }
