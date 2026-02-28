@@ -3,6 +3,7 @@ import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
 import {
+    AlertTriangle,
     CheckCircle2,
     ExternalLink,
     LayoutGrid,
@@ -432,6 +433,15 @@ function defaultSmsCalledMessage(queueNumber: number, windowNumber?: number) {
     return `Queue update: Your ticket #${queueNumber} is now being served${windowText}.`
 }
 
+/**
+ * ✅ TEMPORARY: SMS is currently unavailable while provider credentials + request verification are being processed.
+ * We are verifying both Semaphore and Twilio; whichever passes first will be used and integrated promptly.
+ */
+const SMS_SENDING_AVAILABLE = false
+
+const SMS_UNAVAILABLE_NOTICE =
+    "Send SMS is currently unavailable at the moment due to credential and request verification in both Semaphore and Twilio. Whichever provider passes verification first will be used and integrated promptly."
+
 // ✅ Normalize TTS text (clear spacing + punctuation-driven pauses)
 function normalizeTtsText(text: string) {
     const cleaned = String(text || "")
@@ -566,6 +576,11 @@ export default function StaffServingPage() {
         if (smsSenderOption === "default") return ""
         return String(smsSenderOption || "").trim()
     }, [smsSenderCustom, smsSenderOption])
+
+    React.useEffect(() => {
+        // ✅ Ensure UX stays correct while SMS is temporarily disabled.
+        if (!SMS_SENDING_AVAILABLE && autoSmsOnCall) setAutoSmsOnCall(false)
+    }, [autoSmsOnCall])
 
     React.useEffect(() => {
         if (typeof window === "undefined") return
@@ -726,6 +741,11 @@ export default function StaffServingPage() {
 
     const sendCalledSms = React.useCallback(
         async (ticket: TicketType, opts?: { message?: string; senderName?: string; toastOnSuccess?: boolean }) => {
+            if (!SMS_SENDING_AVAILABLE) {
+                toast.message(SMS_UNAVAILABLE_NOTICE)
+                return false
+            }
+
             if (!ticket?._id) {
                 toast.error("No active ticket selected for SMS.")
                 return false
@@ -850,6 +870,11 @@ export default function StaffServingPage() {
     )
 
     const onSendSmsFromDialog = React.useCallback(async () => {
+        if (!SMS_SENDING_AVAILABLE) {
+            toast.message(SMS_UNAVAILABLE_NOTICE)
+            return
+        }
+
         if (!current?._id) {
             toast.message("No active ticket selected for SMS.")
             return
@@ -1072,7 +1097,7 @@ export default function StaffServingPage() {
             toast.success(`Called #${res.ticket.queueNumber}`)
             announceCall(res.ticket.queueNumber)
 
-            if (autoSmsOnCall) {
+            if (autoSmsOnCall && SMS_SENDING_AVAILABLE) {
                 await sendCalledSms(res.ticket, { toastOnSuccess: true, senderName: resolvedSenderName || undefined })
             }
 
@@ -1158,6 +1183,16 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="mt-2 text-sm text-muted-foreground">Multi-window queue display (3+ split panes) • auto refresh every 5s</div>
+
+                            {!SMS_SENDING_AVAILABLE ? (
+                                <div className="mt-3 flex items-start gap-2 rounded-md border bg-muted p-3 text-sm text-muted-foreground">
+                                    <AlertTriangle className="mt-0.5 h-4 w-4 text-foreground" />
+                                    <div className="min-w-0">
+                                        <div className="font-medium text-foreground">SMS temporarily unavailable</div>
+                                        <div className="mt-1">{SMS_UNAVAILABLE_NOTICE}</div>
+                                    </div>
+                                </div>
+                            ) : null}
                         </div>
 
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -1317,7 +1352,7 @@ export default function StaffServingPage() {
                                     <DialogTrigger asChild>
                                         <Button
                                             variant="outline"
-                                            disabled={busy || smsBusy || !assignedOk || !current?._id}
+                                            disabled={busy || smsBusy || !assignedOk || !current?._id || !SMS_SENDING_AVAILABLE}
                                             className="w-full gap-2 sm:w-auto"
                                         >
                                             <MessageSquare className="h-4 w-4" />
@@ -1328,7 +1363,7 @@ export default function StaffServingPage() {
                                         <DialogHeader>
                                             <DialogTitle>Send SMS notification</DialogTitle>
                                             <DialogDescription>
-                                                Notify the current ticket via Semaphore SMS.
+                                                SMS notifications are currently unavailable.
                                                 {current ? (
                                                     <>
                                                         {" "}
@@ -1343,6 +1378,14 @@ export default function StaffServingPage() {
                                         </DialogHeader>
 
                                         <div className="grid gap-4 py-1">
+                                            <div className="flex items-start gap-2 rounded-md border bg-muted p-3 text-sm text-muted-foreground">
+                                                <AlertTriangle className="mt-0.5 h-4 w-4 text-foreground" />
+                                                <div className="min-w-0">
+                                                    <div className="font-medium text-foreground">SMS temporarily unavailable</div>
+                                                    <div className="mt-1">{SMS_UNAVAILABLE_NOTICE}</div>
+                                                </div>
+                                            </div>
+
                                             <div className="grid gap-2">
                                                 <Label htmlFor="smsSenderSelect">Sender name</Label>
                                                 <Select value={smsSenderOption} onValueChange={(v) => setSmsSenderOption(normalizeSmsSenderOption(v))}>
@@ -1383,6 +1426,7 @@ export default function StaffServingPage() {
                                                     id="smsUseDefaultMessage"
                                                     checked={smsUseDefaultMessage}
                                                     onCheckedChange={(v) => setSmsUseDefaultMessage(Boolean(v))}
+                                                    disabled={!SMS_SENDING_AVAILABLE}
                                                 />
                                             </div>
 
@@ -1399,6 +1443,7 @@ export default function StaffServingPage() {
                                                         onChange={(e) => setSmsCustomMessage(e.target.value)}
                                                         placeholder="Type your custom SMS message..."
                                                         rows={4}
+                                                        disabled={!SMS_SENDING_AVAILABLE}
                                                     />
                                                 </div>
                                             )}
@@ -1411,7 +1456,7 @@ export default function StaffServingPage() {
                                             <Button
                                                 type="button"
                                                 onClick={() => void onSendSmsFromDialog()}
-                                                disabled={smsBusy || !current?._id}
+                                                disabled={!SMS_SENDING_AVAILABLE || smsBusy || !current?._id}
                                                 className="gap-2"
                                             >
                                                 <Send className="h-4 w-4" />
@@ -1431,7 +1476,16 @@ export default function StaffServingPage() {
                                 <Badge variant="secondary">Window: {windowInfo ? `${windowInfo.name} (#${windowInfo.number})` : "—"}</Badge>
                                 <Badge variant="secondary">Manager: {snapshot?.board?.transactionManager || "—"}</Badge>
                                 <Badge variant="secondary">Managed windows: {snapshot?.board?.windows?.length ?? 0}</Badge>
-                                <Badge variant="secondary">SMS: {smsBusy ? "Sending..." : autoSmsOnCall ? "Auto on call" : "Manual"}</Badge>
+                                <Badge variant="secondary">
+                                    SMS:{" "}
+                                    {!SMS_SENDING_AVAILABLE
+                                        ? "Unavailable"
+                                        : smsBusy
+                                          ? "Sending..."
+                                          : autoSmsOnCall
+                                            ? "Auto on call"
+                                            : "Manual"}
+                                </Badge>
                                 {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
                                 {!voiceSupported ? <Badge variant="secondary">Voice unsupported</Badge> : null}
                             </div>
@@ -1459,9 +1513,9 @@ export default function StaffServingPage() {
                                 <div className="flex items-center gap-2 rounded-md border px-3 py-2">
                                     <Switch
                                         id="autoSmsOnCall"
-                                        checked={autoSmsOnCall}
+                                        checked={SMS_SENDING_AVAILABLE ? autoSmsOnCall : false}
                                         onCheckedChange={(v) => setAutoSmsOnCall(Boolean(v))}
-                                        disabled={busy || smsBusy || !assignedOk}
+                                        disabled={busy || smsBusy || !assignedOk || !SMS_SENDING_AVAILABLE}
                                     />
                                     <Label htmlFor="autoSmsOnCall" className="text-sm">
                                         Auto SMS on call
@@ -1469,6 +1523,16 @@ export default function StaffServingPage() {
                                 </div>
                             </div>
                         </div>
+
+                        {!SMS_SENDING_AVAILABLE ? (
+                            <div className="flex items-start gap-2 rounded-md border bg-muted p-3 text-sm text-muted-foreground">
+                                <AlertTriangle className="mt-0.5 h-4 w-4 text-foreground" />
+                                <div className="min-w-0">
+                                    <div className="font-medium text-foreground">SMS temporarily unavailable</div>
+                                    <div className="mt-1">{SMS_UNAVAILABLE_NOTICE}</div>
+                                </div>
+                            </div>
+                        ) : null}
 
                         <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-2">
                             <div>
@@ -1613,8 +1677,12 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="lg:col-span-12 text-xs text-muted-foreground">
-                                SMS engine: Semaphore via backend • Receipt validation enabled •{" "}
-                                {autoSmsOnCall ? "Auto send is enabled when calling next." : "Manual send mode is enabled."}
+                                SMS engine:{" "}
+                                {!SMS_SENDING_AVAILABLE
+                                    ? "Temporarily unavailable — provider credential/request verification in progress (Semaphore + Twilio). First verified will be integrated promptly."
+                                    : autoSmsOnCall
+                                      ? "Auto send is enabled when calling next."
+                                      : "Manual send mode is enabled."}
                             </div>
                         </div>
                     </CardHeader>
@@ -1668,7 +1736,7 @@ export default function StaffServingPage() {
                                                         type="button"
                                                         variant="outline"
                                                         onClick={() => setSmsDialogOpen(true)}
-                                                        disabled={busy || smsBusy || !current?._id}
+                                                        disabled={busy || smsBusy || !current?._id || !SMS_SENDING_AVAILABLE}
                                                         className="w-full gap-2 sm:w-auto"
                                                     >
                                                         <MessageSquare className="h-4 w-4" />
