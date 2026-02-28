@@ -69,6 +69,82 @@ export function pickParticipantFullName(anyObj?: any): string | undefined {
 }
 
 /**
+ * ✅ Transaction-purpose picker (frontend mirror of staffController/queueManagement behavior).
+ * Tries in order:
+ * - transactionPurpose / purpose / queuePurpose
+ * - transaction.purpose
+ * - transactions.purpose / transactions.transactionPurpose
+ * - meta.purpose / meta.transactionPurpose
+ * - fallback to readable labels (transactionLabel / transactionLabels[])
+ */
+export function pickTransactionPurpose(anyObj?: any): string | undefined {
+    if (!anyObj) return undefined
+
+    const joinLabels = (v: any): string => {
+        if (!Array.isArray(v)) return ""
+        const clean = v
+            .map((x) => String(x ?? "").trim())
+            .filter(Boolean)
+        if (!clean.length) return ""
+        // unique (stable)
+        const seen = new Set<string>()
+        const uniq: string[] = []
+        for (const s of clean) {
+            if (seen.has(s)) continue
+            seen.add(s)
+            uniq.push(s)
+        }
+        return uniq.join(" • ")
+    }
+
+    const str = (v: any) => String(v ?? "").trim()
+
+    // 1) Purpose-first candidates
+    const purposeCandidates = [
+        anyObj.transactionPurpose,
+        anyObj.purpose,
+        anyObj.queuePurpose,
+        anyObj?.transaction?.purpose,
+        anyObj?.transactions?.purpose,
+        anyObj?.transactions?.transactionPurpose,
+        anyObj?.meta?.purpose,
+        anyObj?.meta?.transactionPurpose,
+    ]
+        .map(str)
+        .filter(Boolean)
+
+    if (purposeCandidates.length) return purposeCandidates[0]
+
+    // 2) Label arrays (readable)
+    const labelArrayCandidates = [
+        anyObj.transactionLabels,
+        anyObj.selectedTransactionLabels,
+        anyObj?.transactions?.transactionLabels,
+        anyObj?.transactions?.labels,
+        anyObj?.meta?.transactionLabels,
+    ]
+
+    for (const c of labelArrayCandidates) {
+        const joined = joinLabels(c)
+        if (joined) return joined
+    }
+
+    // 3) Single label fallbacks
+    const labelCandidates = [
+        anyObj.transactionLabel,
+        anyObj?.transaction?.label,
+        anyObj?.transactions?.transactionLabel,
+        anyObj?.meta?.transactionLabel,
+    ]
+        .map(str)
+        .filter(Boolean)
+
+    if (labelCandidates.length) return labelCandidates[0]
+
+    return undefined
+}
+
+/**
  * ✅ Supports:
  * - Plain payload: T
  * - Wrapped payload: { data: T }

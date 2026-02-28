@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { api, validateSemaphoreReceipts } from "@/lib/http"
+import { api, pickTransactionPurpose, validateSemaphoreReceipts } from "@/lib/http"
 
 export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
 export type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
@@ -27,6 +27,13 @@ export type ServiceWindow = {
     enabled?: boolean
     createdAt?: string
     updatedAt?: string
+}
+
+export type TicketTransaction = {
+    category?: string | null
+    key?: string | null
+    label?: string | null
+    purpose?: string | null
 }
 
 export type Ticket = {
@@ -85,6 +92,16 @@ export type Ticket = {
     queuePurpose?: string | null
 
     /**
+     * ✅ New explicit purpose field (aligned with updated staffController / queueManagement controller)
+     */
+    transactionPurpose?: string | null
+
+    /**
+     * ✅ Normalized transaction object (aligned with backend)
+     */
+    transaction?: TicketTransaction | null
+
+    /**
      * Optional richer payloads that may come from backend enrichers.
      */
     participant?: string
@@ -112,11 +129,17 @@ export type Ticket = {
     transactions?: {
         participantType?: TicketParticipantType | string
         participantTypeLabel?: string | null
+
+        transactionCategory?: string | null
+
         transactionKey?: string | null
         transactionKeys?: string[]
         transactionLabel?: string | null
         transactionLabels?: string[]
         labels?: string[]
+
+        purpose?: string | null
+
         [key: string]: any
     } | null
     selection?: {
@@ -132,6 +155,8 @@ export type Ticket = {
     } | null
     meta?: {
         purpose?: string
+        transactionPurpose?: string
+        transactionCategory?: string
         transactionKey?: string
         transactionKeys?: string[]
         transactionLabel?: string
@@ -214,6 +239,11 @@ export type StaffDisplayNowServing = {
     participantType: TicketParticipantType | string | null
     participantTypeLabel: string | null
 
+    // ✅ transaction purpose/labels (updated backend snapshot payload)
+    transactionPurpose?: string | null
+    transactionLabel?: string | null
+    transactionLabels?: string[]
+
     // ✅ guidance/voice (added by staffController enrichTickets)
     guidance?: TicketGuidanceDetails | null
     voiceAnnouncement?: string | null
@@ -238,6 +268,11 @@ export type StaffDisplayUpNextItem = {
     participantLabel: string | null
     participantType: TicketParticipantType | string | null
     participantTypeLabel: string | null
+
+    // ✅ transaction purpose/labels (updated backend snapshot payload)
+    transactionPurpose?: string | null
+    transactionLabel?: string | null
+    transactionLabels?: string[]
 
     // ✅ guidance (added by staffController enrichTickets)
     guidance?: TicketGuidanceDetails | null
@@ -269,6 +304,11 @@ export type StaffDisplayBoardWindow = {
         participantLabel: string | null
         participantType: TicketParticipantType | string | null
         participantTypeLabel: string | null
+
+        // ✅ transaction purpose/labels (updated backend snapshot payload)
+        transactionPurpose?: string | null
+        transactionLabel?: string | null
+        transactionLabels?: string[]
 
         // ✅ guidance/voice
         guidance?: TicketGuidanceDetails | null
@@ -518,7 +558,9 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
     const label = String(t?.participantLabel ?? "").trim()
 
     const participantFullName =
-        String(t?.participantFullName ?? "").trim() || (selectionName ? selectionName : "") || (isLikelyHumanName(label, identifier) ? label : "")
+        String(t?.participantFullName ?? "").trim() ||
+        (selectionName ? selectionName : "") ||
+        (isLikelyHumanName(label, identifier) ? label : "")
 
     const finalFullName = participantFullName ? participantFullName : null
 
@@ -532,10 +574,15 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
     // ✅ Mobile should show for anyone if we can infer it
     const phone = String(t?.phone ?? "").trim()
     const participantMobileNumber =
-        String(t?.participantMobileNumber ?? "").trim() || (phone ? phone : "") || (looksLikePhoneNumber(identifier) ? identifier : "")
+        String(t?.participantMobileNumber ?? "").trim() ||
+        (phone ? phone : "") ||
+        (looksLikePhoneNumber(identifier) ? identifier : "")
 
     const baseName =
-        (finalFullName && finalFullName.trim()) || (isLikelyHumanName(label, identifier) ? label : "") || (identifier ? identifier : "") || "Participant"
+        (finalFullName && finalFullName.trim()) ||
+        (isLikelyHumanName(label, identifier) ? label : "") ||
+        (identifier ? identifier : "") ||
+        "Participant"
 
     const participantDisplay =
         String(t?.participantDisplay ?? "").trim() ||
@@ -548,6 +595,58 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
 
     const displayFinal = participantDisplay ? participantDisplay : null
 
+    // ✅ Transaction purpose normalization (align with updated staffController)
+    const pickedPurpose = pickTransactionPurpose(t)
+    const transactionPurpose = String(t?.transactionPurpose ?? "").trim() || (pickedPurpose ? pickedPurpose : "") || null
+
+    // ✅ FIX: `purpose` field is `string | undefined` (NOT null)
+    const purposeLegacy: string | undefined =
+        String(t?.purpose ?? "").trim() || (transactionPurpose ? transactionPurpose : "") || undefined
+
+    const transactionLabelsRaw =
+        Array.isArray(t?.transactionLabels) && t.transactionLabels.length
+            ? t.transactionLabels
+            : Array.isArray(t?.transactions?.transactionLabels) && (t.transactions as any)?.transactionLabels?.length
+              ? ((t.transactions as any).transactionLabels as any[])
+              : Array.isArray(t?.transactions?.labels) && (t.transactions as any)?.labels?.length
+                ? ((t.transactions as any).labels as any[])
+                : []
+
+    const transactionLabels = Array.isArray(transactionLabelsRaw)
+        ? transactionLabelsRaw.map((x) => String(x ?? "").trim()).filter(Boolean)
+        : []
+
+    const transactionLabel =
+        String(t?.transactionLabel ?? "").trim() ||
+        String((t as any)?.transaction?.label ?? "").trim() ||
+        String(t?.transactions?.transactionLabel ?? "").trim() ||
+        (transactionLabels[0] ? String(transactionLabels[0]).trim() : "") ||
+        null
+
+    const transactionCategory =
+        String(t?.transactionCategory ?? "").trim() ||
+        String(t?.transactions?.transactionCategory ?? "").trim() ||
+        String((t as any)?.transaction?.category ?? "").trim() ||
+        null
+
+    const transactionKey =
+        String(t?.transactionKey ?? "").trim() ||
+        String(t?.transactions?.transactionKey ?? "").trim() ||
+        String((t as any)?.transaction?.key ?? "").trim() ||
+        null
+
+    const existingTx = t?.transaction && typeof t.transaction === "object" ? { ...(t.transaction as any) } : null
+
+    const normalizedTx: TicketTransaction | null =
+        existingTx || transactionPurpose || transactionLabel || transactionCategory || transactionKey
+            ? {
+                  category: String(existingTx?.category ?? "").trim() || transactionCategory,
+                  key: String(existingTx?.key ?? "").trim() || transactionKey,
+                  label: String(existingTx?.label ?? "").trim() || transactionLabel,
+                  purpose: String(existingTx?.purpose ?? "").trim() || transactionPurpose,
+              }
+            : null
+
     return {
         ...t,
         participantType: (participantType as any) ?? t.participantType,
@@ -557,6 +656,21 @@ function normalizeTicketParticipant(t: Ticket): Ticket {
         participantDisplay: displayFinal,
         // ✅ For BEST UX, make existing UIs that render `participantLabel` show the rich display line.
         participantLabel: displayFinal || finalFullName || (t.participantLabel ?? null),
+
+        // ✅ ensure transaction purpose is always present for staff queue UIs
+        transactionPurpose,
+        purpose: purposeLegacy,
+
+        transactionLabel: (t.transactionLabel ?? (transactionLabel || undefined)) as any,
+        transactionLabels:
+            Array.isArray(t.transactionLabels) && t.transactionLabels.length
+                ? t.transactionLabels
+                : transactionLabels.length
+                  ? transactionLabels
+                  : (t.transactionLabels as any),
+        transactionCategory: (t.transactionCategory ?? (transactionCategory || undefined)) as any,
+        transactionKey: (t.transactionKey ?? (transactionKey || undefined)) as any,
+        transaction: normalizedTx,
     }
 }
 
@@ -606,6 +720,31 @@ function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnaps
         const displayFinal = display ? display : null
         const fullFinal = full || (isLikelyHumanName(label) ? label : "") || null
 
+        // ✅ Transaction purpose normalization for snapshot items
+        const pickedPurpose = pickTransactionPurpose(item)
+        const transactionPurpose =
+            String(item?.transactionPurpose ?? "").trim() || (pickedPurpose ? pickedPurpose : "") || null
+
+        const labelsRaw =
+            Array.isArray(item?.transactionLabels) && item.transactionLabels.length
+                ? item.transactionLabels
+                : Array.isArray(item?.transactions?.transactionLabels) && item.transactions?.transactionLabels?.length
+                  ? item.transactions.transactionLabels
+                  : Array.isArray(item?.transactions?.labels) && item.transactions?.labels?.length
+                    ? item.transactions.labels
+                    : []
+
+        const transactionLabels = Array.isArray(labelsRaw)
+            ? labelsRaw.map((x: any) => String(x ?? "").trim()).filter(Boolean)
+            : []
+
+        const transactionLabel =
+            String(item?.transactionLabel ?? "").trim() ||
+            String(item?.transaction?.label ?? "").trim() ||
+            String(item?.transactions?.transactionLabel ?? "").trim() ||
+            (transactionLabels[0] ? String(transactionLabels[0]).trim() : "") ||
+            null
+
         return {
             ...item,
             participantType: type ?? item.participantType ?? null,
@@ -613,6 +752,11 @@ function normalizeSnapshot(res: StaffDisplaySnapshotResponse): StaffDisplaySnaps
             participantDisplay: displayFinal,
             // ✅ Ensure legacy UI fields still show the rich participant line
             participantLabel: displayFinal || fullFinal || item.participantLabel || null,
+
+            // ✅ ensure transaction purpose fields exist (new backend fields)
+            transactionPurpose,
+            transactionLabel,
+            transactionLabels,
         }
     }
 
@@ -1031,8 +1175,6 @@ export const staffApi = {
     /**
      * ✅ Legacy alias name, but now calls the unified safe endpoint:
      * POST /staff/tickets/:id/sms  with { status:"CALLED", ...payload }
-     *
-     * This prevents /sms-called-specific failures and always returns safe JSON (ok:false) instead of throwing.
      */
     sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketSmsBaseRequest) =>
         api
@@ -1043,7 +1185,7 @@ export const staffApi = {
             )
             .then((res) => normalizeStaffSmsResponse(res)),
 
-    // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED) + optional custom message override
+    // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED)
     sendTicketStatusSms: (ticketId: string, payload: StaffSendTicketStatusSmsRequest) =>
         api.postData<unknown>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload, STAFF_AUTH_NO_THROW).then((res) => normalizeStaffSmsResponse(res)),
 
@@ -1051,10 +1193,10 @@ export const staffApi = {
     sendTicketSms: (ticketId: string, payload?: StaffSendTicketSmsRequest) =>
         api.postData<unknown>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms`, payload ?? {}, STAFF_AUTH_NO_THROW).then((res) => normalizeStaffSmsResponse(res)),
 
-    // ✅ Staff reports (scoped to assigned department on backend)
+    // ✅ Staff reports
     getReportsSummary: (opts?: { from?: string; to?: string }) =>
-        api.getData<ReportsSummaryResponse>(`/staff/reports/summary${toQuery(opts as any)}`, STAFF_AUTH),
+        api.getData<any>(`/staff/reports/summary${toQuery(opts as any)}`, STAFF_AUTH),
 
     getReportsTimeseries: (opts?: { from?: string; to?: string }) =>
-        api.getData<ReportsTimeseriesResponse>(`/staff/reports/timeseries${toQuery(opts as any)}`, STAFF_AUTH),
+        api.getData<any>(`/staff/reports/timeseries${toQuery(opts as any)}`, STAFF_AUTH),
 }
