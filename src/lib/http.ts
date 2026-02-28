@@ -314,6 +314,93 @@ function formatServerReason(reason: unknown): string {
     return s.replace(/[_-]+/g, " ").trim()
 }
 
+/** =========================
+ * SEMAPHORE RECEIPT VALIDATION (shared)
+ * ========================= */
+
+export type SemaphoreReceiptItem = {
+    status?: string
+    message_id?: number | string
+    recipient?: string
+    [key: string]: unknown
+}
+
+export type SemaphoreReceiptValidation = {
+    ok: boolean
+    outcome: "sent" | "failed" | "unknown"
+    statusSummary: Record<string, number>
+    error?: string
+    receiptsCount: number
+}
+
+function normalizeSemaphoreStatus(status: unknown): string {
+    return String(status ?? "").trim().toLowerCase()
+}
+
+function summarizeSemaphoreStatuses(items: Array<{ status?: string }> = []) {
+    const out: Record<string, number> = {}
+    for (const it of items) {
+        const key = normalizeSemaphoreStatus(it?.status) || "unknown"
+        out[key] = (out[key] || 0) + 1
+    }
+    return out
+}
+
+/**
+ * ✅ Prevent "false success" cases:
+ * - Empty receipt array => not ok
+ * - Any FAILED/REFUNDED => not ok
+ * - At least one QUEUED/PENDING/SENT and no failures => ok
+ */
+export function validateSemaphoreReceipts(providerResponse: unknown): SemaphoreReceiptValidation {
+    const receipts = Array.isArray(providerResponse) ? (providerResponse as SemaphoreReceiptItem[]) : []
+
+    if (!receipts.length) {
+        return {
+            ok: false,
+            outcome: "unknown",
+            statusSummary: {},
+            receiptsCount: 0,
+            error: "Empty provider receipt (no message receipts returned by Semaphore).",
+        }
+    }
+
+    const okStatuses = new Set(["queued", "pending", "sent"])
+    const failStatuses = new Set(["failed", "refunded"])
+
+    const summary = summarizeSemaphoreStatuses(receipts)
+
+    let okCount = 0
+    let failCount = 0
+
+    for (const r of receipts) {
+        const st = normalizeSemaphoreStatus(r?.status)
+        if (okStatuses.has(st)) okCount++
+        else if (failStatuses.has(st)) failCount++
+    }
+
+    const ok = okCount > 0 && failCount === 0
+    const outcome: SemaphoreReceiptValidation["outcome"] = ok ? "sent" : failCount > 0 ? "failed" : "unknown"
+
+    const error = ok
+        ? undefined
+        : failCount > 0
+          ? `Semaphore receipt status indicates failure (${Object.entries(summary)
+                .map(([k, v]) => `${k}:${v}`)
+                .join(", ")})`
+          : `Semaphore receipt status is not confirmable (${Object.entries(summary)
+                .map(([k, v]) => `${k}:${v}`)
+                .join(", ")})`
+
+    return {
+        ok,
+        outcome,
+        statusSummary: summary,
+        receiptsCount: receipts.length,
+        error,
+    }
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const {
         method = "GET",
@@ -389,11 +476,22 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
     const data = await parseResponseSafe(res)
 
+    // ✅ If backend sets X-Error-Message but returns 200 with `{ ok:false }`,
+    // carry it into the JSON payload so UI can render it without needing headers access.
+    const headerErrorMsg = res.headers.get("x-error-message") || res.headers.get("X-Error-Message") || ""
+    if (headerErrorMsg && data && typeof data === "object" && !Array.isArray(data)) {
+        const d: any = data
+        if ("ok" in d && d.ok === false) {
+            if (!d.message && !d.error && !d.reason) d.message = headerErrorMsg
+            if (!d.reason) d.reason = headerErrorMsg
+        }
+    }
+
     if (!res.ok) {
         // ✅ Allow structured error bodies to be handled by caller without try/catch
         if (throwOnError === false) return data as T
 
-        const responseHeaderMsg = res.headers.get("x-error-message") || res.headers.get("X-Error-Message") || ""
+        const responseHeaderMsg = headerErrorMsg
         const reasonMsg = formatServerReason((data as any)?.reason)
 
         const serverMsg =

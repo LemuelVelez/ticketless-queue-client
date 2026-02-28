@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { api } from "@/lib/http"
+import { api, validateSemaphoreReceipts } from "@/lib/http"
 
 export type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "OUT" | "SERVED"
 export type TicketParticipantType = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
@@ -816,6 +816,9 @@ export type StaffSmsResponse = {
     // server may include this on /staff/sms/send
     statusSummary?: Record<string, number>
 
+    // ✅ client-added (for best UX + debugging)
+    receiptsCount?: number
+
     result?: any
     error?: string
 }
@@ -823,6 +826,74 @@ export type StaffSmsResponse = {
 const STAFF_AUTH = { auth: "staff" as const }
 // ✅ For SMS + provider-style endpoints, never throw on non-2xx (let UI render `{ ok:false, ... }`)
 const STAFF_AUTH_NO_THROW = { auth: "staff" as const, throwOnError: false as const }
+
+/**
+ * ✅ Client-side receipt validation (defensive)
+ * Prevents "false success" UI toasts when:
+ * - backend returns HTTP 200 but `{ ok:false }`
+ * - backend returns `{ ok:true }` yet receipt array contains FAILED/REFUNDED/empty (older/proxy edge cases)
+ */
+function extractSemaphoreProviderResponse(res: StaffSmsResponse): unknown | undefined {
+    const anyRes: any = res
+
+    // Some endpoints return the raw receipts array directly in `result`
+    if (Array.isArray(anyRes?.result)) return anyRes.result
+
+    // Others nest receipts under `result.providerResponse`
+    if (Array.isArray(anyRes?.result?.providerResponse)) return anyRes.result.providerResponse
+
+    // Rare older shapes (kept safe)
+    if (Array.isArray(anyRes?.providerResponse)) return anyRes.providerResponse
+    if (Array.isArray(anyRes?.receipts)) return anyRes.receipts
+    if (Array.isArray(anyRes?.result?.result)) return anyRes.result.result
+
+    return undefined
+}
+
+function normalizeStaffSmsResponse(res: StaffSmsResponse): StaffSmsResponse {
+    const next: StaffSmsResponse = { ...(res || ({} as any)) }
+
+    // Ensure UI always has something to display
+    if (!next.message) next.message = next.reason || next.error || ""
+
+    // Only validate when we can actually see receipts
+    const providerResponse = extractSemaphoreProviderResponse(next)
+    if (providerResponse === undefined) return next
+
+    const receipt = validateSemaphoreReceipts(providerResponse)
+
+    next.statusSummary = next.statusSummary ?? receipt.statusSummary
+    next.receiptsCount = typeof next.receiptsCount === "number" ? next.receiptsCount : receipt.receiptsCount
+
+    // Never override an intentional "skipped" flow
+    if (next.outcome === "skipped") return next
+
+    // If backend said ok=true but receipts indicate failure/unknown, downgrade to ok=false
+    if (next.ok === true && receipt.ok === false) {
+        next.ok = false
+        next.outcome = receipt.outcome === "sent" ? "failed" : receipt.outcome
+        next.error = next.error || "receipt_invalid"
+        next.reason = next.reason || receipt.error
+        next.message = next.message || next.reason || receipt.error || "SMS not confirmed by provider receipt."
+        return next
+    }
+
+    // If ok is missing (shouldn't happen, but keep safe), derive from receipt
+    if (typeof next.ok !== "boolean") next.ok = receipt.ok
+
+    // Fill outcome/reason if missing
+    if (!next.outcome) next.outcome = receipt.outcome
+
+    if (receipt.ok === false) {
+        next.ok = false
+        next.outcome = receipt.outcome === "sent" ? "failed" : receipt.outcome
+        next.error = next.error || "receipt_invalid"
+        next.reason = next.reason || receipt.error
+        next.message = next.message || next.reason || receipt.error || "SMS not confirmed by provider receipt."
+    }
+
+    return next
+}
 
 export const staffApi = {
     myAssignment: () =>
@@ -917,19 +988,26 @@ export const staffApi = {
             .then((res) => normalizeTicketResponse(res)),
 
     // ✅ SMS endpoints (never throw on provider failures)
-    sendSms: (payload: StaffSendSmsRequest) => api.postData<StaffSmsResponse>("/staff/sms/send", payload, STAFF_AUTH_NO_THROW),
+    sendSms: (payload: StaffSendSmsRequest) =>
+        api.postData<StaffSmsResponse>("/staff/sms/send", payload, STAFF_AUTH_NO_THROW).then((res) => normalizeStaffSmsResponse(res)),
 
     // Legacy alias: sends CALLED status (or custom message if provided)
     sendTicketCalledSms: (ticketId: string, payload?: StaffSendTicketSmsBaseRequest) =>
-        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}, STAFF_AUTH_NO_THROW),
+        api
+            .postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-called`, payload ?? {}, STAFF_AUTH_NO_THROW)
+            .then((res) => normalizeStaffSmsResponse(res)),
 
     // Unified ticket status SMS (CALLED | HOLD | OUT | SERVED) + optional custom message override
     sendTicketStatusSms: (ticketId: string, payload: StaffSendTicketStatusSmsRequest) =>
-        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload, STAFF_AUTH_NO_THROW),
+        api
+            .postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms-status`, payload, STAFF_AUTH_NO_THROW)
+            .then((res) => normalizeStaffSmsResponse(res)),
 
     // ✅ Best DX: unified alias (status OR custom message, defaults to CALLED if none)
     sendTicketSms: (ticketId: string, payload?: StaffSendTicketSmsRequest) =>
-        api.postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms`, payload ?? {}, STAFF_AUTH_NO_THROW),
+        api
+            .postData<StaffSmsResponse>(`/staff/tickets/${encodeURIComponent(ticketId)}/sms`, payload ?? {}, STAFF_AUTH_NO_THROW)
+            .then((res) => normalizeStaffSmsResponse(res)),
 
     // ✅ Staff reports (scoped to assigned department on backend)
     getReportsSummary: (opts?: { from?: string; to?: string }) =>
