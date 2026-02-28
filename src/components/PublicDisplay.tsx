@@ -38,15 +38,37 @@ function formatTime(iso?: string) {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
-function getTicketDisplayName(t?: TicketView) {
-    if (!t) return "—"
+function getTicketStudentId(t?: TicketView) {
+    if (!t) return ""
 
-    // ✅ Names first (matches updated displayController behavior)
+    const direct = String((t as any)?.participant?.studentId ?? (t as any)?.studentId ?? "").trim()
+    if (direct) return direct
+
+    // participantDisplay can look like: "Full Name • StudentId • Mobile"
+    const display = String((t as any)?.participantDisplay ?? "").trim()
+    if (display && display.includes("•")) {
+        const parts = display
+            .split("•")
+            .map((x) => x.trim())
+            .filter(Boolean)
+
+        // Usually: [name, studentId, mobile]
+        const maybe = parts[1] ? String(parts[1]).trim() : ""
+        return maybe
+    }
+
+    return ""
+}
+
+function getTicketParticipantInfo(t?: TicketView) {
     const fullName = pickParticipantFullName(t)
-    if (fullName) return fullName
+    const studentId = getTicketStudentId(t)
 
-    const sid = String(t.participant?.studentId ?? "").trim()
-    return sid ? `ID: ${sid}` : "—"
+    return {
+        primary: fullName ? fullName : studentId ? `ID: ${studentId}` : "—",
+        studentId,
+        hasName: Boolean(fullName),
+    }
 }
 
 function buildAnnouncementLabel(a: Announcement) {
@@ -363,7 +385,9 @@ function DisplayBoard({
                                     {state.windows.map((w) => {
                                         const serving = w.nowServing
                                         const deptNames = w.departments?.map((d) => d.name).filter(Boolean) ?? []
-                                        const participantName = getTicketDisplayName(serving)
+
+                                        const p = getTicketParticipantInfo(serving)
+                                        const showStudentIdBadge = Boolean(p.hasName && p.studentId)
 
                                         const highlighted = Boolean(
                                             highlightWindowNumber != null && Number(w.number) === Number(highlightWindowNumber)
@@ -414,7 +438,21 @@ function DisplayBoard({
                                                         </div>
 
                                                         <div className="flex flex-col gap-1">
-                                                            <span className="text-sm font-medium">{participantName}</span>
+                                                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                                                <span className="truncate text-sm font-medium">
+                                                                    {p.primary}
+                                                                </span>
+
+                                                                {showStudentIdBadge ? (
+                                                                    <Badge
+                                                                        variant="outline"
+                                                                        className="whitespace-nowrap"
+                                                                    >
+                                                                        ID: {p.studentId}
+                                                                    </Badge>
+                                                                ) : null}
+                                                            </div>
+
                                                             <span className="text-xs text-muted-foreground">
                                                                 {serving?.department?.name ? serving.department.name : "—"}
                                                             </span>
@@ -459,23 +497,45 @@ function DisplayBoard({
                             ) : state?.upNext?.length ? (
                                 <ScrollArea className={cn(variant === "fullscreen" ? "h-72 sm:h-80" : "h-64")}>
                                     <div className="grid gap-2">
-                                        {state.upNext.map((t) => (
-                                            <div key={t.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
-                                                <div className="min-w-0">
-                                                    <div className="flex items-center gap-2">
-                                                        <Badge className="whitespace-nowrap">{t.queueNumber}</Badge>
-                                                        <span className="truncate text-sm font-medium">{getTicketDisplayName(t)}</span>
-                                                    </div>
-                                                    <p className="mt-1 truncate text-xs text-muted-foreground">
-                                                        {t.department?.name || "Department"}
-                                                    </p>
-                                                </div>
+                                        {state.upNext.map((t) => {
+                                            const p = getTicketParticipantInfo(t)
+                                            const showStudentIdBadge = Boolean(p.hasName && p.studentId)
 
-                                                <Badge variant="outline" className="whitespace-nowrap">
-                                                    Waiting
-                                                </Badge>
-                                            </div>
-                                        ))}
+                                            return (
+                                                <div
+                                                    key={t.id}
+                                                    className="flex items-center justify-between gap-3 rounded-lg border p-3"
+                                                >
+                                                    <div className="min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <Badge className="whitespace-nowrap">{t.queueNumber}</Badge>
+
+                                                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                                                <span className="truncate text-sm font-medium">
+                                                                    {p.primary}
+                                                                </span>
+
+                                                                {showStudentIdBadge ? (
+                                                                    <Badge
+                                                                        variant="outline"
+                                                                        className="whitespace-nowrap"
+                                                                    >
+                                                                        ID: {p.studentId}
+                                                                    </Badge>
+                                                                ) : null}
+                                                            </div>
+                                                        </div>
+                                                        <p className="mt-1 truncate text-xs text-muted-foreground">
+                                                            {t.department?.name || "Department"}
+                                                        </p>
+                                                    </div>
+
+                                                    <Badge variant="outline" className="whitespace-nowrap">
+                                                        Waiting
+                                                    </Badge>
+                                                </div>
+                                            )
+                                        })}
                                     </div>
                                 </ScrollArea>
                             ) : (
