@@ -23,6 +23,7 @@ import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { useSession } from "@/hooks/use-session"
+import { pickTransactionPurpose } from "@/lib/http"
 import {
     staffApi,
     type DepartmentAssignment,
@@ -74,6 +75,16 @@ function parsePanelCount(search: string, fallback = 3) {
 
 function isSpeechSupported() {
     return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
+}
+
+function getTransactionPurposeText(anyObj?: any): string {
+    const s = String(pickTransactionPurpose(anyObj) ?? "").trim()
+    return s
+}
+
+function transactionPurposeLabel(anyObj?: any): string {
+    const s = getTransactionPurposeText(anyObj)
+    return s || "—"
 }
 
 /**
@@ -282,7 +293,13 @@ const MAN_VOICE_HINTS = [
 
 const EN_US_HINTS = ["en-us", "united states", "us english", "american", "english (united states)"]
 
-function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
+function mapBoardWindowToTicketLike(row: {
+    id: string
+    queueNumber: number
+    transactionPurpose?: string | null
+    transactionLabel?: string | null
+    transactionLabels?: string[]
+}) {
     return {
         _id: row.id,
         department: "",
@@ -291,6 +308,10 @@ function mapBoardWindowToTicketLike(row: { id: string; queueNumber: number }) {
         studentId: "",
         status: "WAITING",
         holdAttempts: 0,
+        transactionPurpose: row.transactionPurpose ?? null,
+        transactionLabel: row.transactionLabel ?? undefined,
+        transactionLabels: row.transactionLabels ?? undefined,
+        purpose: row.transactionPurpose ? String(row.transactionPurpose).trim() : undefined,
     } as TicketType
 }
 
@@ -992,9 +1013,15 @@ export default function StaffServingPage() {
 
             const [snapshotResult, currentResult, waitingResult, holdResult] = await Promise.all([
                 staffApi.getDisplaySnapshot().catch(() => null),
-                a.departmentId && a.window?._id ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null })) : Promise.resolve({ ticket: null }),
-                a.departmentId && a.window?._id ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] })) : Promise.resolve({ tickets: [] }),
-                a.departmentId && a.window?._id ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] })) : Promise.resolve({ tickets: [] }),
+                a.departmentId && a.window?._id
+                    ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null }))
+                    : Promise.resolve({ ticket: null }),
+                a.departmentId && a.window?._id
+                    ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] }))
+                    : Promise.resolve({ tickets: [] }),
+                a.departmentId && a.window?._id
+                    ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] }))
+                    : Promise.resolve({ tickets: [] }),
             ])
 
             const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
@@ -1013,6 +1040,7 @@ export default function StaffServingPage() {
             if (explicit.length) {
                 setUpNext(explicit)
             } else if (snapshotResult?.upNext?.length) {
+                // ✅ Keep purpose/labels when snapshot is used as fallback
                 setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
             } else {
                 setUpNext([])
@@ -1094,7 +1122,10 @@ export default function StaffServingPage() {
         try {
             const res = await staffApi.callNext()
             setCurrent(res.ticket)
-            toast.success(`Called #${res.ticket.queueNumber}`)
+
+            const purpose = getTransactionPurposeText(res.ticket)
+            toast.success(`Called #${res.ticket.queueNumber}${purpose ? ` • ${purpose}` : ""}`)
+
             announceCall(res.ticket.queueNumber)
 
             if (autoSmsOnCall && SMS_SENDING_AVAILABLE) {
@@ -1129,7 +1160,9 @@ export default function StaffServingPage() {
         try {
             const res = await staffApi.holdNoShow(current._id)
             toast.success(
-                res.ticket.status === "OUT" ? `Ticket #${current.queueNumber} is OUT.` : `Ticket #${current.queueNumber} moved to HOLD.`,
+                res.ticket.status === "OUT"
+                    ? `Ticket #${current.queueNumber} is OUT.`
+                    : `Ticket #${current.queueNumber} moved to HOLD.`,
             )
             await refresh()
         } catch (e: any) {
@@ -1178,11 +1211,15 @@ export default function StaffServingPage() {
                                         ))}
                                     </div>
                                 ) : (
-                                    <div className="mt-1 text-xs text-muted-foreground">No assigned departments found for this staff account.</div>
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                        No assigned departments found for this staff account.
+                                    </div>
                                 )}
                             </div>
 
-                            <div className="mt-2 text-sm text-muted-foreground">Multi-window queue display (3+ split panes) • auto refresh every 5s</div>
+                            <div className="mt-2 text-sm text-muted-foreground">
+                                Multi-window queue display (3+ split panes) • auto refresh every 5s
+                            </div>
 
                             {!SMS_SENDING_AVAILABLE ? (
                                 <div className="mt-3 flex items-start gap-2 rounded-md border bg-muted p-3 text-sm text-muted-foreground">
@@ -1200,7 +1237,10 @@ export default function StaffServingPage() {
                                 <Label htmlFor="panelsBoard" className="text-sm">
                                     Panels
                                 </Label>
-                                <Select value={String(Math.max(3, panelCount))} onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}>
+                                <Select
+                                    value={String(Math.max(3, panelCount))}
+                                    onValueChange={(v) => setPanelCount(Math.max(3, Number(v || 3)))}
+                                >
                                     <SelectTrigger id="panelsBoard" className="h-8 w-22.5">
                                         <SelectValue placeholder="Panels" />
                                     </SelectTrigger>
@@ -1215,7 +1255,12 @@ export default function StaffServingPage() {
                             </div>
 
                             <div className="flex items-center gap-2 rounded-md border px-3 py-2">
-                                <Switch id="autoRefreshBoard" checked={autoRefresh} onCheckedChange={(v) => setAutoRefresh(Boolean(v))} disabled={busy} />
+                                <Switch
+                                    id="autoRefreshBoard"
+                                    checked={autoRefresh}
+                                    onCheckedChange={(v) => setAutoRefresh(Boolean(v))}
+                                    disabled={busy}
+                                />
                                 <Label htmlFor="autoRefreshBoard" className="text-sm">
                                     Auto refresh
                                 </Label>
@@ -1251,7 +1296,9 @@ export default function StaffServingPage() {
                                                 <CardTitle className="text-base">Unassigned panel</CardTitle>
                                                 <CardDescription>Add more active windows under this manager to fill this slot.</CardDescription>
                                             </CardHeader>
-                                            <CardContent className="flex h-62.5 items-center justify-center text-sm text-muted-foreground">No active window bound.</CardContent>
+                                            <CardContent className="flex h-62.5 items-center justify-center text-sm text-muted-foreground">
+                                                No active window bound.
+                                            </CardContent>
                                         </Card>
                                     )
                                 }
@@ -1260,36 +1307,57 @@ export default function StaffServingPage() {
                                 const previewHold = getTwoNumberSlice(globalHoldNumbers, idx)
 
                                 const currentForThisWindow = current && current.windowNumber === row.number ? current : null
+                                const source = (row.nowServing as any) ?? (currentForThisWindow as any)
 
-                                const p = getParticipantDetails((row.nowServing as any) ?? (currentForThisWindow as any))
+                                const p = getParticipantDetails(source)
+                                const purposeText = transactionPurposeLabel(source)
 
                                 return (
                                     <Card key={row.id || `window-${idx}`} className="min-h-95">
                                         <CardContent className="p-5">
                                             <div className="flex h-full flex-col">
-                                                <div className="text-center text-[clamp(1rem,2.2vw,1.5rem)] font-semibold">Window {row.number}</div>
+                                                <div className="text-center text-[clamp(1rem,2.2vw,1.5rem)] font-semibold">
+                                                    Window {row.number}
+                                                </div>
 
-                                                <div className="mt-4 text-center text-[clamp(1rem,2vw,1.4rem)] font-medium">Now Serving:</div>
+                                                <div className="mt-4 text-center text-[clamp(1rem,2vw,1.4rem)] font-medium">
+                                                    Now Serving:
+                                                </div>
 
                                                 <div className="mt-3 text-center text-[clamp(5rem,12vw,10rem)] font-bold leading-none tracking-tight">
                                                     {queueNumberLabel(row.nowServing?.queueNumber)}
                                                 </div>
 
                                                 {/* ✅ Privacy: do NOT display mobile on public board */}
-                                                <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide">{participantBoardLabel(p)}</div>
+                                                <div className="mt-3 text-center text-sm font-semibold uppercase tracking-wide">
+                                                    {participantBoardLabel(p)}
+                                                </div>
+
+                                                {/* ✅ Transaction purpose (public-safe) */}
+                                                <div className="mt-1 text-center text-xs text-muted-foreground">
+                                                    Purpose: {purposeText}
+                                                </div>
 
                                                 <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
                                                     <div className="text-center">
                                                         <div className="font-medium">up next:</div>
                                                         <div className="mt-1 leading-6">
-                                                            {previewUpNext.length ? previewUpNext.map((n) => <div key={`up-${row.id}-${n}`}>#{n}</div>) : <div>—</div>}
+                                                            {previewUpNext.length ? (
+                                                                previewUpNext.map((n) => <div key={`up-${row.id}-${n}`}>#{n}</div>)
+                                                            ) : (
+                                                                <div>—</div>
+                                                            )}
                                                         </div>
                                                     </div>
 
                                                     <div className="text-center">
                                                         <div className="font-medium">on hold:</div>
                                                         <div className="mt-1 leading-6">
-                                                            {previewHold.length ? previewHold.map((n) => <div key={`hold-${row.id}-${n}`}>#{n}</div>) : <div>—</div>}
+                                                            {previewHold.length ? (
+                                                                previewHold.map((n) => <div key={`hold-${row.id}-${n}`}>#{n}</div>)
+                                                            ) : (
+                                                                <div>—</div>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1310,6 +1378,7 @@ export default function StaffServingPage() {
     }
 
     const currentP = getParticipantDetails(current as any)
+    const currentPurpose = transactionPurposeLabel(current as any)
 
     return (
         <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
@@ -1368,6 +1437,7 @@ export default function StaffServingPage() {
                                                     <>
                                                         {" "}
                                                         Ticket #{current.queueNumber} • {currentP.name}
+                                                        {currentPurpose !== "—" ? ` • ${currentPurpose}` : ""}
                                                         {currentP.isStudent ? ` • ${currentP.studentId || "—"}` : ""}
                                                         {currentP.mobile ? ` • ${currentP.mobile}` : ""}
                                                     </>
@@ -1432,7 +1502,9 @@ export default function StaffServingPage() {
 
                                             {smsUseDefaultMessage ? (
                                                 <div className="rounded-md border bg-muted p-3 text-sm text-muted-foreground">
-                                                    {current ? defaultSmsCalledMessage(current.queueNumber, windowInfo?.number) : "Queue update message preview will appear when an active ticket is selected."}
+                                                    {current
+                                                        ? defaultSmsCalledMessage(current.queueNumber, windowInfo?.number)
+                                                        : "Queue update message preview will appear when an active ticket is selected."}
                                                 </div>
                                             ) : (
                                                 <div className="grid gap-2">
@@ -1716,6 +1788,10 @@ export default function StaffServingPage() {
                                                                     Participant: <span className="font-medium text-foreground">{currentP.name}</span>
                                                                 </div>
 
+                                                                <div>
+                                                                    Purpose: <span className="font-medium text-foreground">{currentPurpose}</span>
+                                                                </div>
+
                                                                 {currentP.isStudent ? <div>Student ID: {currentP.studentId || "—"}</div> : null}
 
                                                                 <div>Mobile: {currentP.mobile || "—"}</div>
@@ -1761,7 +1837,9 @@ export default function StaffServingPage() {
                                                 </div>
                                             </>
                                         ) : (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">No ticket is currently called for your window.</div>
+                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                                No ticket is currently called for your window.
+                                            </div>
                                         )}
                                     </CardContent>
                                 </Card>
@@ -1780,15 +1858,19 @@ export default function StaffServingPage() {
                                                 <div className="rounded-lg border p-4 text-sm text-muted-foreground">No WAITING tickets.</div>
                                             ) : (
                                                 <div className="grid gap-2">
-                                                    {upNext.slice(0, 6).map((t, idx) => (
-                                                        <div key={t._id} className="flex items-center justify-between rounded-xl border p-3">
-                                                            <div className="text-xl font-semibold">#{t.queueNumber}</div>
-                                                            <div className="text-right text-xs text-muted-foreground">
-                                                                <div>{idx === 0 ? "Next" : "Waiting"}</div>
-                                                                <div>{fmtTime((t as any).waitingSince)}</div>
+                                                    {upNext.slice(0, 6).map((t, idx) => {
+                                                        const purpose = getTransactionPurposeText(t)
+                                                        return (
+                                                            <div key={t._id} className="flex items-center justify-between rounded-xl border p-3">
+                                                                <div className="text-xl font-semibold">#{t.queueNumber}</div>
+                                                                <div className="text-right text-xs text-muted-foreground">
+                                                                    <div>{idx === 0 ? "Next" : "Waiting"}</div>
+                                                                    <div className="max-w-64 truncate">{purpose || "—"}</div>
+                                                                    <div>{fmtTime((t as any).waitingSince)}</div>
+                                                                </div>
                                                             </div>
-                                                        </div>
-                                                    ))}
+                                                        )
+                                                    })}
                                                 </div>
                                             )}
                                         </div>
@@ -1798,12 +1880,19 @@ export default function StaffServingPage() {
                                             {holdTickets.length === 0 ? (
                                                 <div className="rounded-lg border p-4 text-sm text-muted-foreground">No HOLD tickets.</div>
                                             ) : (
-                                                <div className="flex flex-wrap gap-2">
-                                                    {holdTickets.slice(0, 8).map((t) => (
-                                                        <Badge key={`hold-${t._id}`} variant="secondary" className="px-3 py-1 text-sm">
-                                                            #{t.queueNumber}
-                                                        </Badge>
-                                                    ))}
+                                                <div className="grid gap-2">
+                                                    {holdTickets.slice(0, 8).map((t) => {
+                                                        const purpose = getTransactionPurposeText(t)
+                                                        return (
+                                                            <div key={`hold-${t._id}`} className="flex items-center justify-between rounded-xl border p-3">
+                                                                <div className="text-xl font-semibold">#{t.queueNumber}</div>
+                                                                <div className="text-right text-xs text-muted-foreground">
+                                                                    <div>Hold</div>
+                                                                    <div className="max-w-64 truncate">{purpose || "—"}</div>
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })}
                                                 </div>
                                             )}
                                         </div>
@@ -1827,7 +1916,9 @@ export default function StaffServingPage() {
                                             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                                                 {snapshot.board.windows.map((w, idx) => {
                                                     const previewUpNext = getTwoNumberSlice(
-                                                        (snapshot?.upNext?.map((t) => Number(t.queueNumber)).filter((n) => Number.isFinite(n)) as number[]) || [],
+                                                        (snapshot?.upNext
+                                                            ?.map((t) => Number(t.queueNumber))
+                                                            .filter((n) => Number.isFinite(n)) as number[]) || [],
                                                         idx,
                                                     )
                                                     const previewHold = getTwoNumberSlice(
@@ -1836,8 +1927,10 @@ export default function StaffServingPage() {
                                                     )
 
                                                     const currentForThisWindow = current && current.windowNumber === w.number ? current : null
+                                                    const source = (w.nowServing as any) ?? (currentForThisWindow as any)
 
-                                                    const p = getParticipantDetails((w.nowServing as any) ?? (currentForThisWindow as any))
+                                                    const p = getParticipantDetails(source)
+                                                    const purposeText = transactionPurposeLabel(source)
 
                                                     return (
                                                         <div key={w.id} className="rounded-xl border p-4">
@@ -1848,19 +1941,34 @@ export default function StaffServingPage() {
                                                             </div>
 
                                                             {/* ✅ Privacy: do NOT display mobile in "board-like" preview */}
-                                                            <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide">{participantBoardLabel(p)}</div>
+                                                            <div className="mt-2 text-center text-xs font-semibold uppercase tracking-wide">
+                                                                {participantBoardLabel(p)}
+                                                            </div>
+
+                                                            {/* ✅ Transaction purpose */}
+                                                            <div className="mt-1 text-center text-xs text-muted-foreground">
+                                                                Purpose: {purposeText}
+                                                            </div>
 
                                                             <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
                                                                 <div className="text-center">
                                                                     <div className="font-medium">up next:</div>
                                                                     <div className="mt-1 leading-5">
-                                                                        {previewUpNext.length ? previewUpNext.map((n) => <div key={`preview-up-${w.id}-${n}`}>#{n}</div>) : <div>—</div>}
+                                                                        {previewUpNext.length ? (
+                                                                            previewUpNext.map((n) => <div key={`preview-up-${w.id}-${n}`}>#{n}</div>)
+                                                                        ) : (
+                                                                            <div>—</div>
+                                                                        )}
                                                                     </div>
                                                                 </div>
                                                                 <div className="text-center">
                                                                     <div className="font-medium">on hold:</div>
                                                                     <div className="mt-1 leading-5">
-                                                                        {previewHold.length ? previewHold.map((n) => <div key={`preview-hold-${w.id}-${n}`}>#{n}</div>) : <div>—</div>}
+                                                                        {previewHold.length ? (
+                                                                            previewHold.map((n) => <div key={`preview-hold-${w.id}-${n}`}>#{n}</div>)
+                                                                        ) : (
+                                                                            <div>—</div>
+                                                                        )}
                                                                     </div>
                                                                 </div>
                                                             </div>
@@ -1869,7 +1977,9 @@ export default function StaffServingPage() {
                                                 })}
                                             </div>
                                         ) : (
-                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">No active windows found for your current manager scope.</div>
+                                            <div className="rounded-lg border p-6 text-sm text-muted-foreground">
+                                                No active windows found for your current manager scope.
+                                            </div>
                                         )}
                                     </CardContent>
                                 </Card>
