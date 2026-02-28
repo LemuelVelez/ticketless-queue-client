@@ -29,6 +29,7 @@ import {
     type StaffDisplaySnapshotResponse,
     type Ticket as TicketType,
 } from "@/api/staff"
+import { validateSemaphoreReceipts } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -432,6 +433,45 @@ function buildNowServingAnnouncement(queueNumber: number, windowNumber?: number)
     return `Now serving... ticket number ${n}.`
 }
 
+/** =========================
+ * SMS RECEIPT VALIDATION (UI DEFENSIVE)
+ * - Prevent "false success" toasts when backend returns 200 but receipts are FAILED/REFUNDED/empty.
+ * - staffApi already normalizes, but we add UI-level validation as a safety net.
+ * ========================= */
+
+function extractSemaphoreProviderResponseFromSmsResponse(res: any): unknown | undefined {
+    const anyRes: any = res
+    if (!anyRes || typeof anyRes !== "object") return undefined
+
+    // Some endpoints return the raw receipts array directly in `result`
+    if (Array.isArray(anyRes?.result)) return anyRes.result
+
+    // Others nest receipts under `result.providerResponse`
+    if (Array.isArray(anyRes?.result?.providerResponse)) return anyRes.result.providerResponse
+
+    // Rare older shapes (kept safe)
+    if (Array.isArray(anyRes?.providerResponse)) return anyRes.providerResponse
+    if (Array.isArray(anyRes?.receipts)) return anyRes.receipts
+    if (Array.isArray(anyRes?.result?.result)) return anyRes.result.result
+
+    return undefined
+}
+
+function formatSmsStatusSummary(summary?: Record<string, number>) {
+    if (!summary || typeof summary !== "object") return ""
+    const entries = Object.entries(summary).filter(([, v]) => Number(v) > 0)
+    if (!entries.length) return ""
+    entries.sort((a, b) => Number(b[1]) - Number(a[1]) || String(a[0]).localeCompare(String(b[0])))
+    return entries.map(([k, v]) => `${k}:${v}`).join(", ")
+}
+
+function joinToastDescription(parts: Array<string | null | undefined>) {
+    return parts
+        .map((p) => String(p ?? "").trim())
+        .filter(Boolean)
+        .join(" • ")
+}
+
 export default function StaffServingPage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -675,15 +715,84 @@ export default function StaffServingPage() {
                     ...(senderName ? { senderName } : {}),
                 }
 
-                const res = await staffApi.sendTicketCalledSms(ticket._id, payload)
+                // ✅ NOTE: staffApi SMS endpoints use throwOnError:false
+                // so "provider failures" may return 200 with `{ ok:false }`.
+                const res: any = await staffApi.sendTicketCalledSms(ticket._id, payload)
 
-                if (opts?.toastOnSuccess !== false) {
-                    toast.success(
-                        `SMS sent for #${ticket.queueNumber}${res?.number ? ` to ${res.number}` : ""}.`,
-                    )
+                // ---------- Defensive receipt validation (prevents false success) ----------
+                const providerResponse = extractSemaphoreProviderResponseFromSmsResponse(res)
+                const receipt = providerResponse !== undefined ? validateSemaphoreReceipts(providerResponse) : null
+
+                const rawOutcome = String(res?.outcome ?? "").trim().toLowerCase()
+                const rawOk = res?.ok === true
+
+                // Treat "skipped" as a handled outcome (not success toast)
+                const isSkipped = rawOutcome === "skipped"
+
+                // If receipts exist, require them to be OK for a "sent" success
+                const receiptOk = receipt?.ok === true
+                const canConfirmByReceipt = receipt !== null
+
+                const statusSummary = (res?.statusSummary ?? receipt?.statusSummary) as Record<string, number> | undefined
+                const receiptsCount =
+                    typeof res?.receiptsCount === "number"
+                        ? (res.receiptsCount as number)
+                        : typeof receipt?.receiptsCount === "number"
+                          ? receipt.receiptsCount
+                          : undefined
+
+                const number = String(res?.number ?? "").trim()
+                const statusText = formatSmsStatusSummary(statusSummary)
+                const metaDesc = joinToastDescription([
+                    number ? `Number: ${number}` : null,
+                    typeof receiptsCount === "number" ? `Receipts: ${receiptsCount}` : null,
+                    statusText ? `Status: ${statusText}` : null,
+                ])
+
+                const reasonText = String(res?.message ?? res?.reason ?? res?.error ?? "").trim()
+
+                // ✅ Strict success rule:
+                // - If receipts exist: must be receiptOk AND server ok AND not skipped
+                // - If receipts do NOT exist: do NOT show success (cannot confirm delivery)
+                const isConfirmedSent =
+                    !isSkipped &&
+                    rawOk === true &&
+                    (canConfirmByReceipt ? receiptOk : false) &&
+                    (rawOutcome ? rawOutcome === "sent" : true)
+
+                if (isConfirmedSent) {
+                    if (opts?.toastOnSuccess !== false) {
+                        toast.success(`SMS confirmed for #${ticket.queueNumber}.`, {
+                            description: metaDesc || "Provider receipt confirmed delivery status.",
+                        })
+                    }
+                    return true
                 }
 
-                return true
+                if (isSkipped) {
+                    toast.message(`SMS skipped for #${ticket.queueNumber}.`, {
+                        description:
+                            joinToastDescription([
+                                reasonText || null,
+                                metaDesc || null,
+                            ]) || "SMS was skipped by server rules (e.g., missing/opt-out number).",
+                    })
+                    return true
+                }
+
+                // Not confirmed / failed / unknown
+                const receiptError = receipt?.ok === false ? receipt.error : ""
+                const failDesc =
+                    joinToastDescription([
+                        reasonText || receiptError || null,
+                        metaDesc || null,
+                    ]) || "SMS was not confirmed by the provider receipt."
+
+                toast.error(`SMS not confirmed for #${ticket.queueNumber}.`, {
+                    description: failDesc,
+                })
+
+                return false
             } catch (e: any) {
                 toast.error(e?.message ?? "Failed to send SMS.")
                 return false
