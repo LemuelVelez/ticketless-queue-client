@@ -1,0 +1,14 @@
+:80 {
+  root * /usr/share/caddy
+
+  # SPA routing for react-router-dom (prevents 404 on refresh/deep links)
+  try_files {path} /index.html
+
+  encode gzip zstd
+  file_server
+
+  header {
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+}
