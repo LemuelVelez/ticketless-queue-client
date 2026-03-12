@@ -38,6 +38,13 @@ export function toApiUrl(path: string) {
 }
 
 export const API_PATHS = {
+    auth: {
+        register: "/auth/register",
+        login: "/auth/login",
+        forgotPassword: "/auth/forgot-password",
+        resetPassword: "/auth/reset-password",
+        me: "/auth/me",
+    },
     settings: {
         current: "/settings/current",
     },
@@ -80,6 +87,13 @@ export const API_PATHS = {
 } as const
 
 export const API_ROUTES = {
+    auth: {
+        register: () => toApiUrl(API_PATHS.auth.register),
+        login: () => toApiUrl(API_PATHS.auth.login),
+        forgotPassword: () => toApiUrl(API_PATHS.auth.forgotPassword),
+        resetPassword: () => toApiUrl(API_PATHS.auth.resetPassword),
+        me: () => toApiUrl(API_PATHS.auth.me),
+    },
     settings: {
         current: () => toApiUrl(API_PATHS.settings.current),
     },
