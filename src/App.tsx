@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react"
-import { BrowserRouter, Routes, Route, Outlet, Navigate, useLocation } from "react-router-dom"
+import {
+  BrowserRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom"
 
 import { Toaster } from "@/components/ui/sonner"
 import LandingPage from "@/pages/landing"
@@ -36,8 +43,12 @@ import AlumniJoinPage from "@/pages/alumni/join"
 import AlumniMyTicketsPage from "@/pages/alumni/my-tickets"
 import AlumniProfilePage from "@/pages/alumni/profile"
 
-import { guestApi, participantAuthStorage } from "@/api/guest"
 import { SessionProvider, useSession } from "@/hooks/use-session"
+import {
+  clearParticipantSession,
+  getParticipantToken,
+  getParticipantUser,
+} from "@/lib/auth"
 import { RoleGuard } from "@/lib/roleguard"
 
 type ShortcutTarget = "home" | "join" | "my-tickets" | "profile"
@@ -46,28 +57,30 @@ type ParticipantResolveState = ParticipantRole | null | "__CHECKING__"
 
 function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
   const value = String(raw ?? "").trim().toUpperCase()
+
   if (value === "STUDENT") return "STUDENT"
-  if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+  if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR")
+    return "ALUMNI_VISITOR"
   if (value === "GUEST" || value === "VISITOR") return "GUEST"
+
   return null
 }
 
-async function resolveParticipantRole(): Promise<ParticipantRole | null> {
-  const token = participantAuthStorage.getToken()
+function resolveParticipantRole(): ParticipantRole | null {
+  const token = getParticipantToken()
   if (!token) return null
 
-  try {
-    const session = await guestApi.getSession()
-    const role = normalizeParticipantRole(session?.participant?.type)
-    if (!role) {
-      participantAuthStorage.clearToken()
-      return null
-    }
-    return role
-  } catch {
-    participantAuthStorage.clearToken()
+  const storedParticipant = getParticipantUser()
+  const role = normalizeParticipantRole(
+    storedParticipant?.type ?? storedParticipant?.role
+  )
+
+  if (!role) {
+    clearParticipantSession()
     return null
   }
+
+  return role
 }
 
 function getShortcutPath(role: string | undefined, target: ShortcutTarget) {
@@ -75,8 +88,7 @@ function getShortcutPath(role: string | undefined, target: ShortcutTarget) {
     case "ADMIN":
       return "/admin/dashboard"
     case "STAFF":
-      if (target === "join") return "/staff/queue"
-      return "/staff/dashboard"
+      return target === "join" ? "/staff/queue" : "/staff/dashboard"
     case "STUDENT":
       return `/student/${target}`
     case "ALUMNI":
@@ -86,7 +98,10 @@ function getShortcutPath(role: string | undefined, target: ShortcutTarget) {
   }
 }
 
-function getParticipantShortcutPath(role: ParticipantRole, target: ShortcutTarget) {
+function getParticipantShortcutPath(
+  role: ParticipantRole,
+  target: ShortcutTarget
+) {
   return role === "STUDENT" ? `/student/${target}` : `/alumni/${target}`
 }
 
@@ -106,38 +121,17 @@ function LoadingRedirect() {
 function ParticipantAreaGuard({ allow }: { allow: "student" | "alumni" }) {
   const location = useLocation()
   const { user, loading: userLoading } = useSession()
-
-  const [participantRole, setParticipantRole] = useState<ParticipantResolveState>("__CHECKING__")
+  const [participantRole, setParticipantRole] =
+    useState<ParticipantResolveState>("__CHECKING__")
 
   useEffect(() => {
-    let alive = true
+    if (user) return
 
-    // If staff/admin session exists, do not treat this as "not logged in participant".
-    if (user) {
-      return () => {
-        alive = false
-      }
-    }
-
-    ; (async () => {
-      // Avoid synchronous setState in effect body
-      await Promise.resolve()
-      if (!alive) return
-      setParticipantRole("__CHECKING__")
-
-      const role = await resolveParticipantRole()
-      if (!alive) return
-      setParticipantRole(role)
-    })()
-
-    return () => {
-      alive = false
-    }
+    setParticipantRole(resolveParticipantRole())
   }, [location.pathname, user])
 
   if (userLoading) return <LoadingPage />
 
-  // Redirect authenticated staff/admin away from participant-only pages
   if (user) {
     return <Navigate to={getShortcutPath(user.role, "home")} replace />
   }
@@ -145,7 +139,13 @@ function ParticipantAreaGuard({ allow }: { allow: "student" | "alumni" }) {
   if (participantRole === "__CHECKING__") return <LoadingPage />
 
   if (!participantRole) {
-    return <Navigate to="/login" replace state={{ from: { pathname: location.pathname } }} />
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: { pathname: location.pathname } }}
+      />
+    )
   }
 
   if (allow === "student" && participantRole !== "STUDENT") {
@@ -159,23 +159,20 @@ function ParticipantAreaGuard({ allow }: { allow: "student" | "alumni" }) {
   return <Outlet />
 }
 
-function ParticipantShortcutGuestRedirect({ target }: { target: ShortcutTarget }) {
-  const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
+function ParticipantShortcutGuestRedirect({
+  target,
+}: {
+  target: ShortcutTarget
+}) {
+  const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(
+    null
+  )
   const [checkingParticipant, setCheckingParticipant] = useState(true)
 
   useEffect(() => {
-    let alive = true
-
-      ; (async () => {
-        const role = await resolveParticipantRole()
-        if (!alive) return
-        setParticipantRole(role)
-        setCheckingParticipant(false)
-      })()
-
-    return () => {
-      alive = false
-    }
+    const role = resolveParticipantRole()
+    setParticipantRole(role)
+    setCheckingParticipant(false)
   }, [])
 
   if (checkingParticipant) return <LoadingPage />
@@ -184,7 +181,9 @@ function ParticipantShortcutGuestRedirect({ target }: { target: ShortcutTarget }
     return <Navigate to="/login" replace />
   }
 
-  return <Navigate to={getParticipantShortcutPath(participantRole, target)} replace />
+  return (
+    <Navigate to={getParticipantShortcutPath(participantRole, target)} replace />
+  )
 }
 
 function ParticipantShortcutRedirect({ target }: { target: ShortcutTarget }) {
@@ -206,10 +205,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
 
-          {/* ✅ Used only during redirect/session resolve */}
           <Route path="/loading" element={<LoadingRedirect />} />
 
-          {/* Auth */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/authentication/register" element={<RegisterPage />} />
@@ -217,31 +214,51 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
 
-          {/* ✅ Student routes (participant-auth required) */}
           <Route element={<ParticipantAreaGuard allow="student" />}>
-            <Route path="/student" element={<Navigate to="/student/home" replace />} />
+            <Route
+              path="/student"
+              element={<Navigate to="/student/home" replace />}
+            />
             <Route path="/student/home" element={<StudentHomePage />} />
             <Route path="/student/join" element={<StudentJoinPage />} />
-            <Route path="/student/my-tickets" element={<StudentMyTicketsPage />} />
+            <Route
+              path="/student/my-tickets"
+              element={<StudentMyTicketsPage />}
+            />
             <Route path="/student/profile" element={<StudentProfilePage />} />
           </Route>
 
-          {/* ✅ Guest/Alumni routes (participant-auth required) */}
           <Route element={<ParticipantAreaGuard allow="alumni" />}>
-            <Route path="/alumni" element={<Navigate to="/alumni/home" replace />} />
+            <Route
+              path="/alumni"
+              element={<Navigate to="/alumni/home" replace />}
+            />
             <Route path="/alumni/home" element={<AlumniHomePage />} />
             <Route path="/alumni/join" element={<AlumniJoinPage />} />
-            <Route path="/alumni/my-tickets" element={<AlumniMyTicketsPage />} />
+            <Route
+              path="/alumni/my-tickets"
+              element={<AlumniMyTicketsPage />}
+            />
             <Route path="/alumni/profile" element={<AlumniProfilePage />} />
           </Route>
 
-          {/* ✅ Friendly shared shortcuts */}
-          <Route path="/home" element={<ParticipantShortcutRedirect target="home" />} />
-          <Route path="/join" element={<ParticipantShortcutRedirect target="join" />} />
-          <Route path="/my-tickets" element={<ParticipantShortcutRedirect target="my-tickets" />} />
-          <Route path="/profile" element={<ParticipantShortcutRedirect target="profile" />} />
+          <Route
+            path="/home"
+            element={<ParticipantShortcutRedirect target="home" />}
+          />
+          <Route
+            path="/join"
+            element={<ParticipantShortcutRedirect target="join" />}
+          />
+          <Route
+            path="/my-tickets"
+            element={<ParticipantShortcutRedirect target="my-tickets" />}
+          />
+          <Route
+            path="/profile"
+            element={<ParticipantShortcutRedirect target="profile" />}
+          />
 
-          {/* Admin Routes */}
           <Route
             element={
               <RoleGuard
@@ -256,14 +273,16 @@ export default function App() {
           >
             <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
             <Route path="/admin/accounts" element={<AdminAccountsPage />} />
-            <Route path="/admin/departments" element={<AdminDepartmentsPage />} />
+            <Route
+              path="/admin/departments"
+              element={<AdminDepartmentsPage />}
+            />
             <Route path="/admin/windows" element={<AdminWindowsPage />} />
             <Route path="/admin/reports" element={<AdminReportsPage />} />
             <Route path="/admin/audit-logs" element={<AdminAuditsPage />} />
             <Route path="/admin/settings" element={<AdminSettingsPage />} />
           </Route>
 
-          {/* Staff Routes */}
           <Route
             element={
               <RoleGuard
