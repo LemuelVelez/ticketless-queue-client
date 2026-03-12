@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { getResolvedApiBaseUrl } from "@/api/api"
+import { API_PATHS, toApiPath, toApiUrl } from "@/api/api"
 import { getAuthToken, getParticipantToken } from "@/lib/auth"
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
@@ -220,71 +220,68 @@ type RequestOptions = {
     signal?: AbortSignal
 }
 
-function stripTrailingSlash(s: string) {
-    return s.endsWith("/") ? s.slice(0, -1) : s
-}
-
-function normalizeApiBaseUrl(rawBase: string) {
-    const base = String(rawBase ?? "").trim()
-    if (!base) return ""
-
-    if (/^https?:\/\//i.test(base)) return stripTrailingSlash(base)
-
-    if (base.startsWith("//")) {
-        if (typeof window !== "undefined")
-            return stripTrailingSlash(`${window.location.protocol}${base}`)
-        return stripTrailingSlash(`https:${base}`)
-    }
-
-    if (base.startsWith("/")) {
-        if (typeof window !== "undefined")
-            return stripTrailingSlash(`${window.location.origin}${base}`)
-        return stripTrailingSlash(base)
-    }
-
-    if (base.startsWith(":")) {
-        if (typeof window !== "undefined") {
-            return stripTrailingSlash(
-                `${window.location.protocol}//${window.location.hostname}${base}`
-            )
-        }
-        return stripTrailingSlash(`http://localhost${base}`)
-    }
-
-    if (/^[a-z0-9.-]+(:\d+)?(\/.*)?$/i.test(base)) {
-        if (typeof window !== "undefined")
-            return stripTrailingSlash(`${window.location.protocol}//${base}`)
-        return stripTrailingSlash(`http://${base}`)
-    }
-
-    return stripTrailingSlash(base)
-}
-
-function joinUrl(base: string, path: string) {
-    if (!base) return path
-    const b = stripTrailingSlash(base)
-    const p = path.startsWith("/") ? path : `/${path}`
-    return `${b}${p}`
-}
-
 function isAbsoluteUrl(input: string) {
     const s = String(input ?? "").trim()
     return /^https?:\/\//i.test(s) || s.startsWith("//")
 }
 
-function buildUrl(path: string) {
+function stripQueryAndHash(value: string) {
+    const [beforeHash] = String(value ?? "").split("#", 1)
+    const [beforeQuery] = beforeHash.split("?", 1)
+    return beforeQuery
+}
+
+const PUBLIC_AUTH_PATHS = new Set(
+    [
+        API_PATHS.auth.register,
+        API_PATHS.auth.login,
+        API_PATHS.auth.forgotPassword,
+        API_PATHS.auth.resetPassword,
+    ]
+        .map((path) => toApiPath(path))
+        .filter(Boolean)
+)
+
+function getComparableApiPath(path: string) {
     const raw = String(path ?? "").trim()
     if (!raw) return ""
 
-    // ✅ Allow passing a fully-qualified URL (useful for presigned/absolute endpoints).
     if (isAbsoluteUrl(raw)) {
-        // Normalize protocol-relative urls (//host/path) into https? based on current protocol.
-        return raw.startsWith("//") ? normalizeApiBaseUrl(raw) : raw
+        try {
+            const absolute = raw.startsWith("//")
+                ? typeof window !== "undefined"
+                    ? `${window.location.protocol}${raw}`
+                    : `https:${raw}`
+                : raw
+
+            const url = new URL(absolute)
+            return toApiPath(url.pathname)
+        } catch {
+            return toApiPath(stripQueryAndHash(raw))
+        }
     }
 
-    const base = normalizeApiBaseUrl(getResolvedApiBaseUrl())
-    const cleanPath = raw.startsWith("/") ? raw : `/${raw}`
-    return joinUrl(base, cleanPath)
+    return toApiPath(stripQueryAndHash(raw))
+}
+
+function resolveRequestAuthMode(
+    path: string,
+    auth: RequestAuthMode | undefined
+): RequestAuthMode {
+    if (auth !== undefined) return auth
+
+    const comparablePath = getComparableApiPath(path)
+    if (PUBLIC_AUTH_PATHS.has(comparablePath)) {
+        return false
+    }
+
+    return "auto"
+}
+
+function buildUrl(path: string) {
+    const raw = String(path ?? "").trim()
+    if (!raw) return toApiUrl("")
+    return toApiUrl(raw)
 }
 
 function hasHeader(headers: Record<string, string>, key: string) {
@@ -558,7 +555,7 @@ export async function apiRequest<T>(
         method = "GET",
         body,
         headers = {},
-        auth = "auto",
+        auth,
         params,
         credentials,
         throwOnError = true,
@@ -570,9 +567,11 @@ export async function apiRequest<T>(
         ...headers,
     }
 
+    const resolvedAuth = resolveRequestAuthMode(path, auth)
+
     // Respect caller-provided Authorization header.
     if (!hasHeader(finalHeaders, "Authorization")) {
-        const token = resolveAuthToken(auth)
+        const token = resolveAuthToken(resolvedAuth)
         if (token) finalHeaders.Authorization = `Bearer ${token}`
     }
 

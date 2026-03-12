@@ -2,6 +2,8 @@ import { getApiBaseUrl } from "@/lib/env"
 
 export type ApiRouteParam = string | number
 
+export const API_PREFIX = "/api"
+
 function stripTrailingSlash(value: string) {
     return String(value ?? "").replace(/\/+$/, "")
 }
@@ -12,18 +14,36 @@ function ensureLeadingSlash(value: string) {
     return raw.startsWith("/") ? raw : `/${raw}`
 }
 
+function stripApiPrefix(value: string) {
+    const normalized = ensureLeadingSlash(value)
+    if (normalized === API_PREFIX) return ""
+    return normalized.replace(/^\/api(?=\/|$)/i, "")
+}
+
 function encodeRouteParam(value: ApiRouteParam) {
     return encodeURIComponent(String(value ?? "").trim())
 }
 
+function normalizeApiBaseUrl(value: string) {
+    const base = stripTrailingSlash(String(value ?? "").trim())
+    if (!base) return API_PREFIX
+    return /\/api$/i.test(base) ? base : `${base}${API_PREFIX}`
+}
+
 export function getResolvedApiBaseUrl() {
-    return stripTrailingSlash(getApiBaseUrl())
+    return normalizeApiBaseUrl(getApiBaseUrl())
 }
 
 export function toApiPath(path: string) {
     const raw = String(path ?? "").trim()
     if (!raw) return ""
-    return ensureLeadingSlash(raw)
+
+    if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) {
+        return raw
+    }
+
+    const normalized = stripApiPrefix(raw)
+    return normalized ? ensureLeadingSlash(normalized) : ""
 }
 
 export function toApiUrl(path: string) {
@@ -34,7 +54,10 @@ export function toApiUrl(path: string) {
         return raw
     }
 
-    return `${getResolvedApiBaseUrl()}${toApiPath(raw)}`
+    const apiPath = toApiPath(raw)
+    return apiPath
+        ? `${getResolvedApiBaseUrl()}${apiPath}`
+        : getResolvedApiBaseUrl()
 }
 
 export const API_PATHS = {
