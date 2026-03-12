@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { getApiBaseUrl } from "@/lib/env"
+import { getResolvedApiBaseUrl } from "@/api/api"
 import { getAuthToken, getParticipantToken } from "@/lib/auth"
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
@@ -159,7 +159,11 @@ export type ApiData<T> = T | ({ data: T } & Record<string, unknown>)
  *   `{ ...extras, ...data }` (keeps context/meta while still unwrapping)
  */
 export function unwrapApiData<T>(value: ApiData<T>): T {
-    if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
+    if (
+        value &&
+        typeof value === "object" &&
+        "data" in (value as Record<string, unknown>)
+    ) {
         const wrapper = value as { data: unknown } & Record<string, unknown>
         const data = wrapper.data
 
@@ -227,24 +231,29 @@ function normalizeApiBaseUrl(rawBase: string) {
     if (/^https?:\/\//i.test(base)) return stripTrailingSlash(base)
 
     if (base.startsWith("//")) {
-        if (typeof window !== "undefined") return stripTrailingSlash(`${window.location.protocol}${base}`)
+        if (typeof window !== "undefined")
+            return stripTrailingSlash(`${window.location.protocol}${base}`)
         return stripTrailingSlash(`https:${base}`)
     }
 
     if (base.startsWith("/")) {
-        if (typeof window !== "undefined") return stripTrailingSlash(`${window.location.origin}${base}`)
+        if (typeof window !== "undefined")
+            return stripTrailingSlash(`${window.location.origin}${base}`)
         return stripTrailingSlash(base)
     }
 
     if (base.startsWith(":")) {
         if (typeof window !== "undefined") {
-            return stripTrailingSlash(`${window.location.protocol}//${window.location.hostname}${base}`)
+            return stripTrailingSlash(
+                `${window.location.protocol}//${window.location.hostname}${base}`
+            )
         }
         return stripTrailingSlash(`http://localhost${base}`)
     }
 
     if (/^[a-z0-9.-]+(:\d+)?(\/.*)?$/i.test(base)) {
-        if (typeof window !== "undefined") return stripTrailingSlash(`${window.location.protocol}//${base}`)
+        if (typeof window !== "undefined")
+            return stripTrailingSlash(`${window.location.protocol}//${base}`)
         return stripTrailingSlash(`http://${base}`)
     }
 
@@ -273,7 +282,7 @@ function buildUrl(path: string) {
         return raw.startsWith("//") ? normalizeApiBaseUrl(raw) : raw
     }
 
-    const base = normalizeApiBaseUrl(getApiBaseUrl())
+    const base = normalizeApiBaseUrl(getResolvedApiBaseUrl())
     const cleanPath = raw.startsWith("/") ? raw : `/${raw}`
     return joinUrl(base, cleanPath)
 }
@@ -285,16 +294,24 @@ function hasHeader(headers: Record<string, string>, key: string) {
 
 function getHeaderValue(headers: Record<string, string>, key: string) {
     const target = key.toLowerCase()
-    const found = Object.entries(headers).find(([k]) => k.toLowerCase() === target)
+    const found = Object.entries(headers).find(
+        ([k]) => k.toLowerCase() === target
+    )
     return found ? found[1] : undefined
 }
 
 function hasSessionTokenHeader(headers: Record<string, string>) {
-    return hasHeader(headers, "X-Session-Token") || hasHeader(headers, "X-SessionToken")
+    return (
+        hasHeader(headers, "X-Session-Token") ||
+        hasHeader(headers, "X-SessionToken")
+    )
 }
 
 function getSessionTokenHeaderValue(headers: Record<string, string>) {
-    return getHeaderValue(headers, "X-Session-Token") || getHeaderValue(headers, "X-SessionToken")
+    return (
+        getHeaderValue(headers, "X-Session-Token") ||
+        getHeaderValue(headers, "X-SessionToken")
+    )
 }
 
 function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
@@ -342,7 +359,9 @@ function ensureAuthorizationFromSessionToken(headers: Record<string, string>) {
 function withQuery(path: string, params?: Record<string, QueryParamValue>) {
     if (!params) return path
 
-    const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null)
+    const entries = Object.entries(params).filter(
+        ([, v]) => v !== undefined && v !== null
+    )
     if (!entries.length) return path
 
     const [beforeHash, hash] = path.split("#", 2)
@@ -367,7 +386,8 @@ async function parseResponseSafe(res: Response) {
     const text = textRaw.replace(/^\uFEFF/, "")
 
     const contentType = String(res.headers.get("content-type") || "").toLowerCase()
-    const looksJson = contentType.includes("application/json") || contentType.includes("+json")
+    const looksJson =
+        contentType.includes("application/json") || contentType.includes("+json")
 
     if (looksJson) {
         try {
@@ -391,10 +411,14 @@ function isBlobBody(body: unknown): body is Blob {
 
 function isBodyInitLike(body: unknown): body is BodyInit {
     if (typeof body === "string") return true
-    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) return true
-    if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) return true
-    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body)) return true
-    if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) return true
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams)
+        return true
+    if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer)
+        return true
+    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body))
+        return true
+    if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream)
+        return true
     return false
 }
 
@@ -405,7 +429,10 @@ function snippet(val: unknown, max = 220) {
     return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
-function resolveCredentials(url: string, explicit?: RequestCredentials): RequestCredentials {
+function resolveCredentials(
+    url: string,
+    explicit?: RequestCredentials
+): RequestCredentials {
     if (explicit) return explicit
 
     // In SSR / Node contexts, omit by default.
@@ -466,8 +493,12 @@ function summarizeSemaphoreStatuses(items: Array<{ status?: string }> = []) {
  * - Any FAILED/REFUNDED => not ok
  * - At least one QUEUED/PENDING/SENT and no failures => ok
  */
-export function validateSemaphoreReceipts(providerResponse: unknown): SemaphoreReceiptValidation {
-    const receipts = Array.isArray(providerResponse) ? (providerResponse as SemaphoreReceiptItem[]) : []
+export function validateSemaphoreReceipts(
+    providerResponse: unknown
+): SemaphoreReceiptValidation {
+    const receipts = Array.isArray(providerResponse)
+        ? (providerResponse as SemaphoreReceiptItem[])
+        : []
 
     if (!receipts.length) {
         return {
@@ -494,7 +525,11 @@ export function validateSemaphoreReceipts(providerResponse: unknown): SemaphoreR
     }
 
     const ok = okCount > 0 && failCount === 0
-    const outcome: SemaphoreReceiptValidation["outcome"] = ok ? "sent" : failCount > 0 ? "failed" : "unknown"
+    const outcome: SemaphoreReceiptValidation["outcome"] = ok
+        ? "sent"
+        : failCount > 0
+          ? "failed"
+          : "unknown"
 
     const error = ok
         ? undefined
@@ -515,7 +550,10 @@ export function validateSemaphoreReceipts(providerResponse: unknown): SemaphoreR
     }
 }
 
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function apiRequest<T>(
+    path: string,
+    options: RequestOptions = {}
+): Promise<T> {
     const {
         method = "GET",
         body,
@@ -557,7 +595,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     } else if (body !== undefined) {
         if (isBodyInitLike(body)) {
             finalBody = body
-            if (typeof body === "string" && !hasHeader(finalHeaders, "Content-Type")) {
+            if (
+                typeof body === "string" &&
+                !hasHeader(finalHeaders, "Content-Type")
+            ) {
                 finalHeaders["Content-Type"] = "text/plain;charset=UTF-8"
             }
         } else {
@@ -605,7 +646,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
     // ✅ If backend sets X-Error-Message but returns 200 with `{ ok:false }`,
     // carry it into the JSON payload so UI can render it without needing headers access.
-    const headerErrorMsg = res.headers.get("x-error-message") || res.headers.get("X-Error-Message") || ""
+    const headerErrorMsg =
+        res.headers.get("x-error-message") ||
+        res.headers.get("X-Error-Message") ||
+        ""
     if (headerErrorMsg && data && typeof data === "object" && !Array.isArray(data)) {
         const d: any = data
         if ("ok" in d && d.ok === false) {
@@ -632,7 +676,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         const baseMessage =
             serverMsg ||
             responseHeaderMsg ||
-            (res.status === 404 ? default404 : res.statusText || "Request failed")
+            (res.status === 404
+                ? default404
+                : res.statusText || "Request failed")
 
         const bodyHint =
             typeof data === "string" && data.includes("<html")
@@ -641,7 +687,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
                   ? ` Response: "${snippet(data)}"`
                   : ""
 
-        throw new ApiError(`${baseMessage}${bodyHint}`, res.status, data, { method, url, path })
+        throw new ApiError(`${baseMessage}${bodyHint}`, res.status, data, {
+            method,
+            url,
+            path,
+        })
     }
 
     return data as T
@@ -651,14 +701,23 @@ export const api = {
     get: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "GET" }),
 
-    post: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<T>(path, { ...opts, method: "POST", body }),
+    post: <T>(
+        path: string,
+        body?: unknown,
+        opts?: Omit<RequestOptions, "method" | "body">
+    ) => apiRequest<T>(path, { ...opts, method: "POST", body }),
 
-    put: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<T>(path, { ...opts, method: "PUT", body }),
+    put: <T>(
+        path: string,
+        body?: unknown,
+        opts?: Omit<RequestOptions, "method" | "body">
+    ) => apiRequest<T>(path, { ...opts, method: "PUT", body }),
 
-    patch: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<T>(path, { ...opts, method: "PATCH", body }),
+    patch: <T>(
+        path: string,
+        body?: unknown,
+        opts?: Omit<RequestOptions, "method" | "body">
+    ) => apiRequest<T>(path, { ...opts, method: "PATCH", body }),
 
     delete: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "DELETE" }),
@@ -672,17 +731,42 @@ export const api = {
      * These helpers unwrap smartly so we don't lose `context/meta` while keeping DX clean.
      */
     getData: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<ApiData<T>>(path, { ...opts, method: "GET" }).then((res) => unwrapApiData<T>(res)),
+        apiRequest<ApiData<T>>(path, { ...opts, method: "GET" }).then((res) =>
+            unwrapApiData<T>(res)
+        ),
 
-    postData: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<ApiData<T>>(path, { ...opts, method: "POST", body }).then((res) => unwrapApiData<T>(res)),
+    postData: <T>(
+        path: string,
+        body?: unknown,
+        opts?: Omit<RequestOptions, "method" | "body">
+    ) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "POST", body }).then(
+            (res) => unwrapApiData<T>(res)
+        ),
 
-    putData: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<ApiData<T>>(path, { ...opts, method: "PUT", body }).then((res) => unwrapApiData<T>(res)),
+    putData: <T>(
+        path: string,
+        body?: unknown,
+        opts?: Omit<RequestOptions, "method" | "body">
+    ) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "PUT", body }).then(
+            (res) => unwrapApiData<T>(res)
+        ),
 
-    patchData: <T>(path: string, body?: unknown, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<ApiData<T>>(path, { ...opts, method: "PATCH", body }).then((res) => unwrapApiData<T>(res)),
+    patchData: <T>(
+        path: string,
+        body?: unknown,
+        opts?: Omit<RequestOptions, "method" | "body">
+    ) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "PATCH", body }).then(
+            (res) => unwrapApiData<T>(res)
+        ),
 
-    deleteData: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<ApiData<T>>(path, { ...opts, method: "DELETE" }).then((res) => unwrapApiData<T>(res)),
+    deleteData: <T>(
+        path: string,
+        opts?: Omit<RequestOptions, "method" | "body">
+    ) =>
+        apiRequest<ApiData<T>>(path, { ...opts, method: "DELETE" }).then(
+            (res) => unwrapApiData<T>(res)
+        ),
 }
