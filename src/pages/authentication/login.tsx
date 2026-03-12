@@ -5,9 +5,16 @@ import { toast } from "sonner"
 
 import LoadingPage from "@/pages/loading"
 
-import { guestApi, participantAuthStorage } from "@/api/guest"
+import { toApiPath } from "@/api/api"
 import { useSession } from "@/hooks/use-session"
-import { ApiError } from "@/lib/http"
+import {
+    clearAuthSession,
+    clearParticipantSession,
+    getParticipantToken,
+    setParticipantSession,
+    type StoredParticipantUser,
+} from "@/lib/auth"
+import { api, ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -25,6 +32,26 @@ type LocationState = {
 }
 
 type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
+
+type ParticipantLoginPayload = {
+    tcNumber?: string
+    studentId?: string
+    mobileNumber?: string
+    phone?: string
+    pin: string
+    password: string
+}
+
+type ParticipantSessionResponse = {
+    participant: StoredParticipantUser | null
+}
+
+const PARTICIPANT_AUTH_API_PATHS = {
+    session: toApiPath("/guest/session"),
+    loginStudent: toApiPath("/guest/login/student"),
+    loginAlumniVisitor: toApiPath("/guest/login/alumni-visitor"),
+    loginGuest: toApiPath("/guest/login/guest"),
+} as const
 
 function defaultDashboardPath(role: "ADMIN" | "STAFF") {
     return role === "ADMIN" ? "/admin/dashboard" : "/staff/dashboard"
@@ -102,10 +129,112 @@ function looksLikePhone(value: string) {
     return digits.length >= 10
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function firstNonEmptyString(...values: unknown[]) {
+    for (const value of values) {
+        if (typeof value !== "string") continue
+        const clean = value.trim()
+        if (clean) return clean
+    }
+
+    return null
+}
+
+function looksLikeParticipantUserRecord(value: Record<string, unknown>) {
+    return [
+        "id",
+        "_id",
+        "type",
+        "name",
+        "firstName",
+        "lastName",
+        "tcNumber",
+        "studentId",
+        "mobileNumber",
+        "phone",
+        "departmentId",
+        "departmentCode",
+    ].some((key) => key in value)
+}
+
+function extractParticipantUser(payload: unknown): StoredParticipantUser | null {
+    if (!isRecord(payload)) return null
+
+    if (isRecord(payload.participant)) {
+        return payload.participant as StoredParticipantUser
+    }
+
+    if (isRecord(payload.user)) {
+        return payload.user as StoredParticipantUser
+    }
+
+    if (looksLikeParticipantUserRecord(payload)) {
+        return payload as StoredParticipantUser
+    }
+
+    return null
+}
+
+function extractParticipantToken(payload: unknown) {
+    if (!isRecord(payload)) return null
+
+    return firstNonEmptyString(
+        payload.token,
+        payload.accessToken,
+        payload.sessionToken,
+        payload.authToken,
+        payload.jwt,
+        payload.bearerToken,
+    )
+}
+
+async function getParticipantSession(): Promise<ParticipantSessionResponse> {
+    const response = await api.getData<unknown>(PARTICIPANT_AUTH_API_PATHS.session, {
+        auth: "participant",
+    })
+
+    return {
+        participant: extractParticipantUser(response),
+    }
+}
+
+async function loginParticipant(path: string, payload: ParticipantLoginPayload) {
+    const response = await api.postData<unknown>(path, payload, { auth: false })
+    const token = extractParticipantToken(response)
+
+    if (!token) {
+        throw new Error("Participant login response did not include a session token.")
+    }
+
+    const participant = extractParticipantUser(response) ?? undefined
+    setParticipantSession(token, participant, true)
+
+    return {
+        token,
+        participant: participant ?? null,
+    }
+}
+
+const participantAuthApi = {
+    getSession,
+    loginStudent(payload: ParticipantLoginPayload) {
+        return loginParticipant(PARTICIPANT_AUTH_API_PATHS.loginStudent, payload)
+    },
+    loginAlumniVisitor(payload: ParticipantLoginPayload) {
+        return loginParticipant(PARTICIPANT_AUTH_API_PATHS.loginAlumniVisitor, payload)
+    },
+    loginGuest(payload: ParticipantLoginPayload) {
+        return loginParticipant(PARTICIPANT_AUTH_API_PATHS.loginGuest, payload)
+    },
+}
+
 async function resolveParticipantRole(fallback: ParticipantRole): Promise<ParticipantRole> {
     try {
-        const session = await guestApi.getSession()
-        return normalizeParticipantRole(session?.participant?.type) ?? fallback
+        const session = await participantAuthApi.getSession()
+        return normalizeParticipantRole(session.participant?.type) ?? fallback
     } catch {
         return fallback
     }
@@ -139,7 +268,7 @@ export default function LoginPage() {
             const fromPath = state?.from?.pathname
 
             if (canRedirectTo(fromPath, role)) {
-                navigate(fromPath!, { replace: true })
+                navigate(fromPath, { replace: true })
                 return
             }
 
@@ -147,19 +276,19 @@ export default function LoginPage() {
             return
         }
 
-        const participantToken = participantAuthStorage.getToken()
+        const participantToken = getParticipantToken()
         if (!participantToken) return
 
         let alive = true
 
         ;(async () => {
             try {
-                const session = await guestApi.getSession()
+                const session = await participantAuthApi.getSession()
                 if (!alive) return
 
-                const role = normalizeParticipantRole(session?.participant?.type)
+                const role = normalizeParticipantRole(session.participant?.type)
                 if (!role) {
-                    participantAuthStorage.clearToken()
+                    clearParticipantSession()
                     return
                 }
 
@@ -167,14 +296,14 @@ export default function LoginPage() {
                 const fromPath = state?.from?.pathname
 
                 if (canRedirectParticipantTo(fromPath, role)) {
-                    navigate(fromPath!, { replace: true })
+                    navigate(fromPath, { replace: true })
                     return
                 }
 
                 navigate(defaultParticipantPath(role), { replace: true })
             } catch {
                 if (!alive) return
-                participantAuthStorage.clearToken()
+                clearParticipantSession()
             }
         })()
 
@@ -206,7 +335,7 @@ export default function LoginPage() {
                 const res = await login(cleanId, secret, rememberMe)
 
                 // Avoid mixed-role sessions
-                participantAuthStorage.clearToken()
+                clearParticipantSession()
 
                 toast.success("Signed in successfully")
 
@@ -217,7 +346,7 @@ export default function LoginPage() {
                 const fromPath = state?.from?.pathname
 
                 if (canRedirectTo(fromPath, role)) {
-                    navigate(fromPath!, { replace: true })
+                    navigate(fromPath, { replace: true })
                     return
                 }
 
@@ -232,9 +361,12 @@ export default function LoginPage() {
                 return
             }
 
+            // Clear staff session before establishing a participant-only session.
+            clearAuthSession()
+
             // Try student first, then alumni/visitor, then legacy guest (older accounts)
             try {
-                await guestApi.loginStudent({
+                await participantAuthApi.loginStudent({
                     tcNumber: cleanId,
                     pin,
                     studentId: cleanId,
@@ -243,7 +375,7 @@ export default function LoginPage() {
             } catch (err) {
                 if (err instanceof ApiError && (err.status === 401 || err.status === 404)) {
                     try {
-                        await guestApi.loginAlumniVisitor({
+                        await participantAuthApi.loginAlumniVisitor({
                             mobileNumber: cleanId,
                             pin,
                             phone: cleanId,
@@ -251,7 +383,7 @@ export default function LoginPage() {
                         })
                     } catch (err2) {
                         if (err2 instanceof ApiError && (err2.status === 401 || err2.status === 404)) {
-                            await guestApi.loginGuest({
+                            await participantAuthApi.loginGuest({
                                 mobileNumber: cleanId,
                                 pin,
                                 phone: cleanId,
@@ -275,7 +407,7 @@ export default function LoginPage() {
             const fromPath = state?.from?.pathname
 
             if (canRedirectParticipantTo(fromPath, participantRole)) {
-                navigate(fromPath!, { replace: true })
+                navigate(fromPath, { replace: true })
                 return
             }
 
@@ -285,8 +417,9 @@ export default function LoginPage() {
                 err instanceof ApiError
                     ? err.message
                     : err instanceof Error
-                        ? err.message
-                        : "Sign in failed"
+                      ? err.message
+                      : "Sign in failed"
+
             toast.error(message)
         } finally {
             setIsSubmitting(false)
