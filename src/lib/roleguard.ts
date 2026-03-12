@@ -1,7 +1,13 @@
 import React from "react"
 import { Navigate, useLocation } from "react-router-dom"
 import { useSession } from "@/hooks/use-session"
-import { ROLE, canAccessRole, type AllowedRoles, type UserRole } from "@/lib/rolebase"
+import {
+    DEFAULT_ALLOWED_ROLES,
+    canAccessRole,
+    normalizeAllowedRoles,
+    type AllowedRoles,
+    type UserRole,
+} from "@/lib/rolebase"
 
 export type RoleGuardProps = {
     /**
@@ -46,7 +52,7 @@ export type RoleGuardProps = {
  */
 export function RoleGuard(props: RoleGuardProps) {
     const {
-        allow = [ROLE.ADMIN, ROLE.STAFF],
+        allow = DEFAULT_ALLOWED_ROLES,
         minRole,
         children,
         redirectTo = "/login",
@@ -65,12 +71,14 @@ export function RoleGuard(props: RoleGuardProps) {
         return React.createElement(Navigate, {
             to: redirectTo,
             replace: true,
-            state: { from: location },
+            state: { from: location, reason: "unauthenticated" },
         })
     }
 
+    const normalizedAllow = normalizeAllowedRoles(allow)
+
     const allowed = canAccessRole(user.role, {
-        anyOf: allow,
+        anyOf: normalizedAllow,
         min: minRole,
     })
 
@@ -78,6 +86,12 @@ export function RoleGuard(props: RoleGuardProps) {
         return React.createElement(Navigate, {
             to: unauthorizedTo,
             replace: true,
+            state: {
+                from: location,
+                reason: "unauthorized",
+                allow: normalizedAllow,
+                minRole: minRole ?? null,
+            },
         })
     }
 

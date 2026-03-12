@@ -7,7 +7,7 @@ import React, {
     useRef,
     useState,
 } from "react"
-import { toApiPath } from "@/api/api"
+import { API_PATHS } from "@/api/api"
 import {
     AUTH_STORAGE_KEYS,
     clearAuthSession,
@@ -19,15 +19,10 @@ import {
     type StoredAuthUser,
 } from "@/lib/auth"
 import { api, ApiError } from "@/lib/http"
-import { isUserRole, type UserRole } from "@/lib/rolebase"
+import { parseUserRole, type UserRole } from "@/lib/rolebase"
 
 const LS_TOKEN_KEY = AUTH_STORAGE_KEYS.auth.token.local
 const SS_TOKEN_KEY = AUTH_STORAGE_KEYS.auth.token.session
-
-const AUTH_API_PATHS = {
-    login: toApiPath("/auth/login"),
-    me: toApiPath("/auth/me"),
-} as const
 
 type ApiUser = {
     id?: string
@@ -51,9 +46,15 @@ export type LoginResponse = {
     user: ApiUser
 }
 
-type MeResponse = {
+type RawLoginResponse = {
+    token?: string | null
+    accessToken?: string | null
+    sessionToken?: string | null
     user?: ApiUser | null
+    [key: string]: unknown
 }
+
+type MeResponse = ApiUser | { user?: ApiUser | null } | null
 
 export type SessionUser = {
     id: string
@@ -74,7 +75,11 @@ export type SessionContextValue = {
      * Optional convenience method if you want session to own login.
      * You can ignore this if your login page handles it elsewhere.
      */
-    login: (email: string, password: string, rememberMe: boolean) => Promise<LoginResponse>
+    login: (
+        email: string,
+        password: string,
+        rememberMe: boolean
+    ) => Promise<LoginResponse>
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null)
@@ -92,6 +97,10 @@ function normalizeString(value: unknown): string | null {
     if (typeof value !== "string") return null
     const clean = value.trim()
     return clean ? clean : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
 function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
@@ -128,20 +137,48 @@ function resolveAssignedDepartment(user: ApiUser): string | null {
 }
 
 function resolveAssignedWindow(user: ApiUser): string | null {
-    return normalizeString(user.assignedWindow) ?? normalizeString(user.assignedWindowName)
+    return (
+        normalizeString(user.assignedWindow) ??
+        normalizeString(user.assignedWindowName)
+    )
+}
+
+function extractLoginResponse(value: RawLoginResponse | null | undefined): LoginResponse | null {
+    if (!isRecord(value)) return null
+
+    const token =
+        normalizeString(value.token) ??
+        normalizeString(value.accessToken) ??
+        normalizeString(value.sessionToken)
+
+    const user = isRecord(value.user) ? (value.user as ApiUser) : null
+
+    if (!token || !user) return null
+    return { token, user }
+}
+
+function extractMeUser(value: MeResponse): ApiUser | null {
+    if (!value) return null
+
+    if (isRecord(value) && hasOwn(value, "user")) {
+        return isRecord(value.user) ? (value.user as ApiUser) : null
+    }
+
+    return isRecord(value) ? (value as ApiUser) : null
 }
 
 function toSessionUser(user: ApiUser | null | undefined): SessionUser | null {
     if (!user) return null
 
     const id = normalizeString(user.id) ?? normalizeString(user._id)
-    if (!id || !isUserRole(user.role)) return null
+    const role = parseUserRole(user.role)
+    if (!id || !role) return null
 
     const email = normalizeString(user.email)
 
     return {
         id,
-        role: user.role,
+        role,
         name: resolveName(user),
         ...(email ? { email } : {}),
         assignedDepartment: resolveAssignedDepartment(user),
@@ -153,9 +190,9 @@ function mapStoredUserToSessionUser(stored: StoredAuthUser | null): SessionUser 
     if (!stored) return null
 
     const id = normalizeString(stored.id)
-    const role = stored.role
+    const role = parseUserRole(stored.role)
 
-    if (!id || !isUserRole(role)) return null
+    if (!id || !role) return null
 
     const email = normalizeString(stored.email)
 
@@ -170,15 +207,16 @@ function mapStoredUserToSessionUser(stored: StoredAuthUser | null): SessionUser 
 }
 
 function mapMeToSessionPatch(me: MeResponse): SessionUserPatch | null {
-    const user = me.user
+    const user = extractMeUser(me)
     if (!user) return null
 
     const id = normalizeString(user.id) ?? normalizeString(user._id)
-    if (!id || !isUserRole(user.role)) return null
+    const role = parseUserRole(user.role)
+    if (!id || !role) return null
 
     const patch: SessionUserPatch = {
         id,
-        role: user.role,
+        role,
     }
 
     if (
@@ -240,26 +278,24 @@ function toStoredAuthUser(user: SessionUser): StoredAuthUser {
 
 const sessionAuthApi = {
     login(email: string, password: string) {
-        return api.postData<LoginResponse>(
-            AUTH_API_PATHS.login,
+        return api.postData<RawLoginResponse>(
+            API_PATHS.auth.login,
             { email, password },
-            { auth: false },
+            { auth: false }
         )
     },
     me() {
-        return api.getData<MeResponse>(AUTH_API_PATHS.me, { auth: "staff" })
+        return api.getData<MeResponse>(API_PATHS.auth.me, { auth: "staff" })
     },
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-    // Hydrate from storage immediately
     const [user, setUser] = useState<SessionUser | null>(() => {
         const token = getAuthToken()
         if (!token) return null
         return mapStoredUserToSessionUser(getAuthUser())
     })
 
-    // If a token exists, we start in loading state and resolve via refresh().
     const [loading, setLoading] = useState<boolean>(() => !!getAuthToken())
 
     const userRef = useRef<SessionUser | null>(user)
@@ -323,22 +359,33 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         }
     }, [clearSessionState, persistSessionUser])
 
-    const login = useCallback(async (email: string, password: string, rememberMe: boolean) => {
-        const res = await sessionAuthApi.login(email, password)
-        const next = toSessionUser(res.user)
+    const login = useCallback(
+        async (email: string, password: string, rememberMe: boolean) => {
+            const raw = await sessionAuthApi.login(email, password)
+            const res = extractLoginResponse(raw)
 
-        if (!next) {
-            throw new Error("Login response did not include a valid staff session user.")
-        }
+            if (!res) {
+                throw new Error(
+                    "Login response did not include a valid token and staff session user."
+                )
+            }
 
-        setAuthSession(res.token, toStoredAuthUser(next), rememberMe)
+            const next = toSessionUser(res.user)
 
-        setUser(next)
-        userRef.current = next
-        setLoading(false)
+            if (!next) {
+                throw new Error("Login response did not include a valid staff session user.")
+            }
 
-        return res
-    }, [])
+            setAuthSession(res.token, toStoredAuthUser(next), rememberMe)
+
+            setUser(next)
+            userRef.current = next
+            setLoading(false)
+
+            return res
+        },
+        []
+    )
 
     useEffect(() => {
         let alive = true
@@ -400,7 +447,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             logout,
             login,
         }),
-        [user, loading, refresh, logout, login],
+        [user, loading, refresh, logout, login]
     )
 
     return React.createElement(SessionContext.Provider, { value }, children)

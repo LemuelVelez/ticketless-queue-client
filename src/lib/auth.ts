@@ -1,4 +1,4 @@
-import type { UserRole } from "@/lib/rolebase"
+import { parseUserRole, type UserRole } from "@/lib/rolebase"
 
 export const AUTH_STORAGE_KEYS = {
     auth: {
@@ -68,7 +68,17 @@ export type StoredParticipantUser = {
 }
 
 function canUseStorage(): boolean {
-    return typeof window !== "undefined" && !!window.localStorage && !!window.sessionStorage
+    return (
+        typeof window !== "undefined" &&
+        !!window.localStorage &&
+        !!window.sessionStorage
+    )
+}
+
+function normalizeString(value: unknown): string | undefined {
+    if (typeof value !== "string") return undefined
+    const clean = value.trim()
+    return clean || undefined
 }
 
 function mergeDefined<T extends Record<string, unknown>>(base: T | null, patch: T): T {
@@ -88,7 +98,12 @@ function hasStorageToken(localKey: string, sessionKey: string): AuthStorage {
     return null
 }
 
-function setScopedToken(localKey: string, sessionKey: string, token: string, rememberMe: boolean) {
+function setScopedToken(
+    localKey: string,
+    sessionKey: string,
+    token: string,
+    rememberMe: boolean
+) {
     if (!canUseStorage()) return
 
     const clean = String(token ?? "").trim()
@@ -115,18 +130,38 @@ function clearScopedToken(localKey: string, sessionKey: string) {
     sessionStorage.removeItem(sessionKey)
 }
 
+function getScopedUser<T extends Record<string, unknown>>(
+    localKey: string,
+    sessionKey: string
+): T | null {
+    if (!canUseStorage()) return null
+
+    const raw = localStorage.getItem(localKey) || sessionStorage.getItem(sessionKey)
+    if (!raw) return null
+
+    try {
+        return JSON.parse(raw) as T
+    } catch {
+        localStorage.removeItem(localKey)
+        sessionStorage.removeItem(sessionKey)
+        return null
+    }
+}
+
 function setScopedUser<T extends Record<string, unknown>>(
     localKey: string,
     sessionKey: string,
     user: T,
     rememberMe: boolean,
     readCurrent: () => T | null,
+    sanitize?: (value: T) => T
 ) {
     if (!canUseStorage()) return
 
     const prev = readCurrent()
     const merged = mergeDefined(prev, user)
-    const raw = JSON.stringify(merged)
+    const normalized = sanitize ? sanitize(merged) : merged
+    const raw = JSON.stringify(normalized)
 
     if (rememberMe) {
         localStorage.setItem(localKey, raw)
@@ -138,23 +173,81 @@ function setScopedUser<T extends Record<string, unknown>>(
     localStorage.removeItem(localKey)
 }
 
-function getScopedUser<T extends Record<string, unknown>>(localKey: string, sessionKey: string): T | null {
-    if (!canUseStorage()) return null
-
-    const raw = localStorage.getItem(localKey) || sessionStorage.getItem(sessionKey)
-    if (!raw) return null
-
-    try {
-        return JSON.parse(raw) as T
-    } catch {
-        return null
-    }
-}
-
 function clearScopedUser(localKey: string, sessionKey: string) {
     if (!canUseStorage()) return
     localStorage.removeItem(localKey)
     sessionStorage.removeItem(sessionKey)
+}
+
+function sanitizeStoredAuthUser(user: StoredAuthUser): StoredAuthUser {
+    const normalized: StoredAuthUser = { ...user }
+
+    const id = normalizeString(normalized.id)
+    if (id) normalized.id = id
+
+    const name = normalizeString(normalized.name)
+    if (name) normalized.name = name
+    else delete normalized.name
+
+    const email = normalizeString(normalized.email)
+    if (email) normalized.email = email
+    else delete normalized.email
+
+    const role = parseUserRole(normalized.role)
+    if (role) normalized.role = role
+    else delete normalized.role
+
+    normalized.assignedDepartment =
+        normalized.assignedDepartment == null
+            ? null
+            : normalizeString(normalized.assignedDepartment) ?? null
+
+    normalized.assignedWindow =
+        normalized.assignedWindow == null
+            ? null
+            : normalizeString(normalized.assignedWindow) ?? null
+
+    normalized.avatarKey =
+        normalized.avatarKey == null
+            ? null
+            : normalizeString(normalized.avatarKey) ?? null
+
+    normalized.avatarUrl =
+        normalized.avatarUrl == null
+            ? null
+            : normalizeString(normalized.avatarUrl) ?? null
+
+    return normalized
+}
+
+function sanitizeStoredParticipantUser(
+    user: StoredParticipantUser
+): StoredParticipantUser {
+    const normalized: StoredParticipantUser = { ...user }
+
+    const stringKeys: Array<keyof StoredParticipantUser> = [
+        "id",
+        "_id",
+        "type",
+        "name",
+        "firstName",
+        "middleName",
+        "lastName",
+        "tcNumber",
+        "studentId",
+        "mobileNumber",
+        "phone",
+        "departmentId",
+        "departmentCode",
+    ]
+
+    for (const key of stringKeys) {
+        const clean = normalizeString(normalized[key])
+        if (clean) normalized[key] = clean
+        else delete normalized[key]
+    }
+
+    return normalized
 }
 
 // Staff/Admin auth session
@@ -175,11 +268,20 @@ export function getAuthStorage(): AuthStorage {
 }
 
 export function setAuthUser(user: StoredAuthUser, rememberMe: boolean) {
-    setScopedUser(LS_USER_KEY, SS_USER_KEY, user, rememberMe, () => getAuthUser())
+    setScopedUser(
+        LS_USER_KEY,
+        SS_USER_KEY,
+        sanitizeStoredAuthUser(user),
+        rememberMe,
+        () => getAuthUser(),
+        sanitizeStoredAuthUser
+    )
 }
 
 export function getAuthUser<T extends StoredAuthUser = StoredAuthUser>(): T | null {
-    return getScopedUser<T>(LS_USER_KEY, SS_USER_KEY)
+    const value = getScopedUser<T>(LS_USER_KEY, SS_USER_KEY)
+    if (!value) return null
+    return sanitizeStoredAuthUser(value as StoredAuthUser) as T
 }
 
 export function clearAuthUser() {
@@ -198,7 +300,12 @@ export function clearAuthSession() {
 
 // Participant (Student/Guest) auth session
 export function setParticipantToken(token: string, rememberMe = true) {
-    setScopedToken(LS_PARTICIPANT_TOKEN_KEY, SS_PARTICIPANT_TOKEN_KEY, token, rememberMe)
+    setScopedToken(
+        LS_PARTICIPANT_TOKEN_KEY,
+        SS_PARTICIPANT_TOKEN_KEY,
+        token,
+        rememberMe
+    )
 }
 
 export function getParticipantToken(): string | null {
@@ -210,28 +317,43 @@ export function clearParticipantToken() {
 }
 
 export function getParticipantStorage(): ParticipantStorage {
-    return hasStorageToken(LS_PARTICIPANT_TOKEN_KEY, SS_PARTICIPANT_TOKEN_KEY)
+    return hasStorageToken(
+        LS_PARTICIPANT_TOKEN_KEY,
+        SS_PARTICIPANT_TOKEN_KEY
+    )
 }
 
 export function setParticipantUser(user: StoredParticipantUser, rememberMe = true) {
     setScopedUser(
         LS_PARTICIPANT_USER_KEY,
         SS_PARTICIPANT_USER_KEY,
-        user,
+        sanitizeStoredParticipantUser(user),
         rememberMe,
         () => getParticipantUser(),
+        sanitizeStoredParticipantUser
     )
 }
 
-export function getParticipantUser<T extends StoredParticipantUser = StoredParticipantUser>(): T | null {
-    return getScopedUser<T>(LS_PARTICIPANT_USER_KEY, SS_PARTICIPANT_USER_KEY)
+export function getParticipantUser<
+    T extends StoredParticipantUser = StoredParticipantUser,
+>(): T | null {
+    const value = getScopedUser<T>(
+        LS_PARTICIPANT_USER_KEY,
+        SS_PARTICIPANT_USER_KEY
+    )
+    if (!value) return null
+    return sanitizeStoredParticipantUser(value as StoredParticipantUser) as T
 }
 
 export function clearParticipantUser() {
     clearScopedUser(LS_PARTICIPANT_USER_KEY, SS_PARTICIPANT_USER_KEY)
 }
 
-export function setParticipantSession(token: string, user?: StoredParticipantUser, rememberMe = true) {
+export function setParticipantSession(
+    token: string,
+    user?: StoredParticipantUser,
+    rememberMe = true
+) {
     setParticipantToken(token, rememberMe)
     if (user) setParticipantUser(user, rememberMe)
 }
