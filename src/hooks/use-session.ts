@@ -7,9 +7,9 @@ import React, {
     useRef,
     useState,
 } from "react"
-import { authApi, type LoginResponse, type UserRole } from "@/api/auth"
-import { ApiError } from "@/lib/http"
+import { toApiPath } from "@/api/api"
 import {
+    AUTH_STORAGE_KEYS,
     clearAuthSession,
     getAuthStorage,
     getAuthToken,
@@ -18,9 +18,42 @@ import {
     setAuthUser,
     type StoredAuthUser,
 } from "@/lib/auth"
+import { api, ApiError } from "@/lib/http"
+import { isUserRole, type UserRole } from "@/lib/rolebase"
 
-const LS_TOKEN_KEY = "qp_auth_token"
-const SS_TOKEN_KEY = "qp_auth_token_session"
+const LS_TOKEN_KEY = AUTH_STORAGE_KEYS.auth.token.local
+const SS_TOKEN_KEY = AUTH_STORAGE_KEYS.auth.token.session
+
+const AUTH_API_PATHS = {
+    login: toApiPath("/auth/login"),
+    me: toApiPath("/auth/me"),
+} as const
+
+type ApiUser = {
+    id?: string
+    _id?: string
+    role?: unknown
+    name?: string | null
+    email?: string | null
+    assignedDepartment?: string | null
+    assignedDepartmentName?: string | null
+    assignedDepartmentNames?: string[] | null
+    assignedWindow?: string | null
+    assignedWindowName?: string | null
+    firstName?: string | null
+    middleName?: string | null
+    lastName?: string | null
+    [key: string]: unknown
+}
+
+export type LoginResponse = {
+    token: string
+    user: ApiUser
+}
+
+type MeResponse = {
+    user?: ApiUser | null
+}
 
 export type SessionUser = {
     id: string
@@ -46,46 +79,6 @@ export type SessionContextValue = {
 
 const SessionContext = createContext<SessionContextValue | null>(null)
 
-function isUserRole(v: unknown): v is UserRole {
-    return v === "ADMIN" || v === "STAFF"
-}
-
-function mapLoginUserToSession(res: LoginResponse): SessionUser {
-    return {
-        id: res.user.id,
-        role: res.user.role,
-        name: res.user.name ?? null,
-        email: res.user.email,
-        assignedDepartment: res.user.assignedDepartment ?? null,
-        assignedWindow: res.user.assignedWindow ?? null,
-    }
-}
-
-function mapStoredUserToSessionUser(stored: StoredAuthUser | null): SessionUser | null {
-    if (!stored) return null
-
-    const id = typeof stored.id === "string" ? stored.id : ""
-    const role = stored.role
-
-    if (!id || !isUserRole(role)) return null
-
-    const dep = stored.assignedDepartment
-    const win = stored.assignedWindow
-
-    return {
-        id,
-        role,
-        name: typeof stored.name === "string" ? stored.name : null,
-        email: typeof stored.email === "string" ? stored.email : undefined,
-        assignedDepartment: typeof dep === "string" ? dep : null,
-        assignedWindow: typeof win === "string" ? win : null,
-    }
-}
-
-/**
- * /auth/me can be partial (often missing email).
- * We treat it as a PATCH over the existing session user.
- */
 type SessionUserPatch = {
     id: string
     role: UserRole
@@ -95,23 +88,123 @@ type SessionUserPatch = {
     assignedWindow?: string | null
 }
 
-function mapMeToSessionPatch(me: Awaited<ReturnType<typeof authApi.me>>): SessionUserPatch | null {
-    const u = me.user
-    if (!u) return null
+function normalizeString(value: unknown): string | null {
+    if (typeof value !== "string") return null
+    const clean = value.trim()
+    return clean ? clean : null
+}
+
+function hasOwn<T extends object>(value: T, key: PropertyKey): boolean {
+    return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function resolveName(user: ApiUser): string | null {
+    const directName = normalizeString(user.name)
+    if (directName) return directName
+
+    const parts = [user.firstName, user.middleName, user.lastName]
+        .map(normalizeString)
+        .filter(Boolean)
+
+    if (!parts.length) return null
+    return parts.join(" ")
+}
+
+function resolveAssignedDepartment(user: ApiUser): string | null {
+    const direct = normalizeString(user.assignedDepartment)
+    if (direct) return direct
+
+    const named = normalizeString(user.assignedDepartmentName)
+    if (named) return named
+
+    if (Array.isArray(user.assignedDepartmentNames)) {
+        for (const value of user.assignedDepartmentNames) {
+            const clean = normalizeString(value)
+            if (clean) return clean
+        }
+    }
+
+    return null
+}
+
+function resolveAssignedWindow(user: ApiUser): string | null {
+    return normalizeString(user.assignedWindow) ?? normalizeString(user.assignedWindowName)
+}
+
+function toSessionUser(user: ApiUser | null | undefined): SessionUser | null {
+    if (!user) return null
+
+    const id = normalizeString(user.id) ?? normalizeString(user._id)
+    if (!id || !isUserRole(user.role)) return null
+
+    const email = normalizeString(user.email)
+
+    return {
+        id,
+        role: user.role,
+        name: resolveName(user),
+        ...(email ? { email } : {}),
+        assignedDepartment: resolveAssignedDepartment(user),
+        assignedWindow: resolveAssignedWindow(user),
+    }
+}
+
+function mapStoredUserToSessionUser(stored: StoredAuthUser | null): SessionUser | null {
+    if (!stored) return null
+
+    const id = normalizeString(stored.id)
+    const role = stored.role
+
+    if (!id || !isUserRole(role)) return null
+
+    const email = normalizeString(stored.email)
+
+    return {
+        id,
+        role,
+        name: normalizeString(stored.name),
+        ...(email ? { email } : {}),
+        assignedDepartment: normalizeString(stored.assignedDepartment) ?? null,
+        assignedWindow: normalizeString(stored.assignedWindow) ?? null,
+    }
+}
+
+function mapMeToSessionPatch(me: MeResponse): SessionUserPatch | null {
+    const user = me.user
+    if (!user) return null
+
+    const id = normalizeString(user.id) ?? normalizeString(user._id)
+    if (!id || !isUserRole(user.role)) return null
 
     const patch: SessionUserPatch = {
-        id: u.id,
-        role: u.role,
+        id,
+        role: user.role,
     }
 
-    if (typeof u.name !== "undefined") patch.name = u.name ?? null
-    if (typeof u.email !== "undefined") patch.email = u.email
-
-    if (typeof u.assignedDepartment !== "undefined") {
-        patch.assignedDepartment = (u.assignedDepartment as unknown as string | null) ?? null
+    if (
+        hasOwn(user, "name") ||
+        hasOwn(user, "firstName") ||
+        hasOwn(user, "middleName") ||
+        hasOwn(user, "lastName")
+    ) {
+        patch.name = resolveName(user)
     }
-    if (typeof u.assignedWindow !== "undefined") {
-        patch.assignedWindow = (u.assignedWindow as unknown as string | null) ?? null
+
+    if (hasOwn(user, "email")) {
+        const email = normalizeString(user.email)
+        if (email) patch.email = email
+    }
+
+    if (
+        hasOwn(user, "assignedDepartment") ||
+        hasOwn(user, "assignedDepartmentName") ||
+        hasOwn(user, "assignedDepartmentNames")
+    ) {
+        patch.assignedDepartment = resolveAssignedDepartment(user)
+    }
+
+    if (hasOwn(user, "assignedWindow") || hasOwn(user, "assignedWindowName")) {
+        patch.assignedWindow = resolveAssignedWindow(user)
     }
 
     return patch
@@ -128,12 +221,38 @@ function applyPatch(prev: SessionUser | null, patch: SessionUserPatch): SessionU
                 ? patch.assignedDepartment
                 : prev?.assignedDepartment ?? null,
         assignedWindow:
-            typeof patch.assignedWindow !== "undefined" ? patch.assignedWindow : prev?.assignedWindow ?? null,
+            typeof patch.assignedWindow !== "undefined"
+                ? patch.assignedWindow
+                : prev?.assignedWindow ?? null,
     }
 }
 
+function toStoredAuthUser(user: SessionUser): StoredAuthUser {
+    return {
+        id: user.id,
+        role: user.role,
+        ...(typeof user.name === "string" ? { name: user.name } : {}),
+        ...(typeof user.email === "string" ? { email: user.email } : {}),
+        assignedDepartment: user.assignedDepartment,
+        assignedWindow: user.assignedWindow,
+    }
+}
+
+const sessionAuthApi = {
+    login(email: string, password: string) {
+        return api.postData<LoginResponse>(
+            AUTH_API_PATHS.login,
+            { email, password },
+            { auth: false },
+        )
+    },
+    me() {
+        return api.getData<MeResponse>(AUTH_API_PATHS.me, { auth: "staff" })
+    },
+}
+
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-    // Hydrate from storage immediately (prevents "email disappears after refresh")
+    // Hydrate from storage immediately
     const [user, setUser] = useState<SessionUser | null>(() => {
         const token = getAuthToken()
         if (!token) return null
@@ -144,37 +263,44 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     const [loading, setLoading] = useState<boolean>(() => !!getAuthToken())
 
     const userRef = useRef<SessionUser | null>(user)
+
     useEffect(() => {
         userRef.current = user
     }, [user])
 
-    const logout = useCallback(() => {
+    const clearSessionState = useCallback(() => {
         clearAuthSession()
         setUser(null)
         userRef.current = null
-        setLoading(false)
     }, [])
+
+    const persistSessionUser = useCallback((nextUser: SessionUser) => {
+        const rememberMe = getAuthStorage() === "local"
+        setAuthUser(toStoredAuthUser(nextUser), rememberMe)
+    }, [])
+
+    const logout = useCallback(() => {
+        clearSessionState()
+        setLoading(false)
+    }, [clearSessionState])
 
     const refresh = useCallback(async () => {
         const token = getAuthToken()
+
         if (!token) {
-            setUser(null)
-            userRef.current = null
+            clearSessionState()
             setLoading(false)
             return null
         }
 
         setLoading(true)
+
         try {
-            const me = await authApi.me()
+            const me = await sessionAuthApi.me()
             const patch = mapMeToSessionPatch(me)
 
-            // If backend says "no user", treat as logged out.
             if (!patch) {
-                clearAuthSession()
-                setUser(null)
-                userRef.current = null
-                setLoading(false)
+                clearSessionState()
                 return null
             }
 
@@ -182,53 +308,38 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
             setUser(merged)
             userRef.current = merged
+            persistSessionUser(merged)
 
-            // Persist merged user (keeps email even if /me omits it)
-            const rememberMe = getAuthStorage() === "local"
-            setAuthUser(
-                {
-                    id: merged.id,
-                    role: merged.role,
-                    ...(typeof merged.name === "string" ? { name: merged.name } : {}),
-                    ...(typeof merged.email === "string" ? { email: merged.email } : {}),
-                    assignedDepartment: merged.assignedDepartment,
-                    assignedWindow: merged.assignedWindow,
-                },
-                rememberMe,
-            )
-
-            setLoading(false)
             return merged
         } catch (err) {
-            // Token invalid/expired -> logout.
             if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-                clearAuthSession()
-                setUser(null)
-                userRef.current = null
-                setLoading(false)
+                clearSessionState()
                 return null
             }
 
-            // Any other error: keep previous user state, but stop loading.
-            setLoading(false)
             throw err
+        } finally {
+            setLoading(false)
         }
-    }, [])
+    }, [clearSessionState, persistSessionUser])
 
     const login = useCallback(async (email: string, password: string, rememberMe: boolean) => {
-        const res = await authApi.login(email, password)
+        const res = await sessionAuthApi.login(email, password)
+        const next = toSessionUser(res.user)
 
-        // Store BOTH token + user so refresh can re-hydrate email reliably
-        setAuthSession(res.token, res.user, rememberMe)
+        if (!next) {
+            throw new Error("Login response did not include a valid staff session user.")
+        }
 
-        const next = mapLoginUserToSession(res)
+        setAuthSession(res.token, toStoredAuthUser(next), rememberMe)
+
         setUser(next)
         userRef.current = next
         setLoading(false)
+
         return res
     }, [])
 
-    // Initial resolve on mount if token exists.
     useEffect(() => {
         let alive = true
 
@@ -238,42 +349,27 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             return
         }
 
-        // If we have a stored user, show it immediately (already in state),
-        // then patch it with /me.
-        ; (async () => {
+        ;(async () => {
             try {
-                const me = await authApi.me()
+                const me = await sessionAuthApi.me()
                 if (!alive) return
 
                 const patch = mapMeToSessionPatch(me)
-                if (!patch) {
-                    clearAuthSession()
-                    setUser(null)
-                    userRef.current = null
-                } else {
-                    const merged = applyPatch(userRef.current, patch)
-                    setUser(merged)
-                    userRef.current = merged
 
-                    const rememberMe = getAuthStorage() === "local"
-                    setAuthUser(
-                        {
-                            id: merged.id,
-                            role: merged.role,
-                            ...(typeof merged.name === "string" ? { name: merged.name } : {}),
-                            ...(typeof merged.email === "string" ? { email: merged.email } : {}),
-                            assignedDepartment: merged.assignedDepartment,
-                            assignedWindow: merged.assignedWindow,
-                        },
-                        rememberMe,
-                    )
+                if (!patch) {
+                    clearSessionState()
+                    return
                 }
+
+                const merged = applyPatch(userRef.current, patch)
+                setUser(merged)
+                userRef.current = merged
+                persistSessionUser(merged)
             } catch (err) {
                 if (!alive) return
+
                 if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-                    clearAuthSession()
-                    setUser(null)
-                    userRef.current = null
+                    clearSessionState()
                 }
             } finally {
                 if (alive) setLoading(false)
@@ -283,16 +379,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         return () => {
             alive = false
         }
-    }, [])
+    }, [clearSessionState, persistSessionUser])
 
-    // Keep session in sync across tabs (localStorage changes fire storage events).
     useEffect(() => {
         const onStorage = (e: StorageEvent) => {
             if (e.key === LS_TOKEN_KEY || e.key === SS_TOKEN_KEY) {
-                // Refresh session when token changes in another tab.
                 void refresh()
             }
         }
+
         window.addEventListener("storage", onStorage)
         return () => window.removeEventListener("storage", onStorage)
     }, [refresh])
@@ -313,8 +408,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
 export function useSession(): SessionContextValue {
     const ctx = useContext(SessionContext)
+
     if (!ctx) {
         throw new Error("useSession must be used within <SessionProvider />")
     }
+
     return ctx
 }

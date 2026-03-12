@@ -1,15 +1,39 @@
-const LS_TOKEN_KEY = "qp_auth_token"
-const SS_TOKEN_KEY = "qp_auth_token_session"
+import type { UserRole } from "@/lib/rolebase"
 
-const LS_USER_KEY = "qp_auth_user"
-const SS_USER_KEY = "qp_auth_user_session"
+export const AUTH_STORAGE_KEYS = {
+    auth: {
+        token: {
+            local: "qp_auth_token",
+            session: "qp_auth_token_session",
+        },
+        user: {
+            local: "qp_auth_user",
+            session: "qp_auth_user_session",
+        },
+    },
+    participant: {
+        token: {
+            local: "qp_participant_token",
+            session: "qp_participant_token_session",
+        },
+        user: {
+            local: "qp_participant_user",
+            session: "qp_participant_user_session",
+        },
+    },
+} as const
 
-// Participant (student/guest) auth keys
-const LS_PARTICIPANT_TOKEN_KEY = "qp_participant_token"
-const SS_PARTICIPANT_TOKEN_KEY = "qp_participant_token_session"
+const LS_TOKEN_KEY = AUTH_STORAGE_KEYS.auth.token.local
+const SS_TOKEN_KEY = AUTH_STORAGE_KEYS.auth.token.session
 
-const LS_PARTICIPANT_USER_KEY = "qp_participant_user"
-const SS_PARTICIPANT_USER_KEY = "qp_participant_user_session"
+const LS_USER_KEY = AUTH_STORAGE_KEYS.auth.user.local
+const SS_USER_KEY = AUTH_STORAGE_KEYS.auth.user.session
+
+const LS_PARTICIPANT_TOKEN_KEY = AUTH_STORAGE_KEYS.participant.token.local
+const SS_PARTICIPANT_TOKEN_KEY = AUTH_STORAGE_KEYS.participant.token.session
+
+const LS_PARTICIPANT_USER_KEY = AUTH_STORAGE_KEYS.participant.user.local
+const SS_PARTICIPANT_USER_KEY = AUTH_STORAGE_KEYS.participant.user.session
 
 export type AuthStorage = "local" | "session" | null
 export type ParticipantStorage = "local" | "session" | null
@@ -18,15 +42,11 @@ export type StoredAuthUser = {
     id: string
     name?: string
     email?: string
-    role?: string
+    role?: UserRole
     assignedDepartment?: string | null
     assignedWindow?: string | null
-
-    // ✅ Avatar (optional)
     avatarKey?: string | null
     avatarUrl?: string | null
-
-    // Allow extra backend fields without breaking
     [key: string]: unknown
 }
 
@@ -34,21 +54,16 @@ export type StoredParticipantUser = {
     id?: string
     _id?: string
     type?: string
-
-    // Common identity fields
     name?: string
     firstName?: string
     middleName?: string
     lastName?: string
-
     tcNumber?: string
     studentId?: string
     mobileNumber?: string
     phone?: string
-
     departmentId?: string
     departmentCode?: string
-
     [key: string]: unknown
 }
 
@@ -58,9 +73,11 @@ function canUseStorage(): boolean {
 
 function mergeDefined<T extends Record<string, unknown>>(base: T | null, patch: T): T {
     const out: Record<string, unknown> = { ...(base ?? {}) }
-    for (const [k, v] of Object.entries(patch)) {
-        if (v !== undefined) out[k] = v
+
+    for (const [key, value] of Object.entries(patch)) {
+        if (value !== undefined) out[key] = value
     }
+
     return out as T
 }
 
@@ -80,10 +97,11 @@ function setScopedToken(localKey: string, sessionKey: string, token: string, rem
     if (rememberMe) {
         localStorage.setItem(localKey, clean)
         sessionStorage.removeItem(sessionKey)
-    } else {
-        sessionStorage.setItem(sessionKey, clean)
-        localStorage.removeItem(localKey)
+        return
     }
+
+    sessionStorage.setItem(sessionKey, clean)
+    localStorage.removeItem(localKey)
 }
 
 function getScopedToken(localKey: string, sessionKey: string): string | null {
@@ -106,7 +124,6 @@ function setScopedUser<T extends Record<string, unknown>>(
 ) {
     if (!canUseStorage()) return
 
-    // Merge so partial updates won't wipe stored fields
     const prev = readCurrent()
     const merged = mergeDefined(prev, user)
     const raw = JSON.stringify(merged)
@@ -114,10 +131,11 @@ function setScopedUser<T extends Record<string, unknown>>(
     if (rememberMe) {
         localStorage.setItem(localKey, raw)
         sessionStorage.removeItem(sessionKey)
-    } else {
-        sessionStorage.setItem(sessionKey, raw)
-        localStorage.removeItem(localKey)
+        return
     }
+
+    sessionStorage.setItem(sessionKey, raw)
+    localStorage.removeItem(localKey)
 }
 
 function getScopedUser<T extends Record<string, unknown>>(localKey: string, sessionKey: string): T | null {
@@ -125,6 +143,7 @@ function getScopedUser<T extends Record<string, unknown>>(localKey: string, sess
 
     const raw = localStorage.getItem(localKey) || sessionStorage.getItem(sessionKey)
     if (!raw) return null
+
     try {
         return JSON.parse(raw) as T
     } catch {
@@ -138,9 +157,7 @@ function clearScopedUser(localKey: string, sessionKey: string) {
     sessionStorage.removeItem(sessionKey)
 }
 
-// ------------------------------
 // Staff/Admin auth session
-// ------------------------------
 export function setAuthToken(token: string, rememberMe: boolean) {
     setScopedToken(LS_TOKEN_KEY, SS_TOKEN_KEY, token, rememberMe)
 }
@@ -158,7 +175,7 @@ export function getAuthStorage(): AuthStorage {
 }
 
 export function setAuthUser(user: StoredAuthUser, rememberMe: boolean) {
-    setScopedUser(LS_USER_KEY, SS_USER_KEY, user, rememberMe, () => getAuthUser<StoredAuthUser>())
+    setScopedUser(LS_USER_KEY, SS_USER_KEY, user, rememberMe, () => getAuthUser())
 }
 
 export function getAuthUser<T extends StoredAuthUser = StoredAuthUser>(): T | null {
@@ -179,9 +196,7 @@ export function clearAuthSession() {
     clearAuthUser()
 }
 
-// ------------------------------
 // Participant (Student/Guest) auth session
-// ------------------------------
 export function setParticipantToken(token: string, rememberMe = true) {
     setScopedToken(LS_PARTICIPANT_TOKEN_KEY, SS_PARTICIPANT_TOKEN_KEY, token, rememberMe)
 }
@@ -204,7 +219,7 @@ export function setParticipantUser(user: StoredParticipantUser, rememberMe = tru
         SS_PARTICIPANT_USER_KEY,
         user,
         rememberMe,
-        () => getParticipantUser<StoredParticipantUser>(),
+        () => getParticipantUser(),
     )
 }
 
@@ -235,6 +250,7 @@ export function getAnyAuthToken(prefer: "staff" | "participant" = "staff"): stri
     if (prefer === "participant") {
         return getParticipantToken() || getAuthToken()
     }
+
     return getAuthToken() || getParticipantToken()
 }
 

@@ -1,9 +1,9 @@
-import type { UserRole } from "@/api/auth"
-
 export const ROLE = {
     ADMIN: "ADMIN",
     STAFF: "STAFF",
 } as const
+
+export type UserRole = (typeof ROLE)[keyof typeof ROLE]
 
 // Allow a single role or any readonly array of roles (works with `as const`)
 export type AllowedRoles = UserRole | ReadonlyArray<UserRole>
@@ -21,7 +21,7 @@ export function isUserRole(value: unknown): value is UserRole {
     return value === ROLE.ADMIN || value === ROLE.STAFF
 }
 
-export function toUserRole(value: unknown, fallback: UserRole = "STAFF"): UserRole {
+export function toUserRole(value: unknown, fallback: UserRole = ROLE.STAFF): UserRole {
     return isUserRole(value) ? value : fallback
 }
 
@@ -32,9 +32,11 @@ export function toUserRole(value: unknown, fallback: UserRole = "STAFF"): UserRo
 export function normalizeAllowedRoles(allowed: AllowedRoles): UserRole[] {
     const list = isRoleArray(allowed) ? Array.from(allowed) : [allowed]
     const out: UserRole[] = []
+
     for (const role of list) {
         if (!out.includes(role)) out.push(role)
     }
+
     return out
 }
 

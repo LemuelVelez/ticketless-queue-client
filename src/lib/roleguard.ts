@@ -1,9 +1,7 @@
 import React from "react"
 import { Navigate, useLocation } from "react-router-dom"
-import type { UserRole } from "@/api/auth"
-import type { AllowedRoles } from "@/lib/rolebase"
-import { ROLE, canAccessRole } from "@/lib/rolebase"
 import { useSession } from "@/hooks/use-session"
+import { ROLE, canAccessRole, type AllowedRoles, type UserRole } from "@/lib/rolebase"
 
 export type RoleGuardProps = {
     /**
@@ -71,7 +69,11 @@ export function RoleGuard(props: RoleGuardProps) {
         })
     }
 
-    const allowed = canAccessRole(user.role, { anyOf: allow, min: minRole })
+    const allowed = canAccessRole(user.role, {
+        anyOf: allow,
+        min: minRole,
+    })
+
     if (!allowed) {
         return React.createElement(Navigate, {
             to: unauthorizedTo,
