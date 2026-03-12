@@ -50,17 +50,24 @@ import {
   getParticipantUser,
 } from "@/lib/auth"
 import { RoleGuard } from "@/lib/roleguard"
+import type { UserRole } from "@/lib/rolebase"
 
 type ShortcutTarget = "home" | "join" | "my-tickets" | "profile"
-type ParticipantRole = "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
+type ParticipantRole = "STUDENT" | "ALUMNI" | "ALUMNI_VISITOR" | "GUEST"
 type ParticipantResolveState = ParticipantRole | null | "__CHECKING__"
 
 function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
   const value = String(raw ?? "").trim().toUpperCase()
 
   if (value === "STUDENT") return "STUDENT"
-  if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR")
+  if (value === "ALUMNI") return "ALUMNI"
+  if (
+    value === "ALUMNI_VISITOR" ||
+    value === "ALUMNI-VISITOR" ||
+    value === "ALUMNI VISITOR"
+  ) {
     return "ALUMNI_VISITOR"
+  }
   if (value === "GUEST" || value === "VISITOR") return "GUEST"
 
   return null
@@ -72,7 +79,8 @@ function resolveParticipantRole(): ParticipantRole | null {
 
   const storedParticipant = getParticipantUser()
   const role = normalizeParticipantRole(
-    storedParticipant?.type ?? storedParticipant?.role
+    storedParticipant?.type ??
+      (storedParticipant as { role?: unknown } | null)?.role
   )
 
   if (!role) {
@@ -83,19 +91,12 @@ function resolveParticipantRole(): ParticipantRole | null {
   return role
 }
 
-function getShortcutPath(role: string | undefined, target: ShortcutTarget) {
-  switch (role) {
-    case "ADMIN":
-      return "/admin/dashboard"
-    case "STAFF":
-      return target === "join" ? "/staff/queue" : "/staff/dashboard"
-    case "STUDENT":
-      return `/student/${target}`
-    case "ALUMNI":
-    case "GUEST":
-    default:
-      return `/alumni/${target}`
+function getShortcutPath(role: UserRole, target: ShortcutTarget) {
+  if (role === "ADMIN") {
+    return "/admin/dashboard"
   }
+
+  return target === "join" ? "/staff/queue" : "/staff/dashboard"
 }
 
 function getParticipantShortcutPath(
@@ -126,7 +127,6 @@ function ParticipantAreaGuard({ allow }: { allow: "student" | "alumni" }) {
 
   useEffect(() => {
     if (user) return
-
     setParticipantRole(resolveParticipantRole())
   }, [location.pathname, user])
 
