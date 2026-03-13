@@ -5,7 +5,6 @@ import {
     MoreHorizontal,
     Plus,
     RefreshCw,
-    Save,
     Trash2,
 } from "lucide-react"
 
@@ -70,7 +69,6 @@ type PurposeManagementSectionProps = {
     onRefresh: () => void
     onCreate: () => void
     onEditAll: () => void
-    onSaveDefaults: () => void
     onEdit: (purpose: TransactionPurpose) => void
     onDelete: (purpose: TransactionPurpose) => void
 }
@@ -96,7 +94,6 @@ export function PurposeManagementSection({
     onRefresh,
     onCreate,
     onEditAll,
-    onSaveDefaults,
     onEdit,
     onDelete,
 }: PurposeManagementSectionProps) {
@@ -135,16 +132,6 @@ export function PurposeManagementSection({
                         >
                             <ClipboardList className="h-4 w-4" />
                             Edit all transactions
-                        </Button>
-
-                        <Button
-                            variant="secondary"
-                            onClick={onSaveDefaults}
-                            disabled={loading || saving}
-                            className="w-full gap-2 sm:w-auto"
-                        >
-                            <Save className="h-4 w-4" />
-                            Save registrar defaults
                         </Button>
 
                         <Button asChild variant="secondary" className="w-full gap-2 sm:w-auto">

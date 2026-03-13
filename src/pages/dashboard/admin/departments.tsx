@@ -26,7 +26,6 @@ import { DepartmentDialogs } from "@/components/admin/departments/DepartmentDial
 import { PurposeDialogs } from "@/components/admin/departments/PurposeDialogs"
 import {
     DEFAULT_MANAGER,
-    DEFAULT_REGISTRAR_TRANSACTIONS,
     type PurposeBulkDraft,
 } from "@/components/admin/departments/constants"
 import {
@@ -971,93 +970,6 @@ export default function AdminDepartmentsPage() {
         }
     }
 
-    async function handleSaveDefaultRegistrarTransactions() {
-        const category = normalizeManagerKey(DEFAULT_MANAGER, DEFAULT_MANAGER)
-
-        setSaving(true)
-        try {
-            const existingRegistrar = purposes.filter(
-                (purpose) => normalizeManagerKey(purpose.category || DEFAULT_MANAGER) === category
-            )
-
-            const byKey = new Map<string, TransactionPurpose>()
-            for (const purpose of existingRegistrar) {
-                const key = String(purpose.key || "").trim()
-                if (!key || byKey.has(key)) continue
-                byKey.set(key, purpose)
-            }
-
-            let created = 0
-            let updated = 0
-            let unchanged = 0
-
-            for (const tx of DEFAULT_REGISTRAR_TRANSACTIONS) {
-                const existing = byKey.get(tx.key)
-                const nextScopes = uniqueScopes(tx.scopes)
-
-                if (!existing) {
-                    await adminApi.createTransactionPurpose({
-                        category,
-                        key: tx.key,
-                        label: tx.label,
-                        scopes: nextScopes,
-                        enabled: true,
-                        sortOrder: tx.sortOrder,
-                        applyToAllDepartments: true,
-                        departmentIds: [],
-                    })
-                    created += 1
-                    continue
-                }
-
-                const existingScopes = uniqueScopes(existing.scopes || [])
-                const sameScopes =
-                    existingScopes.length === nextScopes.length &&
-                    nextScopes.every((scope) => existingScopes.includes(scope))
-
-                const sameCategory = normalizeManagerKey(existing.category || DEFAULT_MANAGER) === category
-                const sameLabel = String(existing.label || "").trim() === tx.label
-                const sameSortOrder = toSortOrderValue(existing.sortOrder) === tx.sortOrder
-                const sameEnabled = isEnabledFlag(existing.enabled)
-                const sameGlobalBinding = (existing.departmentIds || []).length === 0
-
-                if (
-                    sameCategory &&
-                    sameLabel &&
-                    sameScopes &&
-                    sameSortOrder &&
-                    sameEnabled &&
-                    sameGlobalBinding
-                ) {
-                    unchanged += 1
-                    continue
-                }
-
-                await adminApi.updateTransactionPurpose(existing.id, {
-                    category,
-                    key: tx.key,
-                    label: tx.label,
-                    scopes: nextScopes,
-                    enabled: true,
-                    sortOrder: tx.sortOrder,
-                    applyToAllDepartments: true,
-                    departmentIds: [],
-                })
-                updated += 1
-            }
-
-            toast.success(
-                `Registrar defaults saved. Created: ${created}, Updated: ${updated}, Unchanged: ${unchanged}.`
-            )
-            await fetchAll()
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to save registrar default transactions."
-            toast.error(msg)
-        } finally {
-            setSaving(false)
-        }
-    }
-
     const stats = React.useMemo(() => {
         const deptTotal = departments.length
         const deptEnabled = departments.filter((dept) => isEnabledFlag(dept.enabled)).length
@@ -1159,7 +1071,6 @@ export default function AdminDepartmentsPage() {
                                 setCreatePurposeOpen(true)
                             }}
                             onEditAll={openEditAllPurposesDialog}
-                            onSaveDefaults={() => void handleSaveDefaultRegistrarTransactions()}
                             onEdit={openEditPurpose}
                             onDelete={(purpose) => {
                                 setSelectedPurpose(purpose)
