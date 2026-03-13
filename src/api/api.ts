@@ -4,6 +4,8 @@ export type ApiRouteParam = string | number
 
 export const API_PREFIX = "/api"
 
+const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
+
 function stripTrailingSlash(value: string) {
     return String(value ?? "").replace(/\/+$/, "")
 }
@@ -24,17 +26,77 @@ function encodeRouteParam(value: ApiRouteParam) {
     return encodeURIComponent(String(value ?? "").trim())
 }
 
-function inferLocalDevApiBaseUrl() {
+function getRuntimeEnv(name: string) {
+    const env = (
+        globalThis as typeof globalThis & {
+            process?: { env?: Record<string, string | undefined> }
+        }
+    ).process?.env
+
+    return String(env?.[name] ?? "").trim()
+}
+
+function isLikelyLocalDevHostname(hostname: string) {
+    const raw = String(hostname ?? "").trim().toLowerCase()
+    if (!raw) return false
+
+    if (raw === "localhost" || raw === "0.0.0.0" || raw === "::1") return true
+    if (raw.endsWith(".local")) return true
+    if (/^127(?:\.\d{1,3}){3}$/.test(raw)) return true
+    if (/^10(?:\.\d{1,3}){3}$/.test(raw)) return true
+    if (/^192\.168(?:\.\d{1,3}){2}$/.test(raw)) return true
+    if (/^172\.(1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}$/.test(raw)) return true
+
+    return false
+}
+
+function normalizeDevHostname(hostname: string) {
+    const raw = String(hostname ?? "").trim()
+    if (!raw) return ""
+    if (raw === "0.0.0.0" || raw === "::1") return "127.0.0.1"
+    return raw
+}
+
+function isFrontendDevPort(port: string) {
+    return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
+}
+
+function inferBrowserDevApiBaseUrl() {
     if (typeof window === "undefined") return ""
 
     const { protocol, hostname, port } = window.location
-    const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1"
-    const isFrontendDevPort =
-        port === "3000" || port === "3001" || port === "4173" || port === "5173"
+    if (!isFrontendDevPort(port)) return ""
+    if (!isLikelyLocalDevHostname(hostname)) return ""
 
-    if (!isLocalHost || !isFrontendDevPort) return ""
+    const targetHost = normalizeDevHostname(hostname)
+    if (!targetHost) return ""
 
-    return `${protocol}//${hostname}:5000${API_PREFIX}`
+    return `${protocol}//${targetHost}:5000${API_PREFIX}`
+}
+
+function inferServerDevApiBaseUrl() {
+    if (typeof window !== "undefined") return ""
+
+    const explicitBase = stripTrailingSlash(
+        getRuntimeEnv("VITE_API_BASE_URL") ||
+            getRuntimeEnv("NEXT_PUBLIC_API_BASE_URL") ||
+            getRuntimeEnv("API_BASE_URL")
+    )
+
+    if (explicitBase && explicitBase !== API_PREFIX) {
+        return /\/api$/i.test(explicitBase)
+            ? explicitBase
+            : `${explicitBase}${API_PREFIX}`
+    }
+
+    const nodeEnv = getRuntimeEnv("NODE_ENV").toLowerCase()
+    if (nodeEnv !== "development") return ""
+
+    return `http://127.0.0.1:5000${API_PREFIX}`
+}
+
+function inferLocalDevApiBaseUrl() {
+    return inferBrowserDevApiBaseUrl() || inferServerDevApiBaseUrl()
 }
 
 function normalizeApiBaseUrl(value: string) {

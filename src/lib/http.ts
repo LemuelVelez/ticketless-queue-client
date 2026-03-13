@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { API_PATHS, toApiPath, toApiUrl } from "@/api/api"
+import { API_PATHS, API_PREFIX, toApiPath, toApiUrl } from "@/api/api"
 import { getAuthToken, getParticipantToken } from "@/lib/auth"
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
@@ -231,6 +231,22 @@ function stripQueryAndHash(value: string) {
     return beforeQuery
 }
 
+function getRuntimeEnv(name: string) {
+    const env = (
+        globalThis as typeof globalThis & {
+            process?: { env?: Record<string, string | undefined> }
+        }
+    ).process?.env
+
+    return String(env?.[name] ?? "").trim()
+}
+
+function normalizeApiOriginBase(value: string) {
+    const raw = String(value ?? "").trim().replace(/\/+$/, "")
+    if (!raw || raw === API_PREFIX) return ""
+    return /\/api$/i.test(raw) ? raw : `${raw}${API_PREFIX}`
+}
+
 const PUBLIC_AUTH_PATHS = new Set(
     [
         API_PATHS.auth.register,
@@ -278,10 +294,36 @@ function resolveRequestAuthMode(
     return "auto"
 }
 
+function absolutizeRelativeApiUrlForServer(url: string) {
+    const raw = String(url ?? "").trim()
+    if (!raw) return raw
+    if (typeof window !== "undefined") return raw
+    if (isAbsoluteUrl(raw)) return raw
+    if (!raw.startsWith(API_PREFIX)) return raw
+
+    const explicitBase = normalizeApiOriginBase(
+        getRuntimeEnv("VITE_API_BASE_URL") ||
+            getRuntimeEnv("NEXT_PUBLIC_API_BASE_URL") ||
+            getRuntimeEnv("API_BASE_URL")
+    )
+
+    const apiPath = toApiPath(raw)
+
+    if (explicitBase) {
+        return apiPath ? `${explicitBase}${apiPath}` : explicitBase
+    }
+
+    const nodeEnv = getRuntimeEnv("NODE_ENV").toLowerCase()
+    if (nodeEnv !== "development") return raw
+
+    const fallbackBase = `http://127.0.0.1:5000${API_PREFIX}`
+    return apiPath ? `${fallbackBase}${apiPath}` : fallbackBase
+}
+
 function buildUrl(path: string) {
     const raw = String(path ?? "").trim()
-    if (!raw) return toApiUrl("")
-    return toApiUrl(raw)
+    const resolved = !raw ? toApiUrl("") : toApiUrl(raw)
+    return absolutizeRelativeApiUrlForServer(resolved)
 }
 
 function hasHeader(headers: Record<string, string>, key: string) {
