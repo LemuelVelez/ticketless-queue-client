@@ -5,6 +5,7 @@ export type ApiRouteParam = string | number
 export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
+const DEFAULT_LOCAL_API_PORT = "5000"
 
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
     ["/admin/staff", "/users/staff"],
@@ -101,11 +102,14 @@ function normalizeExplicitLocalDevApiBase(value: string) {
 function inferBrowserDevApiBaseUrl() {
     if (typeof window === "undefined") return ""
 
-    const { hostname, port } = window.location
+    const { protocol, hostname, port } = window.location
     if (!isFrontendDevPort(port)) return ""
     if (!isLikelyLocalDevHostname(hostname)) return ""
 
-    return API_PREFIX
+    const resolvedHostname = normalizeDevHostname(hostname)
+    if (!resolvedHostname) return ""
+
+    return `${protocol}//${resolvedHostname}:${DEFAULT_LOCAL_API_PORT}${API_PREFIX}`
 }
 
 function inferServerDevApiBaseUrl() {
@@ -128,7 +132,7 @@ function inferServerDevApiBaseUrl() {
     const nodeEnv = getRuntimeEnv("NODE_ENV").toLowerCase()
     if (nodeEnv !== "development") return ""
 
-    return `http://127.0.0.1:5000${API_PREFIX}`
+    return `http://127.0.0.1:${DEFAULT_LOCAL_API_PORT}${API_PREFIX}`
 }
 
 function inferLocalDevApiBaseUrl() {
