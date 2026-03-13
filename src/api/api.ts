@@ -9,6 +9,7 @@ const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
     ["/admin/staff", "/users/staff"],
     ["/admin/participants", "/users/participants"],
+    ["/admin/reports", "/reports"],
 ]
 
 function stripTrailingSlash(value: string) {
@@ -246,6 +247,10 @@ export const API_PATHS = {
         staffResendLogin: (id: ApiRouteParam) =>
             `/admin/staff/${encodeRouteParam(id)}/resend-login`,
         participants: "/admin/participants",
+        reports: {
+            summary: "/admin/reports/summary",
+            timeseries: "/admin/reports/timeseries",
+        },
     },
 } as const
 
@@ -317,5 +322,9 @@ export const API_ROUTES = {
         staffResendLogin: (id: ApiRouteParam) =>
             toApiUrl(API_PATHS.admin.staffResendLogin(id)),
         participants: () => toApiUrl(API_PATHS.admin.participants),
+        reports: {
+            summary: () => toApiUrl(API_PATHS.admin.reports.summary),
+            timeseries: () => toApiUrl(API_PATHS.admin.reports.timeseries),
+        },
     },
 } as const
