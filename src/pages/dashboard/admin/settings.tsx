@@ -73,6 +73,11 @@ type AvatarPresignResponse = {
     [key: string]: unknown
 }
 
+type ProfileBaseline = {
+    name: string
+    email: string
+}
+
 const SETTINGS_CURRENT_PATH = API_PATHS.settings.current
 const SETTINGS_AVATAR_PATH = `${SETTINGS_CURRENT_PATH}/avatar`
 const SETTINGS_AVATAR_PRESIGN_PATH = `${SETTINGS_AVATAR_PATH}/presign`
@@ -90,10 +95,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
+function hasOwn(value: unknown, key: string) {
+    return isRecord(value) && Object.prototype.hasOwnProperty.call(value, key)
+}
+
 function normalizeString(value: unknown): string | null {
     if (typeof value !== "string") return null
     const clean = value.trim()
     return clean ? clean : null
+}
+
+function normalizeEmailValue(value: unknown): string {
+    return String(value ?? "").trim().toLowerCase()
 }
 
 function resolveName(user?: SettingsUser | null): string | null {
@@ -140,25 +153,44 @@ function extractToken(payload: unknown): string | null {
 function extractAvatarKey(payload: unknown): string | null | undefined {
     if (!isRecord(payload)) return undefined
 
-    const direct = normalizeString(payload.avatarKey)
-    if (direct) return direct
-    if (payload.avatarKey === null) return null
+    if (hasOwn(payload, "avatarKey")) {
+        const direct = normalizeString(payload.avatarKey)
+        if (direct) return direct
+        if (payload.avatarKey === null) return null
+    }
 
     const user = extractSettingsUser(payload)
-    if (user?.avatarKey === null) return null
+    if (user && Object.prototype.hasOwnProperty.call(user, "avatarKey")) {
+        if (user.avatarKey === null) return null
+        return normalizeString(user.avatarKey)
+    }
 
-    return normalizeString(user?.avatarKey)
+    return undefined
 }
 
-function extractAvatarUrl(payload: unknown): string | null {
-    if (!isRecord(payload)) return null
+function extractAvatarUrlState(payload: unknown): string | null | undefined {
+    if (!isRecord(payload)) return undefined
 
-    const direct =
-        normalizeString(payload.avatarUrl) ?? normalizeString(payload.url)
-    if (direct) return direct
+    if (hasOwn(payload, "avatarUrl")) {
+        const direct = normalizeString(payload.avatarUrl)
+        if (direct) return direct
+        if (payload.avatarUrl === null) return null
+    }
+
+    if (hasOwn(payload, "url")) {
+        const direct = normalizeString(payload.url)
+        if (direct) return direct
+        if (payload.url === null) return null
+    }
 
     const user = extractSettingsUser(payload)
-    return normalizeString(user?.avatarUrl)
+    if (user && Object.prototype.hasOwnProperty.call(user, "avatarUrl")) {
+        const nested = normalizeString(user.avatarUrl)
+        if (nested) return nested
+        if (user.avatarUrl === null) return null
+    }
+
+    return undefined
 }
 
 const settingsApi = {
@@ -194,15 +226,19 @@ export default function AdminSettingsPage() {
 
     const stored = getAuthUser()
     const baseName =
-        (stored?.name as string | undefined) ?? sessionUser?.name ?? "Admin"
+        normalizeString((stored?.name as string | undefined) ?? null) ??
+        normalizeString(sessionUser?.name) ??
+        "Admin"
     const baseEmail =
-        (stored?.email as string | undefined) ?? sessionUser?.email ?? ""
+        normalizeString((stored?.email as string | undefined) ?? null) ??
+        normalizeString(sessionUser?.email) ??
+        ""
 
     const dashboardUser: DashboardUser | undefined = React.useMemo(() => {
         const name = baseName || "Admin"
         const email = baseEmail || ""
         return { name, email }
-    }, [baseName, baseEmail])
+    }, [baseEmail, baseName])
 
     const [loading, setLoading] = React.useState(true)
 
@@ -216,6 +252,11 @@ export default function AdminSettingsPage() {
 
     const [name, setName] = React.useState(baseName)
     const [email, setEmail] = React.useState(baseEmail)
+    const [baselineProfile, setBaselineProfile] = React.useState<ProfileBaseline>({
+        name: baseName,
+        email: normalizeEmailValue(baseEmail),
+    })
+
     const [currentPasswordForProfile, setCurrentPasswordForProfile] =
         React.useState("")
     const [savingProfile, setSavingProfile] = React.useState(false)
@@ -233,23 +274,42 @@ export default function AdminSettingsPage() {
 
     const rememberMe = React.useMemo(() => getAuthStorage() === "local", [])
 
-    const storedEmail =
-        ((getAuthUser()?.email as string | undefined) ?? sessionUser?.email ?? "")
-            .trim()
-            .toLowerCase()
+    const normalizedCurrentName = React.useMemo(
+        () => String(name ?? "").trim(),
+        [name]
+    )
+    const normalizedCurrentEmail = React.useMemo(
+        () => normalizeEmailValue(email),
+        [email]
+    )
 
     const emailChanged = React.useMemo(() => {
-        const nextEmail = email.trim().toLowerCase()
-        return Boolean(nextEmail && storedEmail && nextEmail !== storedEmail)
-    }, [email, storedEmail])
+        return normalizedCurrentEmail !== baselineProfile.email
+    }, [baselineProfile.email, normalizedCurrentEmail])
+
+    const profileChanged = React.useMemo(() => {
+        return (
+            normalizedCurrentName !== String(baselineProfile.name ?? "").trim() ||
+            normalizedCurrentEmail !== baselineProfile.email
+        )
+    }, [
+        baselineProfile.email,
+        baselineProfile.name,
+        normalizedCurrentEmail,
+        normalizedCurrentName,
+    ])
 
     const syncStoredAuthFromPayload = React.useCallback(
         async (payload: unknown) => {
             const extractedUser = extractSettingsUser(payload)
             const avatarKey = extractAvatarKey(payload)
-            const nextAvatarUrl = extractAvatarUrl(payload)
+            const avatarUrlState = extractAvatarUrlState(payload)
 
-            if (!extractedUser && avatarKey === undefined && nextAvatarUrl === null) {
+            if (
+                !extractedUser &&
+                avatarKey === undefined &&
+                avatarUrlState === undefined
+            ) {
                 try {
                     await refresh()
                 } catch {
@@ -262,7 +322,9 @@ export default function AdminSettingsPage() {
                 ...(getAuthUser() ?? {}),
                 ...(extractedUser ?? {}),
                 ...(avatarKey !== undefined ? { avatarKey } : {}),
-                ...(nextAvatarUrl !== null ? { avatarUrl: nextAvatarUrl } : {}),
+                ...(avatarUrlState !== undefined
+                    ? { avatarUrl: avatarUrlState }
+                    : {}),
             }
 
             const token = extractToken(payload) ?? getAuthToken()
@@ -287,26 +349,37 @@ export default function AdminSettingsPage() {
         try {
             const res = await settingsApi.current()
             const currentUser = extractSettingsUser(res)
+
             const resolvedName =
                 resolveName(currentUser) ??
-                ((getAuthUser()?.name as string | undefined) ??
-                    sessionUser?.name ??
-                    baseName)
+                normalizeString((getAuthUser()?.name as string | undefined) ?? null) ??
+                normalizeString(sessionUser?.name) ??
+                baseName
+
             const resolvedEmail =
                 normalizeString(currentUser?.email) ??
-                ((getAuthUser()?.email as string | undefined) ??
-                    sessionUser?.email ??
-                    baseEmail)
+                normalizeString(
+                    (getAuthUser()?.email as string | undefined) ?? null
+                ) ??
+                normalizeString(sessionUser?.email) ??
+                baseEmail
+
+            const nextAvatarUrlState = extractAvatarUrlState(res)
+            const fallbackStoredAvatar =
+                normalizeString(
+                    (getAuthUser()?.avatarUrl as string | undefined) ?? null
+                ) ?? null
 
             setName(resolvedName || "")
             setEmail(resolvedEmail || "")
+            setBaselineProfile({
+                name: resolvedName || "",
+                email: normalizeEmailValue(resolvedEmail || ""),
+            })
             setAvatarUrl(
-                extractAvatarUrl(res) ??
-                    normalizeString(currentUser?.avatarUrl) ??
-                    normalizeString(
-                        (getAuthUser()?.avatarUrl as string | undefined) ?? null
-                    ) ??
-                    null
+                nextAvatarUrlState !== undefined
+                    ? nextAvatarUrlState
+                    : fallbackStoredAvatar
             )
 
             await syncStoredAuthFromPayload(res)
@@ -319,22 +392,45 @@ export default function AdminSettingsPage() {
         } finally {
             setAvatarLoading(false)
         }
-    }, [baseEmail, baseName, refresh, sessionUser?.email, sessionUser?.name, syncStoredAuthFromPayload])
+    }, [
+        baseEmail,
+        baseName,
+        refresh,
+        sessionUser?.email,
+        sessionUser?.name,
+        syncStoredAuthFromPayload,
+    ])
 
     React.useEffect(() => {
-        ;(async () => {
+        let active = true
+
+        void (async () => {
+            if (!active) return
+
             setLoading(true)
             try {
                 await refreshCurrentSettings()
             } finally {
-                setLoading(false)
+                if (active) {
+                    setLoading(false)
+                }
             }
         })()
+
+        return () => {
+            active = false
+        }
     }, [refreshCurrentSettings])
 
+    const openAvatarPicker = React.useCallback(() => {
+        if (!fileRef.current) return
+        fileRef.current.value = ""
+        fileRef.current.click()
+    }, [])
+
     async function onSaveProfile() {
-        const nextName = name.trim()
-        const nextEmail = email.trim().toLowerCase()
+        const nextName = normalizedCurrentName
+        const nextEmail = normalizedCurrentEmail
 
         if (!nextName) {
             toast.error("Name is required.")
@@ -357,9 +453,20 @@ export default function AdminSettingsPage() {
             })
 
             await syncStoredAuthFromPayload(resp)
+
+            const updatedUser = extractSettingsUser(resp)
+            const savedName = resolveName(updatedUser) ?? nextName
+            const savedEmail =
+                normalizeString(updatedUser?.email) ?? nextEmail
+
             setCurrentPasswordForProfile("")
-            setName(nextName)
-            setEmail(nextEmail)
+            setName(savedName)
+            setEmail(savedEmail)
+            setBaselineProfile({
+                name: savedName,
+                email: normalizeEmailValue(savedEmail),
+            })
+
             toast.success("Profile updated.")
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to update profile.")
@@ -451,9 +558,15 @@ export default function AdminSettingsPage() {
                     avatarKey: key,
                     avatarUrl: objectUrl,
                 })
+                setAvatarUrl(objectUrl)
             } catch {
                 const resp = await settingsApi.uploadAvatar(file)
                 await syncStoredAuthFromPayload(resp)
+
+                const uploadedAvatarUrl = extractAvatarUrlState(resp)
+                if (uploadedAvatarUrl !== undefined) {
+                    setAvatarUrl(uploadedAvatarUrl)
+                }
             }
 
             await refreshCurrentSettings()
@@ -462,6 +575,9 @@ export default function AdminSettingsPage() {
             toast.error(e?.message ?? "Failed to upload avatar.")
         } finally {
             setAvatarUploading(false)
+            if (fileRef.current) {
+                fileRef.current.value = ""
+            }
         }
     }
 
@@ -484,6 +600,9 @@ export default function AdminSettingsPage() {
             toast.error(e?.message ?? "Failed to remove avatar.")
         } finally {
             setAvatarUploading(false)
+            if (fileRef.current) {
+                fileRef.current.value = ""
+            }
         }
     }
 
@@ -547,20 +666,20 @@ export default function AdminSettingsPage() {
                                                     type="file"
                                                     accept="image/*"
                                                     className="hidden"
-                                                    onChange={(e) =>
+                                                    onChange={(e) => {
+                                                        const pickedFile =
+                                                            e.target.files?.[0] ?? null
+                                                        e.target.value = ""
                                                         void onPickAvatarFile(
-                                                            e.target.files?.[0] ??
-                                                                null
+                                                            pickedFile
                                                         )
-                                                    }
+                                                    }}
                                                 />
 
                                                 <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                                                     <Button
                                                         type="button"
-                                                        onClick={() =>
-                                                            fileRef.current?.click()
-                                                        }
+                                                        onClick={openAvatarPicker}
                                                         disabled={avatarUploading}
                                                         className="w-full gap-2 sm:w-auto"
                                                     >
@@ -591,7 +710,11 @@ export default function AdminSettingsPage() {
                                                         onClick={() =>
                                                             void onRemoveAvatar()
                                                         }
-                                                        disabled={avatarUploading}
+                                                        disabled={
+                                                            avatarUploading ||
+                                                            avatarLoading ||
+                                                            !avatarUrl
+                                                        }
                                                         className="w-full sm:w-auto"
                                                     >
                                                         Remove
@@ -695,7 +818,7 @@ export default function AdminSettingsPage() {
                                             <Button
                                                 type="button"
                                                 onClick={() => void onSaveProfile()}
-                                                disabled={savingProfile}
+                                                disabled={savingProfile || !profileChanged}
                                                 className="gap-2"
                                             >
                                                 <Save className="h-4 w-4" />
