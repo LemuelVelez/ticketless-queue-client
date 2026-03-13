@@ -6,9 +6,14 @@ import { Lock, User } from "lucide-react"
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { guestApi, participantAuthStorage } from "@/api/guest"
-import { studentApi, type Department } from "@/api/student"
-
+import { API_PATHS } from "@/api/api"
+import {
+    clearParticipantSession,
+    getParticipantToken,
+    getParticipantUser,
+    setParticipantUser,
+    type StoredParticipantUser,
+} from "@/lib/auth"
 import { api, ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
@@ -34,6 +39,66 @@ import {
 
 const DRAFT_KEY = "qp_alumni_profile_draft_v2"
 const LOCK_SENTINEL = "__LOCKED__"
+
+type Department = {
+    _id: string
+    id?: string
+    name: string
+    code?: string
+    enabled?: boolean
+}
+
+type ParticipantSessionResponse = {
+    participant?: Record<string, unknown> | null
+    session?: {
+        expiresAt?: string | null
+        [key: string]: unknown
+    } | null
+    departmentLocked?: boolean
+    departmentChangeIgnored?: boolean
+    [key: string]: unknown
+}
+
+const participantSessionStorage = {
+    getToken() {
+        return getParticipantToken()
+    },
+    getUser() {
+        return getParticipantUser()
+    },
+    getDepartmentId() {
+        const user = getParticipantUser()
+        const direct = pickNonEmptyString(user?.departmentId)
+        if (direct) return direct
+
+        const nested = user?.department
+        if (typeof nested === "string") return pickNonEmptyString(nested)
+        if (nested && typeof nested === "object") {
+            const record = nested as Record<string, unknown>
+            return pickNonEmptyString(record?._id) || pickNonEmptyString(record?.id)
+        }
+
+        return ""
+    },
+    setDepartmentId(departmentId: string) {
+        const current = (getParticipantUser() ?? {}) as StoredParticipantUser
+        setParticipantUser(
+            {
+                ...current,
+                departmentId,
+            },
+            true
+        )
+    },
+    clearDepartmentId() {
+        const current = getParticipantUser()
+        if (!current) return
+
+        const next = { ...current } as StoredParticipantUser
+        delete next.departmentId
+        setParticipantUser(next, true)
+    },
+}
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
@@ -78,7 +143,6 @@ function getErrorMessage(error: unknown, fallback: string) {
 
 function normalizeMobile(input: string) {
     const raw = input.trim()
-    // keep + and digits only
     const cleaned = raw.replace(/[^\d+]/g, "")
     return cleaned
 }
@@ -117,6 +181,100 @@ function clearDraftStorage() {
     localStorage.removeItem(DRAFT_KEY)
 }
 
+const alumniProfileApi = {
+    async listDepartments() {
+        return api.getData<{ departments?: Department[] }>(API_PATHS.departments.enabled, {
+            auth: "participant",
+        })
+    },
+
+    async getSession() {
+        const candidates = ["/public/auth/session", "/public/auth/me"]
+
+        let lastErr: unknown = null
+
+        for (const path of candidates) {
+            try {
+                return await api.getData<ParticipantSessionResponse>(path, {
+                    auth: "participant",
+                })
+            } catch (err) {
+                lastErr = err
+                if (err instanceof ApiError && err.status === 404) continue
+                throw err
+            }
+        }
+
+        throw lastErr ?? new Error("Participant session endpoint not found.")
+    },
+
+    async updateProfile(
+        payload: Record<string, unknown>,
+        headers: Record<string, string>
+    ) {
+        const candidates = ["/public/auth/session", "/public/auth/me", "/public/auth/profile"]
+
+        let lastErr: unknown = null
+
+        for (const path of candidates) {
+            try {
+                return await api.patch<Record<string, unknown>>(path, payload, {
+                    auth: false,
+                    headers,
+                })
+            } catch (err) {
+                lastErr = err
+                if (err instanceof ApiError && err.status === 404) continue
+                throw err
+            }
+        }
+
+        const tried = candidates.join(", ")
+        if (lastErr instanceof ApiError && lastErr.status === 404) {
+            throw new ApiError(
+                `All profile update endpoints returned 404. Tried: ${tried}. Most likely your backend publicRoutes router is mounted differently than your frontend API base. Make sure Express exposes PATCH on /api/public/auth/session (or add route aliases). Last: ${lastErr.message}`,
+                404,
+                { tried: candidates, last: lastErr.data },
+                { method: "PATCH", path: candidates[candidates.length - 1], url: lastErr.url }
+            )
+        }
+
+        throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
+    },
+
+    async logout(headers: Record<string, string>) {
+        const candidates = [
+            { method: "POST" as const, path: "/public/auth/logout" },
+            { method: "POST" as const, path: "/public/auth/session/logout" },
+            { method: "DELETE" as const, path: "/public/auth/session" },
+        ]
+
+        let lastErr: unknown = null
+
+        for (const candidate of candidates) {
+            try {
+                if (candidate.method === "DELETE") {
+                    return await api.delete<Record<string, unknown>>(candidate.path, {
+                        auth: false,
+                        headers,
+                    })
+                }
+
+                return await api.post<Record<string, unknown>>(candidate.path, undefined, {
+                    auth: false,
+                    headers,
+                })
+            } catch (err) {
+                lastErr = err
+                if (err instanceof ApiError && err.status === 404) continue
+                throw err
+            }
+        }
+
+        throw lastErr ?? new Error("Participant logout endpoint not found.")
+    },
+}
+
 export default function AlumniProfilePage() {
     const navigate = useNavigate()
 
@@ -125,7 +283,7 @@ export default function AlumniProfilePage() {
         session404: false,
     })
 
-    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
+    const initialLockedDept = participantSessionStorage.getDepartmentId() || ""
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
@@ -136,7 +294,6 @@ export default function AlumniProfilePage() {
     const [sessionExpiresAt, setSessionExpiresAt] = React.useState<string>("")
     const [hasSession, setHasSession] = React.useState(false)
 
-    // 🔒 lock immediately from storage to prevent a brief “editable” state before session loads
     const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
 
     const [firstName, setFirstName] = React.useState("")
@@ -149,7 +306,11 @@ export default function AlumniProfilePage() {
     const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const selectedDept = React.useMemo(
-        () => departments.find((d) => d._id === departmentId) || null,
+        () =>
+            departments.find((d) => {
+                const id = d._id || d.id || ""
+                return id === departmentId
+            }) || null,
         [departments, departmentId]
     )
 
@@ -168,7 +329,7 @@ export default function AlumniProfilePage() {
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
         try {
-            const res = await studentApi.listDepartments()
+            const res = await alumniProfileApi.listDepartments()
             setDepartments(res.departments ?? [])
         } catch (error) {
             if (error instanceof ApiError && error.status === 404 && !diagnosticsShownRef.current.depts404) {
@@ -188,7 +349,7 @@ export default function AlumniProfilePage() {
     const loadSession = React.useCallback(async () => {
         setLoadingSession(true)
         try {
-            const res = await guestApi.getSession()
+            const res = await alumniProfileApi.getSession()
             const p = res?.participant as Record<string, unknown> | null | undefined
 
             setSessionExpiresAt(pickNonEmptyString(res?.session?.expiresAt))
@@ -196,7 +357,7 @@ export default function AlumniProfilePage() {
 
             if (!p) {
                 setLockedDepartmentId("")
-                participantAuthStorage.clearDepartmentId()
+                participantSessionStorage.clearDepartmentId()
                 return
             }
 
@@ -224,12 +385,12 @@ export default function AlumniProfilePage() {
             const deptIdFromProfile = pickDepartmentIdFromParticipant(p)
             const deptLockedFlag = Boolean((res as any)?.departmentLocked)
 
-            const storedLock = participantAuthStorage.getDepartmentId() || ""
+            const storedLock = participantSessionStorage.getDepartmentId() || ""
             const shouldLock = deptLockedFlag || Boolean(deptIdFromProfile) || Boolean(storedLock)
 
             if (deptIdFromProfile) {
                 setDepartmentId(deptIdFromProfile)
-                participantAuthStorage.setDepartmentId(deptIdFromProfile)
+                participantSessionStorage.setDepartmentId(deptIdFromProfile)
             }
 
             if (shouldLock) {
@@ -238,7 +399,7 @@ export default function AlumniProfilePage() {
                 if (effective) setDepartmentId(effective)
             } else {
                 setLockedDepartmentId("")
-                participantAuthStorage.clearDepartmentId()
+                participantSessionStorage.clearDepartmentId()
             }
 
             if (typeof (p as any).smsUpdates === "boolean") {
@@ -254,7 +415,7 @@ export default function AlumniProfilePage() {
 
             setHasSession(false)
             setLockedDepartmentId("")
-            participantAuthStorage.clearDepartmentId()
+            participantSessionStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
@@ -283,7 +444,9 @@ export default function AlumniProfilePage() {
 
     function onSaveDraft() {
         const effectiveLocked =
-            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL
+                ? lockedDepartmentId
+                : participantSessionStorage.getDepartmentId() || ""
 
         const payload: ProfileDraft = {
             firstName: firstName.trim(),
@@ -305,7 +468,7 @@ export default function AlumniProfilePage() {
         setMiddleName("")
         setLastName("")
         setMobileNumber("")
-        setDepartmentId(isDepartmentLocked ? (participantAuthStorage.getDepartmentId() || "") : "")
+        setDepartmentId(isDepartmentLocked ? participantSessionStorage.getDepartmentId() || "" : "")
         setSmsUpdates(true)
 
         if (hasSession) {
@@ -318,47 +481,10 @@ export default function AlumniProfilePage() {
     }
 
     const getParticipantAuthHeaders = React.useCallback(() => {
-        const token = participantAuthStorage.getToken()
+        const token = participantSessionStorage.getToken()
         if (!token) return null
         return { Authorization: `Bearer ${token}` }
     }, [])
-
-    const updateProfileOnline = React.useCallback(
-        async (payload: Record<string, unknown>) => {
-            const headers = getParticipantAuthHeaders()
-            if (!headers) throw new Error("Not logged in. Please login again.")
-
-            const candidates = ["/public/auth/session", "/public/auth/me", "/public/auth/profile"]
-
-            let lastErr: unknown = null
-
-            for (const url of candidates) {
-                try {
-                    return await api.patch<Record<string, unknown>>(url, payload, {
-                        auth: false,
-                        headers,
-                    })
-                } catch (err) {
-                    lastErr = err
-                    if (err instanceof ApiError && err.status === 404) continue
-                    throw err
-                }
-            }
-
-            const tried = candidates.join(", ")
-            if (lastErr instanceof ApiError && lastErr.status === 404) {
-                throw new ApiError(
-                    `All profile update endpoints returned 404. Tried: ${tried}. Most likely your backend publicRoutes router is mounted differently than your frontend API base. Make sure Express exposes PATCH on /api/public/auth/session (or add route aliases). Last: ${lastErr.message}`,
-                    404,
-                    { tried: candidates, last: lastErr.data },
-                    { method: "PATCH", path: candidates[candidates.length - 1], url: lastErr.url }
-                )
-            }
-
-            throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
-        },
-        [getParticipantAuthHeaders]
-    )
 
     async function onSaveOnline() {
         const f = firstName.trim()
@@ -366,7 +492,9 @@ export default function AlumniProfilePage() {
         const l = lastName.trim()
 
         const effectiveLocked =
-            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL
+                ? lockedDepartmentId
+                : participantSessionStorage.getDepartmentId() || ""
 
         const dept = (isDepartmentLocked ? effectiveLocked : departmentId).trim()
         const mobile = normalizeMobile(mobileNumber)
@@ -394,10 +522,13 @@ export default function AlumniProfilePage() {
                 smsUpdates,
             }
 
-            const result = await updateProfileOnline(payload)
+            const headers = getParticipantAuthHeaders()
+            if (!headers) throw new Error("Not logged in. Please login again.")
+
+            const result = await alumniProfileApi.updateProfile(payload, headers)
 
             if (Boolean((result as any)?.departmentLocked) && dept) {
-                participantAuthStorage.setDepartmentId(dept)
+                participantSessionStorage.setDepartmentId(dept)
                 setLockedDepartmentId(dept)
                 setDepartmentId(dept)
             }
@@ -432,7 +563,12 @@ export default function AlumniProfilePage() {
     async function onLogout() {
         setBusyLogout(true)
         try {
-            await guestApi.logout()
+            const headers = getParticipantAuthHeaders()
+            if (headers) {
+                await alumniProfileApi.logout(headers)
+            }
+
+            clearParticipantSession()
             toast.success("Logged out.")
         } catch (error) {
             toast.error(getErrorMessage(error, "Failed to logout."))
@@ -443,7 +579,7 @@ export default function AlumniProfilePage() {
             setLockedDepartmentId("")
             setDepartmentId("")
 
-            if (!participantAuthStorage.getToken()) {
+            if (!participantSessionStorage.getToken()) {
                 navigate("/login", { replace: true })
             }
         }
@@ -559,12 +695,15 @@ export default function AlumniProfilePage() {
                                         </SelectTrigger>
 
                                         <SelectContent>
-                                            {departments.map((d) => (
-                                                <SelectItem key={d._id} value={d._id}>
-                                                    {d.name}
-                                                    {d.code ? ` (${d.code})` : ""}
-                                                </SelectItem>
-                                            ))}
+                                            {departments.map((d) => {
+                                                const value = d._id || d.id || ""
+                                                return (
+                                                    <SelectItem key={value} value={value}>
+                                                        {d.name}
+                                                        {d.code ? ` (${d.code})` : ""}
+                                                    </SelectItem>
+                                                )
+                                            })}
                                         </SelectContent>
                                     </Select>
                                 )}
