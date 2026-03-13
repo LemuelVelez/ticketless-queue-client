@@ -26,7 +26,6 @@ import {
 } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 import {
@@ -81,6 +80,9 @@ type AuditLogsResponse = {
     page: number
     limit: number
 }
+
+const AUDIT_FETCH_LIMIT = 500
+const ALL_FILTER_VALUE = "ALL"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value)
@@ -163,7 +165,8 @@ function normalizeAuditLogRow(value: unknown, index: number): AuditLogRow {
         row.entityType,
         entity?.type,
         row.targetType,
-        row.subjectType
+        row.subjectType,
+        row.entityName
     )
 
     const entityId = pickFirstString(
@@ -198,6 +201,8 @@ function normalizeAuditLogsResponse(
     const data = isRecord(payload) ? payload : {}
 
     const rawLogs =
+        (Array.isArray(payload) && payload) ||
+        (Array.isArray(data.data) && data.data) ||
         (Array.isArray(data.logs) && data.logs) ||
         (Array.isArray(data.items) && data.items) ||
         (Array.isArray(data.rows) && data.rows) ||
@@ -205,7 +210,13 @@ function normalizeAuditLogsResponse(
         (Array.isArray(data.auditLogs) && data.auditLogs) ||
         []
 
-    const logs = rawLogs.map((item, index) => normalizeAuditLogRow(item, index))
+    const logs = rawLogs
+        .map((item, index) => normalizeAuditLogRow(item, index))
+        .sort((a, b) => {
+            const aTime = new Date(a.createdAt).getTime()
+            const bTime = new Date(b.createdAt).getTime()
+            return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0)
+        })
 
     const pagination = isRecord(data.pagination) ? data.pagination : null
     const meta = isRecord(data.meta) ? data.meta : null
@@ -249,6 +260,24 @@ function lastNDaysRange(n: number): DateRange {
 function formatNumber(n: number | null | undefined) {
     if (n === null || n === undefined || Number.isNaN(n)) return "—"
     return new Intl.NumberFormat().format(n)
+}
+
+function toStartOfDay(date: Date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0)
+}
+
+function toEndOfDay(date: Date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999)
+}
+
+function uniqueSortedStrings(values: Array<string | null | undefined>) {
+    return Array.from(
+        new Set(
+            values
+                .map((value) => String(value ?? "").trim())
+                .filter(Boolean)
+        )
+    ).sort((a, b) => a.localeCompare(b))
 }
 
 function DateRangePicker({
@@ -325,8 +354,8 @@ export default function AdminAuditsPage() {
         [range?.to]
     )
 
-    const [action, setAction] = React.useState("")
-    const [entityType, setEntityType] = React.useState("")
+    const [action, setAction] = React.useState(ALL_FILTER_VALUE)
+    const [entityType, setEntityType] = React.useState(ALL_FILTER_VALUE)
     const [actorRole, setActorRole] = React.useState<"ALL" | "ADMIN" | "STAFF">(
         "ALL"
     )
@@ -335,7 +364,8 @@ export default function AdminAuditsPage() {
     const [limit, setLimit] = React.useState(50)
 
     const [loading, setLoading] = React.useState(true)
-    const [logs, setLogs] = React.useState<AuditLogsResponse | null>(null)
+    const [allLogs, setAllLogs] = React.useState<AuditLogRow[]>([])
+    const [loadedTotal, setLoadedTotal] = React.useState(0)
 
     const [metaOpen, setMetaOpen] = React.useState(false)
     const [metaTitle, setMetaTitle] = React.useState("Meta")
@@ -347,10 +377,63 @@ export default function AdminAuditsPage() {
         return true
     }, [range?.from, range?.to, from, to])
 
+    const actionOptions = React.useMemo(
+        () => uniqueSortedStrings(allLogs.map((log) => log.action)),
+        [allLogs]
+    )
+
+    const entityTypeOptions = React.useMemo(
+        () => uniqueSortedStrings(allLogs.map((log) => log.entityType)),
+        [allLogs]
+    )
+
+    const filteredLogs = React.useMemo(() => {
+        const fromBoundary = range?.from ? toStartOfDay(range.from) : null
+        const toBoundary = range?.to ? toEndOfDay(range.to) : null
+
+        return allLogs.filter((log) => {
+            if (action !== ALL_FILTER_VALUE && log.action !== action) {
+                return false
+            }
+
+            if (
+                entityType !== ALL_FILTER_VALUE &&
+                (log.entityType ?? "") !== entityType
+            ) {
+                return false
+            }
+
+            if (actorRole !== "ALL" && log.actorRole !== actorRole) {
+                return false
+            }
+
+            if (fromBoundary || toBoundary) {
+                const createdAt = new Date(log.createdAt)
+                const createdAtMs = createdAt.getTime()
+
+                if (!Number.isFinite(createdAtMs)) return false
+                if (fromBoundary && createdAtMs < fromBoundary.getTime()) return false
+                if (toBoundary && createdAtMs > toBoundary.getTime()) return false
+            }
+
+            return true
+        })
+    }, [allLogs, action, entityType, actorRole, range])
+
     const totalPages = React.useMemo(() => {
-        const t = logs?.total ?? 0
-        return Math.max(1, Math.ceil(t / limit))
-    }, [logs?.total, limit])
+        return Math.max(1, Math.ceil(filteredLogs.length / limit))
+    }, [filteredLogs.length, limit])
+
+    const pagedLogs = React.useMemo(() => {
+        const start = (page - 1) * limit
+        return filteredLogs.slice(start, start + limit)
+    }, [filteredLogs, page, limit])
+
+    React.useEffect(() => {
+        if (page > totalPages) {
+            setPage(totalPages)
+        }
+    }, [page, totalPages])
 
     function openMeta(title: string, obj: unknown) {
         setMetaTitle(title)
@@ -366,30 +449,31 @@ export default function AdminAuditsPage() {
         setLoading(true)
 
         try {
-            const roleParam = actorRole === "ALL" ? undefined : actorRole
-
-            const response = await api.getData<unknown>(API_PATHS.auditLogs.recent, {
+            const response = await api.get<unknown>(API_PATHS.auditLogs.recent, {
                 auth: "staff",
                 params: {
-                    page,
-                    limit,
-                    action: action.trim() || undefined,
-                    entityType: entityType.trim() || undefined,
-                    actorRole: roleParam,
-                    from: from || undefined,
-                    to: to || undefined,
+                    limit: AUDIT_FETCH_LIMIT,
                 },
             })
 
-            setLogs(normalizeAuditLogsResponse(response, page, limit))
+            const normalized = normalizeAuditLogsResponse(
+                response,
+                1,
+                AUDIT_FETCH_LIMIT
+            )
+
+            setAllLogs(normalized.logs)
+            setLoadedTotal(normalized.total)
         } catch (e) {
             const msg =
                 e instanceof Error ? e.message : "Failed to load audit logs."
             toast.error(msg)
+            setAllLogs([])
+            setLoadedTotal(0)
         } finally {
             setLoading(false)
         }
-    }, [page, limit, action, entityType, actorRole, from, to])
+    }, [])
 
     React.useEffect(() => {
         void fetchAuditLogs()
@@ -454,7 +538,6 @@ export default function AdminAuditsPage() {
                                             )
                                         }
                                         setPage(1)
-                                        void fetchAuditLogs()
                                     }}
                                     className="w-full gap-2 sm:w-auto"
                                     disabled={loading || !canApplyRange}
@@ -531,7 +614,7 @@ export default function AdminAuditsPage() {
                                 </div>
 
                                 <div className="text-xs text-muted-foreground">
-                                    API range:{" "}
+                                    Selected range:{" "}
                                     <span className="font-medium">
                                         {from || "—"}
                                     </span>{" "}
@@ -543,35 +626,56 @@ export default function AdminAuditsPage() {
                             </div>
 
                             <div className="grid gap-2 md:col-span-3">
-                                <Label htmlFor="audit-action">
-                                    Action (optional)
-                                </Label>
-                                <Input
-                                    id="audit-action"
+                                <Label>Action</Label>
+                                <Select
                                     value={action}
-                                    onChange={(e) => setAction(e.target.value)}
-                                    placeholder="e.g., ADMIN_UPDATE_USER"
-                                    className="w-full min-w-0"
-                                />
+                                    onValueChange={(value) => {
+                                        setPage(1)
+                                        setAction(value)
+                                    }}
+                                >
+                                    <SelectTrigger className="w-full min-w-0">
+                                        <SelectValue placeholder="All actions" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={ALL_FILTER_VALUE}>
+                                            All actions
+                                        </SelectItem>
+                                        {actionOptions.map((option) => (
+                                            <SelectItem key={option} value={option}>
+                                                {option}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                                 <div className="text-xs text-muted-foreground">
-                                    Tip: backend matches action exactly
-                                    (case-sensitive).
+                                    Loaded from recent audit logs.
                                 </div>
                             </div>
 
                             <div className="grid gap-2 md:col-span-3">
-                                <Label htmlFor="audit-entity">
-                                    Entity type (optional)
-                                </Label>
-                                <Input
-                                    id="audit-entity"
+                                <Label>Entity type</Label>
+                                <Select
                                     value={entityType}
-                                    onChange={(e) =>
-                                        setEntityType(e.target.value)
-                                    }
-                                    placeholder="e.g., User, Department"
-                                    className="w-full min-w-0"
-                                />
+                                    onValueChange={(value) => {
+                                        setPage(1)
+                                        setEntityType(value)
+                                    }}
+                                >
+                                    <SelectTrigger className="w-full min-w-0">
+                                        <SelectValue placeholder="All entity types" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={ALL_FILTER_VALUE}>
+                                            All entity types
+                                        </SelectItem>
+                                        {entityTypeOptions.map((option) => (
+                                            <SelectItem key={option} value={option}>
+                                                {option}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
 
                             <div className="grid gap-2 md:col-span-2">
@@ -613,7 +717,10 @@ export default function AdminAuditsPage() {
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                     <div className="flex flex-wrap items-center gap-2 text-sm">
                                         <Badge variant="secondary">
-                                            Total: {formatNumber(logs?.total ?? 0)}
+                                            Total: {formatNumber(filteredLogs.length)}
+                                        </Badge>
+                                        <Badge variant="secondary">
+                                            Loaded: {formatNumber(loadedTotal)}
                                         </Badge>
                                         <Badge variant="secondary">
                                             Page: {page} / {totalPages}
@@ -623,10 +730,7 @@ export default function AdminAuditsPage() {
                                             className="gap-2"
                                         >
                                             <Table2 className="h-4 w-4" />
-                                            {formatNumber(
-                                                logs?.logs?.length ?? 0
-                                            )}{" "}
-                                            rows
+                                            {formatNumber(pagedLogs.length)} rows
                                         </Badge>
                                     </div>
 
@@ -684,7 +788,7 @@ export default function AdminAuditsPage() {
                                         </TableHeader>
 
                                         <TableBody>
-                                            {(logs?.logs ?? []).map((l) => (
+                                            {pagedLogs.map((l) => (
                                                 <TableRow key={l.id}>
                                                     <TableCell className="whitespace-nowrap">
                                                         <div className="flex flex-col">
@@ -773,7 +877,7 @@ export default function AdminAuditsPage() {
                                                 </TableRow>
                                             ))}
 
-                                            {(logs?.logs?.length ?? 0) === 0 ? (
+                                            {pagedLogs.length === 0 ? (
                                                 <TableRow>
                                                     <TableCell
                                                         colSpan={6}
