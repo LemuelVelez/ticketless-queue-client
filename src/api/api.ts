@@ -223,6 +223,9 @@ export const API_PATHS = {
         activeByDepartment: (departmentId: ApiRouteParam) =>
             `/tickets/department/${encodeRouteParam(departmentId)}/active`,
     },
+    reports: {
+        timeseries: "/reports/timeseries",
+    },
     users: {
         byId: (id: ApiRouteParam) => `/users/${encodeRouteParam(id)}`,
         byStudentId: (studentId: ApiRouteParam) =>
@@ -289,6 +292,9 @@ export const API_ROUTES = {
             toApiUrl(API_PATHS.tickets.queueByDepartment(departmentId)),
         activeByDepartment: (departmentId: ApiRouteParam) =>
             toApiUrl(API_PATHS.tickets.activeByDepartment(departmentId)),
+    },
+    reports: {
+        timeseries: () => toApiUrl(API_PATHS.reports.timeseries),
     },
     users: {
         byId: (id: ApiRouteParam) => toApiUrl(API_PATHS.users.byId(id)),
