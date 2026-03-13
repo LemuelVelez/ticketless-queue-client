@@ -29,18 +29,47 @@ import {
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { guestApi, participantAuthStorage } from "@/api/guest"
-import { studentApi, type Department, type Ticket as TicketType } from "@/api/student"
-import { api } from "@/lib/http"
+import { API_PATHS } from "@/api/api"
+import {
+    getParticipantToken,
+    getParticipantUser,
+    type StoredParticipantUser,
+} from "@/lib/auth"
+import { api, ApiError } from "@/lib/http"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+
+type Department = {
+    _id: string
+    name: string
+    code?: string | null
+}
+
+type TicketType = {
+    _id: string
+    queueNumber: number
+    status?: string
+    dateKey?: string
+}
 
 type DepartmentDisplayResponse = {
     dateKey: string
@@ -75,6 +104,10 @@ function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
     if (
         typeof error === "object" &&
@@ -88,7 +121,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 function statusBadgeVariant(status?: string) {
-    switch (status) {
+    switch (String(status ?? "").toUpperCase()) {
         case "WAITING":
             return "outline"
         case "CALLED":
@@ -163,16 +196,193 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
     return debounced
 }
 
+function normalizeDepartment(value: unknown): Department | null {
+    if (!isRecord(value)) return null
+
+    const _id =
+        pickNonEmptyString(value._id) || pickNonEmptyString(value.id)
+    const name = pickNonEmptyString(value.name)
+    const code = pickNonEmptyString(value.code) || null
+
+    if (!_id || !name) return null
+
+    return {
+        _id,
+        name,
+        code,
+    }
+}
+
+function extractDepartments(value: unknown): Department[] {
+    const source = Array.isArray(value)
+        ? value
+        : isRecord(value) && Array.isArray(value.departments)
+          ? value.departments
+          : isRecord(value) && Array.isArray(value.items)
+            ? value.items
+            : isRecord(value) && Array.isArray(value.results)
+              ? value.results
+              : []
+
+    const out: Department[] = []
+
+    for (const item of source) {
+        const normalized = normalizeDepartment(item)
+        if (normalized) out.push(normalized)
+    }
+
+    return out
+}
+
+function mapStoredParticipant(
+    value: StoredParticipantUser | null
+): SessionParticipant | null {
+    if (!value) return null
+
+    return {
+        firstName: pickNonEmptyString(value.firstName),
+        lastName: pickNonEmptyString(value.lastName),
+        studentId: pickNonEmptyString(value.studentId),
+        tcNumber: pickNonEmptyString(value.tcNumber),
+        mobileNumber: pickNonEmptyString(value.mobileNumber),
+        phone: pickNonEmptyString(value.phone),
+        departmentId: pickNonEmptyString(value.departmentId),
+        type: pickNonEmptyString(value.type),
+    }
+}
+
+function extractParticipant(value: unknown): SessionParticipant | null {
+    if (!value) return null
+
+    if (isRecord(value) && isRecord(value.participant)) {
+        return extractParticipant(value.participant)
+    }
+
+    if (isRecord(value) && isRecord(value.user)) {
+        return extractParticipant(value.user)
+    }
+
+    if (!isRecord(value)) return null
+
+    const participant: SessionParticipant = {
+        firstName: pickNonEmptyString(value.firstName),
+        lastName: pickNonEmptyString(value.lastName),
+        studentId: pickNonEmptyString(value.studentId),
+        tcNumber: pickNonEmptyString(value.tcNumber),
+        mobileNumber: pickNonEmptyString(value.mobileNumber),
+        phone: pickNonEmptyString(value.phone),
+        departmentId: pickNonEmptyString(value.departmentId),
+        type: pickNonEmptyString(value.type),
+    }
+
+    const hasAny =
+        participant.firstName ||
+        participant.lastName ||
+        participant.studentId ||
+        participant.tcNumber ||
+        participant.mobileNumber ||
+        participant.phone ||
+        participant.departmentId ||
+        participant.type
+
+    return hasAny ? participant : null
+}
+
+function normalizeTicket(value: unknown): TicketType | null {
+    if (!isRecord(value)) return null
+
+    const _id =
+        pickNonEmptyString(value._id) || pickNonEmptyString(value.id)
+    const queueRaw =
+        typeof value.queueNumber === "number" || typeof value.queueNumber === "string"
+            ? Number(value.queueNumber)
+            : NaN
+
+    if (!Number.isFinite(queueRaw)) return null
+
+    return {
+        _id: _id || String(queueRaw),
+        queueNumber: queueRaw,
+        status: pickNonEmptyString(value.status) || undefined,
+        dateKey: pickNonEmptyString(value.dateKey) || undefined,
+    }
+}
+
+function extractTicket(value: unknown): TicketType | null {
+    if (!value) return null
+
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const normalized = normalizeTicket(item)
+            if (normalized) return normalized
+        }
+        return null
+    }
+
+    if (isRecord(value) && value.ticket) {
+        return extractTicket(value.ticket)
+    }
+
+    if (isRecord(value) && value.activeTicket) {
+        return extractTicket(value.activeTicket)
+    }
+
+    if (isRecord(value) && Array.isArray(value.tickets)) {
+        return extractTicket(value.tickets)
+    }
+
+    return normalizeTicket(value)
+}
+
+async function tryGetFirst<T>(
+    requests: Array<() => Promise<T>>
+): Promise<T | null> {
+    for (const request of requests) {
+        try {
+            return await request()
+        } catch (error) {
+            if (error instanceof ApiError) {
+                if (
+                    error.status === 401 ||
+                    error.status === 403 ||
+                    error.status === 404
+                ) {
+                    continue
+                }
+            }
+        }
+    }
+
+    return null
+}
+
 export default function AlumniHomePage() {
     const location = useLocation()
 
-    const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
-
-    const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
-    const preReferenceId = React.useMemo(
-        () => pickNonEmptyString(qs.get("studentId") || qs.get("referenceId") || qs.get("tcNumber")),
-        [qs],
+    const qs = React.useMemo(
+        () => new URLSearchParams(location.search || ""),
+        [location.search]
     )
+
+    const preDeptId = React.useMemo(
+        () => pickNonEmptyString(qs.get("departmentId")),
+        [qs]
+    )
+    const preReferenceId = React.useMemo(
+        () =>
+            pickNonEmptyString(
+                qs.get("studentId") ||
+                    qs.get("referenceId") ||
+                    qs.get("tcNumber")
+            ),
+        [qs]
+    )
+
+    const storedParticipant = React.useMemo(
+        () => mapStoredParticipant(getParticipantUser()),
+        []
+    )
+    const storedLockedDept = storedParticipant?.departmentId || ""
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
@@ -181,30 +391,40 @@ export default function AlumniHomePage() {
 
     const [departments, setDepartments] = React.useState<Department[]>([])
 
-    // 🔒 lock department immediately from storage (prevents URL tampering + “editable flicker”)
-    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
-    const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
+    const [lockedDepartmentId, setLockedDepartmentId] =
+        React.useState<string>(storedLockedDept)
 
-    const [sessionDepartmentId, setSessionDepartmentId] = React.useState("")
-    const [departmentId, setDepartmentId] = React.useState(initialLockedDept || "")
-    const [referenceId, setReferenceId] = React.useState(preReferenceId)
+    const [sessionDepartmentId, setSessionDepartmentId] =
+        React.useState(storedLockedDept)
+    const [departmentId, setDepartmentId] = React.useState(
+        storedLockedDept || ""
+    )
+    const [referenceId, setReferenceId] = React.useState(
+        preReferenceId ||
+            pickNonEmptyString(storedParticipant?.tcNumber) ||
+            pickNonEmptyString(storedParticipant?.studentId) ||
+            pickNonEmptyString(storedParticipant?.mobileNumber) ||
+            pickNonEmptyString(storedParticipant?.phone)
+    )
 
     const debouncedReferenceId = useDebouncedValue(referenceId, 600)
 
-    const [participant, setParticipant] = React.useState<SessionParticipant | null>(null)
+    const [participant, setParticipant] =
+        React.useState<SessionParticipant | null>(storedParticipant)
     const [ticket, setTicket] = React.useState<TicketType | null>(null)
 
     const [displayDateKey, setDisplayDateKey] = React.useState("")
     const [displayNowServing, setDisplayNowServing] =
         React.useState<DepartmentDisplayResponse["nowServing"]>(null)
-    const [displayUpNext, setDisplayUpNext] = React.useState<DepartmentDisplayResponse["upNext"]>([])
+    const [displayUpNext, setDisplayUpNext] = React.useState<
+        DepartmentDisplayResponse["upNext"]
+    >([])
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
-        [departments, departmentId],
+        [departments, departmentId]
     )
 
-    // ✅ lock applies to ANY registered participant type (student/alumni/guest) as long as the session/storage has a department
     const isDepartmentLocked = Boolean(lockedDepartmentId)
 
     const sessionDisplayName = React.useMemo(() => {
@@ -232,8 +452,14 @@ export default function AlumniHomePage() {
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
         try {
-            const res = await studentApi.listDepartments()
-            setDepartments(res.departments ?? [])
+            const res = await api.getData<unknown>(API_PATHS.departments.enabled, {
+                auth: false,
+            })
+            const next = extractDepartments(res)
+            setDepartments(next)
+            if (!next.length) {
+                setDepartmentId("")
+            }
         } catch (error) {
             toast.error(getErrorMessage(error, "Failed to load departments."))
             setDepartments([])
@@ -245,27 +471,66 @@ export default function AlumniHomePage() {
 
     const loadSession = React.useCallback(async () => {
         setLoadingSession(true)
+
         try {
-            const res = await guestApi.getSession()
-            const p = ((res as any)?.participant ?? null) as SessionParticipant | null
+            const stored = mapStoredParticipant(getParticipantUser())
 
-            setParticipant(p)
+            if (stored) {
+                setParticipant(stored)
 
-            if (!p) {
-                // no session -> unlock and clear stored lock
+                const rid =
+                    pickNonEmptyString(stored.tcNumber) ||
+                    pickNonEmptyString(stored.studentId) ||
+                    pickNonEmptyString(stored.mobileNumber) ||
+                    pickNonEmptyString(stored.phone)
+
+                const dept = pickNonEmptyString(stored.departmentId)
+
+                if (rid) {
+                    setReferenceId((prev) => prev || rid)
+                }
+
+                if (dept) {
+                    setSessionDepartmentId(dept)
+                    setLockedDepartmentId(dept)
+                    setDepartmentId((prev) => prev || dept)
+                }
+            } else {
+                setParticipant(null)
                 setSessionDepartmentId("")
                 setLockedDepartmentId("")
-                participantAuthStorage.clearDepartmentId()
-                return
             }
 
-            const rid =
-                pickNonEmptyString(p?.tcNumber) ||
-                pickNonEmptyString(p?.studentId) ||
-                pickNonEmptyString(p?.mobileNumber) ||
-                pickNonEmptyString(p?.phone)
+            const participantToken = getParticipantToken()
+            if (!participantToken) return
 
-            const dept = pickNonEmptyString(p?.departmentId)
+            const remote = await tryGetFirst<unknown>([
+                () =>
+                    api.getData<unknown>("/participants/session", {
+                        auth: "participant",
+                    }),
+                () =>
+                    api.getData<unknown>("/participants/me", {
+                        auth: "participant",
+                    }),
+                () =>
+                    api.getData<unknown>(API_PATHS.auth.me, {
+                        auth: "participant",
+                    }),
+            ])
+
+            const nextParticipant = extractParticipant(remote)
+            if (!nextParticipant) return
+
+            setParticipant(nextParticipant)
+
+            const rid =
+                pickNonEmptyString(nextParticipant.tcNumber) ||
+                pickNonEmptyString(nextParticipant.studentId) ||
+                pickNonEmptyString(nextParticipant.mobileNumber) ||
+                pickNonEmptyString(nextParticipant.phone)
+
+            const dept = pickNonEmptyString(nextParticipant.departmentId)
 
             if (rid) {
                 setReferenceId((prev) => prev || rid)
@@ -274,15 +539,8 @@ export default function AlumniHomePage() {
             if (dept) {
                 setSessionDepartmentId(dept)
                 setLockedDepartmentId(dept)
-                participantAuthStorage.setDepartmentId(dept)
-                setDepartmentId(dept)
+                setDepartmentId((prev) => prev || dept)
             }
-        } catch {
-            // Guest mode is valid here.
-            setParticipant(null)
-            setSessionDepartmentId("")
-            setLockedDepartmentId("")
-            participantAuthStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
@@ -301,22 +559,30 @@ export default function AlumniHomePage() {
             if (!silent) setLoadingDisplay(true)
 
             try {
-                const res = await api.get<DepartmentDisplayResponse>(`/display/${encodeURIComponent(departmentId)}`, {
-                    auth: false,
-                })
+                const res = await api.getData<DepartmentDisplayResponse>(
+                    `/display/${encodeURIComponent(departmentId)}`,
+                    {
+                        auth: false,
+                    }
+                )
 
                 setDisplayDateKey(pickNonEmptyString(res?.dateKey))
                 setDisplayNowServing(res?.nowServing ?? null)
                 setDisplayUpNext(Array.isArray(res?.upNext) ? res.upNext : [])
             } catch (error) {
                 if (!silent) {
-                    toast.error(getErrorMessage(error, "Failed to load department overview."))
+                    toast.error(
+                        getErrorMessage(
+                            error,
+                            "Failed to load department overview."
+                        )
+                    )
                 }
             } finally {
                 if (!silent) setLoadingDisplay(false)
             }
         },
-        [departmentId],
+        [departmentId]
     )
 
     const findActiveTicket = React.useCallback(
@@ -332,30 +598,68 @@ export default function AlumniHomePage() {
             if (!silent) setLoadingTicket(true)
 
             try {
-                const res = await studentApi.findActiveByStudent({
-                    departmentId,
-                    studentId: rid,
-                })
-                setTicket(res.ticket ?? null)
+                const res = await tryGetFirst<unknown>([
+                    () =>
+                        api.getData<unknown>("/tickets/participant/active", {
+                            auth: "participant",
+                            params: {
+                                departmentId,
+                                studentId: rid,
+                                referenceId: rid,
+                                tcNumber: rid,
+                            },
+                        }),
+                    () =>
+                        api.getData<unknown>("/participants/tickets/active", {
+                            auth: "participant",
+                            params: {
+                                departmentId,
+                                studentId: rid,
+                                referenceId: rid,
+                                tcNumber: rid,
+                            },
+                        }),
+                    () =>
+                        api.getData<unknown>(
+                            API_PATHS.tickets.activeByDepartment(departmentId),
+                            {
+                                auth: false,
+                                params: {
+                                    studentId: rid,
+                                    referenceId: rid,
+                                    tcNumber: rid,
+                                },
+                            }
+                        ),
+                ])
+
+                setTicket(extractTicket(res))
             } catch (error) {
                 if (!silent) {
-                    toast.error(getErrorMessage(error, "Failed to load active ticket."))
+                    toast.error(
+                        getErrorMessage(error, "Failed to load active ticket.")
+                    )
                 }
             } finally {
                 if (!silent) setLoadingTicket(false)
             }
         },
-        [departmentId, debouncedReferenceId],
+        [departmentId, debouncedReferenceId]
     )
 
     const refreshOverview = React.useCallback(async () => {
         if (refreshCooldown.isCoolingDown) {
-            toast.message(`Please wait ${refreshCooldown.remainingSec}s before refreshing again.`)
+            toast.message(
+                `Please wait ${refreshCooldown.remainingSec}s before refreshing again.`
+            )
             return
         }
 
         refreshCooldown.start()
-        await Promise.all([loadDepartmentDisplay({ silent: false }), findActiveTicket({ silent: false })])
+        await Promise.all([
+            loadDepartmentDisplay({ silent: false }),
+            findActiveTicket({ silent: false }),
+        ])
         toast.success("Overview refreshed.")
     }, [loadDepartmentDisplay, findActiveTicket, refreshCooldown])
 
@@ -368,24 +672,28 @@ export default function AlumniHomePage() {
         if (!departments.length) return
 
         setDepartmentId((prev) => {
-            const has = (id: string) => !!id && departments.some((d) => d._id === id)
+            const has = (id: string) =>
+                !!id && departments.some((d) => d._id === id)
 
-            // 🔒 locked wins (ignore query param & manual changes)
-            if (isDepartmentLocked && has(lockedDepartmentId)) return lockedDepartmentId
+            if (isDepartmentLocked && has(lockedDepartmentId)) {
+                return lockedDepartmentId
+            }
 
-            // 1) explicit query param (only when not locked)
             if (has(preDeptId)) return preDeptId
 
-            // 2) session profile department
             if (has(sessionDepartmentId)) return sessionDepartmentId
 
-            // 3) keep current valid
             if (has(prev)) return prev
 
-            // 4) fallback first
             return departments[0]?._id ?? ""
         })
-    }, [departments, preDeptId, sessionDepartmentId, isDepartmentLocked, lockedDepartmentId])
+    }, [
+        departments,
+        preDeptId,
+        sessionDepartmentId,
+        isDepartmentLocked,
+        lockedDepartmentId,
+    ])
 
     React.useEffect(() => {
         void loadDepartmentDisplay()
@@ -423,22 +731,41 @@ export default function AlumniHomePage() {
     const nowServingCount = displayNowServing ? 1 : 0
     const visibleCount = nowServingCount + waitingCount
 
-    // ✅ Use chart tokens from src/index.css (OKLCH vars), not hsl(var(--...))
     const liveQueueBars = React.useMemo(
         () => [
-            { label: "Now Serving", count: nowServingCount, fill: "var(--chart-1)" },
-            { label: "Up Next", count: waitingCount, fill: "var(--chart-2)" },
-            { label: "Visible Queue", count: visibleCount, fill: "var(--chart-3)" },
+            {
+                label: "Now Serving",
+                count: nowServingCount,
+                fill: "var(--chart-1)",
+            },
+            {
+                label: "Up Next",
+                count: waitingCount,
+                fill: "var(--chart-2)",
+            },
+            {
+                label: "Visible Queue",
+                count: visibleCount,
+                fill: "var(--chart-3)",
+            },
         ],
-        [nowServingCount, waitingCount, visibleCount],
+        [nowServingCount, waitingCount, visibleCount]
     )
 
     const queueMixData = React.useMemo(
         () => [
-            { name: "Called", value: nowServingCount, fill: "var(--chart-1)" },
-            { name: "Waiting", value: waitingCount, fill: "var(--chart-2)" },
+            {
+                name: "Called",
+                value: nowServingCount,
+                fill: "var(--chart-1)",
+            },
+            {
+                name: "Waiting",
+                value: waitingCount,
+                fill: "var(--chart-2)",
+            },
         ],
-        [nowServingCount, waitingCount],
+        [nowServingCount, waitingCount]
     )
 
     const hasQueueMix = queueMixData.some((item) => item.value > 0)
@@ -448,13 +775,16 @@ export default function AlumniHomePage() {
 
         if (
             displayNowServing &&
-            (displayNowServing.id === ticket._id || displayNowServing.queueNumber === ticket.queueNumber)
+            (displayNowServing.id === ticket._id ||
+                displayNowServing.queueNumber === ticket.queueNumber)
         ) {
             return 0
         }
 
         const index = displayUpNext.findIndex(
-            (item) => item.id === ticket._id || item.queueNumber === ticket.queueNumber,
+            (item) =>
+                item.id === ticket._id ||
+                item.queueNumber === ticket.queueNumber
         )
 
         if (index >= 0) return index + 1
@@ -469,7 +799,7 @@ export default function AlumniHomePage() {
             }
             setDepartmentId(value)
         },
-        [isDepartmentLocked],
+        [isDepartmentLocked]
     )
 
     return (
@@ -483,8 +813,9 @@ export default function AlumniHomePage() {
                         Alumni Home
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Overview for <span className="font-medium">Join Queue</span> and{" "}
-                        <span className="font-medium">My Tickets</span> with live queue insights for alumni and visitors.
+                        Overview for <span className="font-medium">Join Queue</span>{" "}
+                        and <span className="font-medium">My Tickets</span> with
+                        live queue insights for alumni and visitors.
                     </p>
                 </div>
 
@@ -501,7 +832,8 @@ export default function AlumniHomePage() {
                                         {isDepartmentLocked ? (
                                             <span className="inline-flex items-center gap-2">
                                                 <Lock className="h-4 w-4" />
-                                                Department is locked after registration.
+                                                Department is locked after
+                                                registration.
                                             </span>
                                         ) : (
                                             "This context is shared by the quick links to Join Queue and My Tickets."
@@ -514,7 +846,11 @@ export default function AlumniHomePage() {
                                     variant="outline"
                                     className="w-full gap-2 lg:w-auto"
                                     onClick={() => void refreshOverview()}
-                                    disabled={loadingDisplay || loadingTicket || loadingDepts}
+                                    disabled={
+                                        loadingDisplay ||
+                                        loadingTicket ||
+                                        loadingDepts
+                                    }
                                 >
                                     <RefreshCw className="h-4 w-4" />
                                     {refreshCooldown.isCoolingDown
@@ -539,16 +875,24 @@ export default function AlumniHomePage() {
                                         <Select
                                             value={departmentId}
                                             onValueChange={handleDepartmentChange}
-                                            disabled={!departments.length || isDepartmentLocked}
+                                            disabled={
+                                                !departments.length ||
+                                                isDepartmentLocked
+                                            }
                                         >
                                             <SelectTrigger className="w-full min-w-0">
                                                 <SelectValue placeholder="Select department" />
                                             </SelectTrigger>
                                             <SelectContent>
                                                 {departments.map((d) => (
-                                                    <SelectItem key={d._id} value={d._id}>
+                                                    <SelectItem
+                                                        key={d._id}
+                                                        value={d._id}
+                                                    >
                                                         {d.name}
-                                                        {d.code ? ` (${d.code})` : ""}
+                                                        {d.code
+                                                            ? ` (${d.code})`
+                                                            : ""}
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -564,17 +908,22 @@ export default function AlumniHomePage() {
                                     </div>
 
                                     <div className="min-w-0 space-y-2">
-                                        <Label htmlFor="reference-id">Reference ID</Label>
+                                        <Label htmlFor="reference-id">
+                                            Reference ID
+                                        </Label>
                                         <Input
                                             id="reference-id"
                                             value={referenceId}
-                                            onChange={(e) => setReferenceId(e.target.value)}
+                                            onChange={(e) =>
+                                                setReferenceId(e.target.value)
+                                            }
                                             placeholder="Student ID / TC Number / Contact reference"
                                             autoComplete="off"
                                             inputMode="text"
                                         />
                                         <div className="text-xs text-muted-foreground">
-                                            Tip: typing is debounced to reduce spam/requests.
+                                            Tip: typing is debounced to reduce
+                                            spam/requests.
                                         </div>
                                     </div>
 
@@ -584,9 +933,13 @@ export default function AlumniHomePage() {
                                             {loadingSession ? (
                                                 <Skeleton className="h-4 w-24" />
                                             ) : sessionDisplayName ? (
-                                                <span className="truncate text-sm">{sessionDisplayName}</span>
+                                                <span className="truncate text-sm">
+                                                    {sessionDisplayName}
+                                                </span>
                                             ) : (
-                                                <span className="text-sm text-muted-foreground">Guest session</span>
+                                                <span className="text-sm text-muted-foreground">
+                                                    Guest session
+                                                </span>
                                             )}
                                         </div>
                                     </div>
@@ -594,34 +947,56 @@ export default function AlumniHomePage() {
                                     <div className="min-w-0 space-y-2">
                                         <Label>Date Key</Label>
                                         <div className="flex h-10 items-center rounded-md border px-3">
-                                            <span className="text-sm">{displayDateKey || "—"}</span>
+                                            <span className="text-sm">
+                                                {displayDateKey || "—"}
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
                             )}
 
                             <div className="flex flex-wrap items-center gap-2">
-                                {selectedDept ? <Badge variant="secondary">Department: {selectedDept.name}</Badge> : null}
+                                {selectedDept ? (
+                                    <Badge variant="secondary">
+                                        Department: {selectedDept.name}
+                                    </Badge>
+                                ) : null}
                                 {ticket ? (
-                                    <Badge variant={statusBadgeVariant(ticket.status) as any}>Ticket: {ticket.status}</Badge>
+                                    <Badge
+                                        variant={
+                                            statusBadgeVariant(ticket.status) as any
+                                        }
+                                    >
+                                        Ticket: {ticket.status}
+                                    </Badge>
                                 ) : (
                                     <Badge variant="outline">Ticket: —</Badge>
                                 )}
                                 {myPreviewPosition === 0 ? (
                                     <Badge>Now being called</Badge>
                                 ) : myPreviewPosition ? (
-                                    <Badge variant="outline">Position in preview: #{myPreviewPosition}</Badge>
+                                    <Badge variant="outline">
+                                        Position in preview: #{myPreviewPosition}
+                                    </Badge>
                                 ) : (
-                                    <Badge variant="outline">Position in preview: —</Badge>
+                                    <Badge variant="outline">
+                                        Position in preview: —
+                                    </Badge>
                                 )}
                             </div>
 
                             {ticket ? (
                                 <div className="rounded-lg border bg-muted p-4 text-sm">
-                                    <div className="font-medium">Abuse prevention</div>
+                                    <div className="font-medium">
+                                        Abuse prevention
+                                    </div>
                                     <div className="mt-1 text-muted-foreground">
-                                        Ticket generation is blocked while you still have an active ticket. Please use{" "}
-                                        <span className="font-medium">My Tickets</span>.
+                                        Ticket generation is blocked while you
+                                        still have an active ticket. Please use{" "}
+                                        <span className="font-medium">
+                                            My Tickets
+                                        </span>
+                                        .
                                     </div>
                                 </div>
                             ) : null}
@@ -636,28 +1011,47 @@ export default function AlumniHomePage() {
                                     Join Queue
                                 </CardTitle>
                                 <CardDescription>
-                                    Start a queue transaction with your current department and reference context.
+                                    Start a queue transaction with your current
+                                    department and reference context.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent className="space-y-4">
                                 {ticket ? (
                                     <>
                                         <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                            You already have an active ticket today. To prevent queue spamming, new ticket generation
-                                            is blocked until your current ticket is completed.
+                                            You already have an active ticket
+                                            today. To prevent queue spamming, new
+                                            ticket generation is blocked until
+                                            your current ticket is completed.
                                         </div>
-                                        <Button asChild variant="secondary" className="w-full">
-                                            <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                        <Button
+                                            asChild
+                                            variant="secondary"
+                                            className="w-full"
+                                        >
+                                            <Link to={myTicketsUrl}>
+                                                Go to My Tickets
+                                            </Link>
                                         </Button>
                                     </>
                                 ) : (
                                     <>
                                         <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                            Use this when you need a new ticket. Selected department and your reference ID are passed
-                                            automatically.
+                                            Use this when you need a new ticket.
+                                            Selected department and your
+                                            reference ID are passed automatically.
                                         </div>
-                                        <Button asChild className="w-full" disabled={!departmentId || !referenceId.trim()}>
-                                            <Link to={joinUrl}>Go to Join Queue</Link>
+                                        <Button
+                                            asChild
+                                            className="w-full"
+                                            disabled={
+                                                !departmentId ||
+                                                !referenceId.trim()
+                                            }
+                                        >
+                                            <Link to={joinUrl}>
+                                                Go to Join Queue
+                                            </Link>
                                         </Button>
                                     </>
                                 )}
@@ -671,7 +1065,8 @@ export default function AlumniHomePage() {
                                     My Tickets
                                 </CardTitle>
                                 <CardDescription>
-                                    Check your active ticket, live queue board preview, and refresh your current status.
+                                    Check your active ticket, live queue board
+                                    preview, and refresh your current status.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent className="space-y-4">
@@ -679,23 +1074,44 @@ export default function AlumniHomePage() {
                                     <div className="rounded-lg border p-4">
                                         <div className="flex items-center justify-between gap-3">
                                             <div>
-                                                <div className="text-sm text-muted-foreground">Queue Number</div>
-                                                <div className="text-3xl font-semibold tracking-tight">#{ticket.queueNumber}</div>
+                                                <div className="text-sm text-muted-foreground">
+                                                    Queue Number
+                                                </div>
+                                                <div className="text-3xl font-semibold tracking-tight">
+                                                    #{ticket.queueNumber}
+                                                </div>
                                             </div>
                                             <div className="flex flex-col items-end gap-2">
-                                                <Badge variant={statusBadgeVariant(ticket.status) as any}>{ticket.status}</Badge>
-                                                <Badge variant="outline">{ticket.dateKey}</Badge>
+                                                <Badge
+                                                    variant={
+                                                        statusBadgeVariant(
+                                                            ticket.status
+                                                        ) as any
+                                                    }
+                                                >
+                                                    {ticket.status}
+                                                </Badge>
+                                                <Badge variant="outline">
+                                                    {ticket.dateKey || "—"}
+                                                </Badge>
                                             </div>
                                         </div>
                                     </div>
                                 ) : (
                                     <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                        No active ticket found for the current context.
+                                        No active ticket found for the current
+                                        context.
                                     </div>
                                 )}
 
-                                <Button asChild variant="secondary" className="w-full">
-                                    <Link to={myTicketsUrl}>Go to My Tickets</Link>
+                                <Button
+                                    asChild
+                                    variant="secondary"
+                                    className="w-full"
+                                >
+                                    <Link to={myTicketsUrl}>
+                                        Go to My Tickets
+                                    </Link>
                                 </Button>
                             </CardContent>
                         </Card>
@@ -709,52 +1125,105 @@ export default function AlumniHomePage() {
                                     Live Queue Snapshot
                                 </CardTitle>
                                 <CardDescription>
-                                    Recharts bar view of now serving, up next, and visible queue count.
+                                    Recharts bar view of now serving, up next,
+                                    and visible queue count.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
                                 {!departmentId ? (
                                     <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                        Select a department to view queue insights.
+                                        Select a department to view queue
+                                        insights.
                                     </div>
                                 ) : loadingDisplay ? (
                                     <Skeleton className="h-80 w-full" />
                                 ) : (
                                     <div className="space-y-4">
                                         <div className="h-80 w-full">
-                                            <ResponsiveContainer width="100%" height="100%">
+                                            <ResponsiveContainer
+                                                width="100%"
+                                                height="100%"
+                                            >
                                                 <RechartsBarChart
                                                     data={liveQueueBars}
-                                                    margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
+                                                    margin={{
+                                                        top: 12,
+                                                        right: 12,
+                                                        left: -12,
+                                                        bottom: 0,
+                                                    }}
                                                 >
-                                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                                                    <CartesianGrid
+                                                        strokeDasharray="3 3"
+                                                        stroke="var(--border)"
+                                                    />
                                                     <XAxis
                                                         dataKey="label"
-                                                        tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
-                                                        axisLine={{ stroke: "var(--border)" }}
-                                                        tickLine={{ stroke: "var(--border)" }}
+                                                        tick={{
+                                                            fill: "var(--muted-foreground)",
+                                                            fontSize: 12,
+                                                        }}
+                                                        axisLine={{
+                                                            stroke: "var(--border)",
+                                                        }}
+                                                        tickLine={{
+                                                            stroke: "var(--border)",
+                                                        }}
                                                     />
                                                     <YAxis
                                                         allowDecimals={false}
-                                                        tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
-                                                        axisLine={{ stroke: "var(--border)" }}
-                                                        tickLine={{ stroke: "var(--border)" }}
+                                                        tick={{
+                                                            fill: "var(--muted-foreground)",
+                                                            fontSize: 12,
+                                                        }}
+                                                        axisLine={{
+                                                            stroke: "var(--border)",
+                                                        }}
+                                                        tickLine={{
+                                                            stroke: "var(--border)",
+                                                        }}
                                                     />
                                                     <Tooltip
-                                                        formatter={(value: number | string | undefined) => [value ?? "—", "Count"]}
+                                                        formatter={(
+                                                            value:
+                                                                | number
+                                                                | string
+                                                                | undefined
+                                                        ) => [
+                                                            value ?? "—",
+                                                            "Count",
+                                                        ]}
                                                         contentStyle={{
-                                                            background: "var(--background)",
+                                                            background:
+                                                                "var(--background)",
                                                             border: "1px solid var(--border)",
-                                                            borderRadius: "0.75rem",
+                                                            borderRadius:
+                                                                "0.75rem",
                                                             color: "var(--foreground)",
                                                         }}
-                                                        labelStyle={{ color: "var(--foreground)" }}
-                                                        cursor={{ fill: "var(--muted)" }}
+                                                        labelStyle={{
+                                                            color: "var(--foreground)",
+                                                        }}
+                                                        cursor={{
+                                                            fill: "var(--muted)",
+                                                        }}
                                                     />
-                                                    <Bar dataKey="count" radius={[8, 8, 0, 0]}>
-                                                        {liveQueueBars.map((entry) => (
-                                                            <Cell key={entry.label} fill={entry.fill} />
-                                                        ))}
+                                                    <Bar
+                                                        dataKey="count"
+                                                        radius={[8, 8, 0, 0]}
+                                                    >
+                                                        {liveQueueBars.map(
+                                                            (entry) => (
+                                                                <Cell
+                                                                    key={
+                                                                        entry.label
+                                                                    }
+                                                                    fill={
+                                                                        entry.fill
+                                                                    }
+                                                                />
+                                                            )
+                                                        )}
                                                     </Bar>
                                                 </RechartsBarChart>
                                             </ResponsiveContainer>
@@ -762,10 +1231,17 @@ export default function AlumniHomePage() {
 
                                         <div className="flex flex-wrap items-center gap-2">
                                             <Badge variant="outline">
-                                                Now Serving: {displayNowServing ? `#${displayNowServing.queueNumber}` : "—"}
+                                                Now Serving:{" "}
+                                                {displayNowServing
+                                                    ? `#${displayNowServing.queueNumber}`
+                                                    : "—"}
                                             </Badge>
-                                            <Badge variant="outline">Up Next: {waitingCount}</Badge>
-                                            <Badge variant="secondary">Visible: {visibleCount}</Badge>
+                                            <Badge variant="outline">
+                                                Up Next: {waitingCount}
+                                            </Badge>
+                                            <Badge variant="secondary">
+                                                Visible: {visibleCount}
+                                            </Badge>
                                         </div>
                                     </div>
                                 )}
@@ -779,39 +1255,62 @@ export default function AlumniHomePage() {
                                     Queue Mix
                                 </CardTitle>
                                 <CardDescription>
-                                    Recharts donut view using your app CSS color tokens from{" "}
-                                    <span className="font-mono">src/index.css</span>.
+                                    Recharts donut view using your app CSS color
+                                    tokens from{" "}
+                                    <span className="font-mono">
+                                        src/index.css
+                                    </span>
+                                    .
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
                                 {!departmentId ? (
                                     <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                        Select a department to view queue distribution.
+                                        Select a department to view queue
+                                        distribution.
                                     </div>
                                 ) : loadingDisplay ? (
                                     <Skeleton className="h-80 w-full" />
                                 ) : !hasQueueMix ? (
                                     <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                        No queue data available yet for this department.
+                                        No queue data available yet for this
+                                        department.
                                     </div>
                                 ) : (
                                     <div className="space-y-4">
                                         <div className="h-80 w-full">
-                                            <ResponsiveContainer width="100%" height="100%">
+                                            <ResponsiveContainer
+                                                width="100%"
+                                                height="100%"
+                                            >
                                                 <RechartsPieChart>
                                                     <Tooltip
-                                                        formatter={(value: number | string | undefined) => [value ?? "—", "Tickets"]}
+                                                        formatter={(
+                                                            value:
+                                                                | number
+                                                                | string
+                                                                | undefined
+                                                        ) => [
+                                                            value ?? "—",
+                                                            "Tickets",
+                                                        ]}
                                                         contentStyle={{
-                                                            background: "var(--background)",
+                                                            background:
+                                                                "var(--background)",
                                                             border: "1px solid var(--border)",
-                                                            borderRadius: "0.75rem",
+                                                            borderRadius:
+                                                                "0.75rem",
                                                             color: "var(--foreground)",
                                                         }}
-                                                        labelStyle={{ color: "var(--foreground)" }}
+                                                        labelStyle={{
+                                                            color: "var(--foreground)",
+                                                        }}
                                                     />
                                                     <Legend
                                                         verticalAlign="bottom"
-                                                        wrapperStyle={{ color: "var(--muted-foreground)" }}
+                                                        wrapperStyle={{
+                                                            color: "var(--muted-foreground)",
+                                                        }}
                                                     />
                                                     <Pie
                                                         data={queueMixData}
@@ -821,24 +1320,40 @@ export default function AlumniHomePage() {
                                                         outerRadius={108}
                                                         paddingAngle={3}
                                                     >
-                                                        {queueMixData.map((entry) => (
-                                                            <Cell key={entry.name} fill={entry.fill} />
-                                                        ))}
+                                                        {queueMixData.map(
+                                                            (entry) => (
+                                                                <Cell
+                                                                    key={
+                                                                        entry.name
+                                                                    }
+                                                                    fill={
+                                                                        entry.fill
+                                                                    }
+                                                                />
+                                                            )
+                                                        )}
                                                     </Pie>
                                                 </RechartsPieChart>
                                             </ResponsiveContainer>
                                         </div>
 
                                         {myPreviewPosition === 0 ? (
-                                            <div className="rounded-lg border p-4 text-sm">Your ticket is currently being called.</div>
+                                            <div className="rounded-lg border p-4 text-sm">
+                                                Your ticket is currently being
+                                                called.
+                                            </div>
                                         ) : myPreviewPosition ? (
                                             <div className="rounded-lg border p-4 text-sm">
                                                 Your ticket appears at position{" "}
-                                                <span className="font-semibold">#{myPreviewPosition}</span> in the visible preview queue.
+                                                <span className="font-semibold">
+                                                    #{myPreviewPosition}
+                                                </span>{" "}
+                                                in the visible preview queue.
                                             </div>
                                         ) : (
                                             <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                Your ticket is not visible in the current board preview list.
+                                                Your ticket is not visible in the
+                                                current board preview list.
                                             </div>
                                         )}
                                     </div>
@@ -850,13 +1365,17 @@ export default function AlumniHomePage() {
                     <Card className="min-w-0">
                         <CardHeader>
                             <CardTitle>Queue Board Preview</CardTitle>
-                            <CardDescription>Quick glance from home: now serving and up next tickets.</CardDescription>
+                            <CardDescription>
+                                Quick glance from home: now serving and up next
+                                tickets.
+                            </CardDescription>
                         </CardHeader>
 
                         <CardContent>
                             {!departmentId ? (
                                 <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                                    Select a department to preview the queue board.
+                                    Select a department to preview the queue
+                                    board.
                                 </div>
                             ) : loadingDisplay ? (
                                 <div className="space-y-3">
@@ -868,15 +1387,26 @@ export default function AlumniHomePage() {
                                     <div className="lg:col-span-7">
                                         <div className="rounded-2xl border bg-muted p-6">
                                             <div className="flex items-center justify-between">
-                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">Now serving</div>
-                                                {displayNowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
+                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">
+                                                    Now serving
+                                                </div>
+                                                {displayNowServing ? (
+                                                    <Badge>CALLED</Badge>
+                                                ) : (
+                                                    <Badge variant="secondary">
+                                                        —
+                                                    </Badge>
+                                                )}
                                             </div>
 
                                             <div className="mt-4">
                                                 {displayNowServing ? (
                                                     <>
                                                         <div className="text-[clamp(3rem,10vw,7rem)] font-semibold leading-none tracking-tight">
-                                                            #{displayNowServing.queueNumber}
+                                                            #
+                                                            {
+                                                                displayNowServing.queueNumber
+                                                            }
                                                         </div>
                                                         <div className="mt-3 text-sm text-muted-foreground">
                                                             Window:{" "}
@@ -885,12 +1415,16 @@ export default function AlumniHomePage() {
                                                                 : "—"}
                                                         </div>
                                                         <div className="text-sm text-muted-foreground">
-                                                            Called at: {fmtTime(displayNowServing.calledAt)}
+                                                            Called at:{" "}
+                                                            {fmtTime(
+                                                                displayNowServing.calledAt
+                                                            )}
                                                         </div>
                                                     </>
                                                 ) : (
                                                     <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
-                                                        No ticket is currently being called.
+                                                        No ticket is currently
+                                                        being called.
                                                     </div>
                                                 )}
                                             </div>
@@ -900,22 +1434,46 @@ export default function AlumniHomePage() {
                                     <div className="lg:col-span-5">
                                         <div className="rounded-2xl border p-6">
                                             <div className="mb-4 flex items-center justify-between">
-                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">Up next</div>
-                                                <Badge variant="secondary">{displayUpNext.length}</Badge>
+                                                <div className="text-sm uppercase tracking-widest text-muted-foreground">
+                                                    Up next
+                                                </div>
+                                                <Badge variant="secondary">
+                                                    {displayUpNext.length}
+                                                </Badge>
                                             </div>
 
                                             {displayUpNext.length === 0 ? (
-                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">No waiting tickets.</div>
+                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                                    No waiting tickets.
+                                                </div>
                                             ) : (
                                                 <div className="grid gap-2">
-                                                    {displayUpNext.slice(0, 6).map((item, idx) => (
-                                                        <div key={item.id} className="flex items-center justify-between rounded-xl border p-3">
-                                                            <div className="text-xl font-semibold">#{item.queueNumber}</div>
-                                                            <Badge variant={idx === 0 ? "default" : "secondary"}>
-                                                                {idx === 0 ? "Next" : "Waiting"}
-                                                            </Badge>
-                                                        </div>
-                                                    ))}
+                                                    {displayUpNext
+                                                        .slice(0, 6)
+                                                        .map((item, idx) => (
+                                                            <div
+                                                                key={item.id}
+                                                                className="flex items-center justify-between rounded-xl border p-3"
+                                                            >
+                                                                <div className="text-xl font-semibold">
+                                                                    #
+                                                                    {
+                                                                        item.queueNumber
+                                                                    }
+                                                                </div>
+                                                                <Badge
+                                                                    variant={
+                                                                        idx === 0
+                                                                            ? "default"
+                                                                            : "secondary"
+                                                                    }
+                                                                >
+                                                                    {idx === 0
+                                                                        ? "Next"
+                                                                        : "Waiting"}
+                                                                </Badge>
+                                                            </div>
+                                                        ))}
                                                 </div>
                                             )}
                                         </div>
@@ -928,20 +1486,38 @@ export default function AlumniHomePage() {
                             <div className="grid gap-2 sm:grid-cols-2">
                                 {ticket ? (
                                     <>
-                                        <Button variant="outline" className="w-full" disabled>
+                                        <Button
+                                            variant="outline"
+                                            className="w-full"
+                                            disabled
+                                        >
                                             Ticket already active
                                         </Button>
-                                        <Button asChild variant="secondary" className="w-full">
-                                            <Link to={myTicketsUrl}>Open My Tickets</Link>
+                                        <Button
+                                            asChild
+                                            variant="secondary"
+                                            className="w-full"
+                                        >
+                                            <Link to={myTicketsUrl}>
+                                                Open My Tickets
+                                            </Link>
                                         </Button>
                                     </>
                                 ) : (
                                     <>
                                         <Button asChild className="w-full">
-                                            <Link to={joinUrl}>Open Join Queue</Link>
+                                            <Link to={joinUrl}>
+                                                Open Join Queue
+                                            </Link>
                                         </Button>
-                                        <Button asChild variant="secondary" className="w-full">
-                                            <Link to={myTicketsUrl}>Open My Tickets</Link>
+                                        <Button
+                                            asChild
+                                            variant="secondary"
+                                            className="w-full"
+                                        >
+                                            <Link to={myTicketsUrl}>
+                                                Open My Tickets
+                                            </Link>
                                         </Button>
                                     </>
                                 )}
