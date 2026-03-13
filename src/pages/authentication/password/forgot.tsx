@@ -2,8 +2,8 @@ import * as React from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
-import { authApi } from "@/api/auth"
-import { ApiError } from "@/lib/http"
+import { API_PATHS } from "@/api/api"
+import { api, ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -38,18 +38,11 @@ export default function ForgotPasswordPage() {
 
         setIsSubmitting(true)
         try {
-            // ✅ Check first if email exists (active account)
-            const existsRes = await authApi.checkEmailExists(cleanEmail)
-
-            if (!existsRes.exists) {
-                toast.error(
-                    "Email not found. Please let the admin create your account if you are a part of a staff in a particular department that handles queue."
-                )
-                return
-            }
-
-            // ✅ If exists, proceed to send reset token/email
-            await authApi.forgotPassword(cleanEmail)
+            await api.postData<unknown>(
+                API_PATHS.auth.forgotPassword,
+                { email: cleanEmail },
+                { auth: false }
+            )
 
             toast.success("Reset link has been sent to your email.")
             navigate("/login", { replace: true })
@@ -58,8 +51,8 @@ export default function ForgotPasswordPage() {
                 err instanceof ApiError
                     ? err.message
                     : err instanceof Error
-                        ? err.message
-                        : "Request failed"
+                      ? err.message
+                      : "Request failed"
             toast.error(message)
         } finally {
             setIsSubmitting(false)
@@ -68,7 +61,6 @@ export default function ForgotPasswordPage() {
 
     return (
         <div className="grid min-h-svh lg:grid-cols-2">
-            {/* Left: form */}
             <div className="flex flex-col gap-6 p-6 md:p-10">
                 <div className="flex items-center justify-center md:justify-start">
                     <Link to="/" className="flex items-center gap-3">
@@ -77,7 +69,9 @@ export default function ForgotPasswordPage() {
                         </div>
                         <div className="leading-tight">
                             <div className="text-sm font-semibold">QueuePass</div>
-                            <div className="text-muted-foreground text-xs">Ticketless QR Queue</div>
+                            <div className="text-muted-foreground text-xs">
+                                Ticketless QR Queue
+                            </div>
                         </div>
                     </Link>
                 </div>
@@ -88,7 +82,8 @@ export default function ForgotPasswordPage() {
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-2xl">Forgot password</CardTitle>
                                 <CardDescription>
-                                    Enter your registered email and we’ll send you a password reset link.
+                                    Enter your registered email and we’ll send you a
+                                    password reset link.
                                 </CardDescription>
                             </CardHeader>
 
@@ -108,7 +103,11 @@ export default function ForgotPasswordPage() {
                                         />
                                     </div>
 
-                                    <Button className="w-full" type="submit" disabled={isSubmitting}>
+                                    <Button
+                                        className="w-full"
+                                        type="submit"
+                                        disabled={isSubmitting}
+                                    >
                                         {isSubmitting ? "Sending..." : "Send reset link"}
                                     </Button>
                                 </form>
@@ -126,7 +125,8 @@ export default function ForgotPasswordPage() {
                                 </p>
 
                                 <p className="text-muted-foreground text-balance text-center text-xs">
-                                    If you don’t have an account yet, please contact your admin.
+                                    If you don’t have an account yet, please contact your
+                                    admin.
                                 </p>
                             </CardFooter>
                         </Card>
@@ -134,16 +134,18 @@ export default function ForgotPasswordPage() {
                 </div>
             </div>
 
-            {/* Right: illustration */}
             <div className="bg-muted relative hidden lg:block">
                 <div className="absolute inset-0 bg-linear-to-br from-primary/15 via-background to-muted" />
                 <div className="relative flex h-svh flex-col items-center justify-center p-10">
                     <div className="w-full max-w-lg">
                         <Card className="border-border/60 bg-background/70 overflow-hidden backdrop-blur">
                             <CardHeader className="space-y-1">
-                                <CardTitle className="text-xl">Secure account access</CardTitle>
+                                <CardTitle className="text-xl">
+                                    Secure account access
+                                </CardTitle>
                                 <CardDescription>
-                                    Reset your password safely and continue managing queues without interruption.
+                                    Reset your password safely and continue managing queues
+                                    without interruption.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>

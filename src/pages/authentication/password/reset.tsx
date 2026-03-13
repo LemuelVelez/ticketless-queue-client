@@ -3,8 +3,8 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Eye, EyeOff } from "lucide-react"
 import { toast } from "sonner"
 
-import { authApi } from "@/api/auth"
-import { ApiError } from "@/lib/http"
+import { API_PATHS } from "@/api/api"
+import { api, ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -28,9 +28,6 @@ export default function ResetPasswordPage() {
     const params = useParams<Params>()
     const [searchParams] = useSearchParams()
 
-    // Supports:
-    // /reset-password/:token
-    // /reset-password?token=...
     const token = (params.token ?? searchParams.get("token") ?? "").trim()
 
     const [password, setPassword] = React.useState("")
@@ -65,7 +62,16 @@ export default function ResetPasswordPage() {
 
         setIsSubmitting(true)
         try {
-            await authApi.resetPassword(token, password)
+            await api.postData<unknown>(
+                API_PATHS.auth.resetPassword,
+                {
+                    token,
+                    password,
+                    newPassword: password,
+                },
+                { auth: false }
+            )
+
             toast.success("Password updated successfully. You can now sign in.")
             navigate("/login", { replace: true })
         } catch (err) {
@@ -73,8 +79,8 @@ export default function ResetPasswordPage() {
                 err instanceof ApiError
                     ? err.message
                     : err instanceof Error
-                        ? err.message
-                        : "Reset failed"
+                      ? err.message
+                      : "Reset failed"
             toast.error(message)
         } finally {
             setIsSubmitting(false)
@@ -83,7 +89,6 @@ export default function ResetPasswordPage() {
 
     return (
         <div className="grid min-h-svh lg:grid-cols-2">
-            {/* Left: form */}
             <div className="flex flex-col gap-6 p-6 md:p-10">
                 <div className="flex items-center justify-center md:justify-start">
                     <Link to="/" className="flex items-center gap-3">
@@ -92,7 +97,9 @@ export default function ResetPasswordPage() {
                         </div>
                         <div className="leading-tight">
                             <div className="text-sm font-semibold">QueuePass</div>
-                            <div className="text-muted-foreground text-xs">Ticketless QR Queue</div>
+                            <div className="text-muted-foreground text-xs">
+                                Ticketless QR Queue
+                            </div>
                         </div>
                     </Link>
                 </div>
@@ -102,7 +109,9 @@ export default function ResetPasswordPage() {
                         <Card>
                             <CardHeader className="space-y-1">
                                 <CardTitle className="text-2xl">Reset password</CardTitle>
-                                <CardDescription>Set a new password for your account.</CardDescription>
+                                <CardDescription>
+                                    Set a new password for your account.
+                                </CardDescription>
                             </CardHeader>
 
                             <CardContent>
@@ -112,7 +121,9 @@ export default function ResetPasswordPage() {
                                             Your reset link is missing or invalid.
                                         </p>
                                         <Button asChild className="w-full">
-                                            <Link to="/forgot-password">Request a new reset link</Link>
+                                            <Link to="/forgot-password">
+                                                Request a new reset link
+                                            </Link>
                                         </Button>
                                     </div>
                                 ) : (
@@ -128,25 +139,41 @@ export default function ResetPasswordPage() {
                                                     disabled={isSubmitting}
                                                     className="pr-10"
                                                     value={password}
-                                                    onChange={(e) => setPassword(e.target.value)}
+                                                    onChange={(e) =>
+                                                        setPassword(e.target.value)
+                                                    }
                                                 />
                                                 <Button
                                                     type="button"
                                                     variant="ghost"
                                                     size="icon"
                                                     disabled={isSubmitting}
-                                                    onClick={() => setShowPassword((s) => !s)}
-                                                    aria-label={showPassword ? "Hide password" : "Show password"}
+                                                    onClick={() =>
+                                                        setShowPassword((s) => !s)
+                                                    }
+                                                    aria-label={
+                                                        showPassword
+                                                            ? "Hide password"
+                                                            : "Show password"
+                                                    }
                                                     className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
                                                 >
-                                                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                                    {showPassword ? (
+                                                        <EyeOff className="h-4 w-4" />
+                                                    ) : (
+                                                        <Eye className="h-4 w-4" />
+                                                    )}
                                                 </Button>
                                             </div>
-                                            <p className="text-muted-foreground text-xs">Use at least 8 characters.</p>
+                                            <p className="text-muted-foreground text-xs">
+                                                Use at least 8 characters.
+                                            </p>
                                         </div>
 
                                         <div className="grid gap-2">
-                                            <Label htmlFor="confirmPassword">Confirm new password</Label>
+                                            <Label htmlFor="confirmPassword">
+                                                Confirm new password
+                                            </Label>
                                             <div className="relative">
                                                 <Input
                                                     id="confirmPassword"
@@ -156,24 +183,42 @@ export default function ResetPasswordPage() {
                                                     disabled={isSubmitting}
                                                     className="pr-10"
                                                     value={confirmPassword}
-                                                    onChange={(e) => setConfirmPassword(e.target.value)}
+                                                    onChange={(e) =>
+                                                        setConfirmPassword(e.target.value)
+                                                    }
                                                 />
                                                 <Button
                                                     type="button"
                                                     variant="ghost"
                                                     size="icon"
                                                     disabled={isSubmitting}
-                                                    onClick={() => setShowConfirm((s) => !s)}
-                                                    aria-label={showConfirm ? "Hide password" : "Show password"}
+                                                    onClick={() =>
+                                                        setShowConfirm((s) => !s)
+                                                    }
+                                                    aria-label={
+                                                        showConfirm
+                                                            ? "Hide password"
+                                                            : "Show password"
+                                                    }
                                                     className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
                                                 >
-                                                    {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                                    {showConfirm ? (
+                                                        <EyeOff className="h-4 w-4" />
+                                                    ) : (
+                                                        <Eye className="h-4 w-4" />
+                                                    )}
                                                 </Button>
                                             </div>
                                         </div>
 
-                                        <Button className="w-full" type="submit" disabled={isSubmitting}>
-                                            {isSubmitting ? "Updating..." : "Update password"}
+                                        <Button
+                                            className="w-full"
+                                            type="submit"
+                                            disabled={isSubmitting}
+                                        >
+                                            {isSubmitting
+                                                ? "Updating..."
+                                                : "Update password"}
                                         </Button>
                                     </form>
                                 )}
@@ -181,7 +226,10 @@ export default function ResetPasswordPage() {
 
                             <CardFooter className="flex flex-col gap-2">
                                 <p className="text-muted-foreground text-center text-sm">
-                                    <Link to="/login" className="text-foreground underline-offset-4 hover:underline">
+                                    <Link
+                                        to="/login"
+                                        className="text-foreground underline-offset-4 hover:underline"
+                                    >
                                         Back to sign in
                                     </Link>
                                 </p>
@@ -191,16 +239,18 @@ export default function ResetPasswordPage() {
                 </div>
             </div>
 
-            {/* Right: illustration */}
             <div className="bg-muted relative hidden lg:block">
                 <div className="absolute inset-0 bg-linear-to-br from-primary/15 via-background to-muted" />
                 <div className="relative flex h-svh flex-col items-center justify-center p-10">
                     <div className="w-full max-w-lg">
                         <Card className="border-border/60 bg-background/70 overflow-hidden backdrop-blur">
                             <CardHeader className="space-y-1">
-                                <CardTitle className="text-xl">Get back in quickly</CardTitle>
+                                <CardTitle className="text-xl">
+                                    Get back in quickly
+                                </CardTitle>
                                 <CardDescription>
-                                    Choose a strong password to keep your QueuePass account protected.
+                                    Choose a strong password to keep your QueuePass
+                                    account protected.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
