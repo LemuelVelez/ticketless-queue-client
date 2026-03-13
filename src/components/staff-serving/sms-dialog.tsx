@@ -1,6 +1,6 @@
 import { AlertTriangle, Send } from "lucide-react"
 
-import type { Ticket as TicketType } from "@/api/staff"
+import type { Ticket as TicketType } from "./types"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -13,7 +13,13 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -74,10 +80,19 @@ export function StaffServingSmsDialog({
                         {current ? (
                             <>
                                 {" "}
-                                Ticket #{current.queueNumber} • {currentParticipant.name}
-                                {currentPurpose !== "—" ? ` • ${currentPurpose}` : ""}
-                                {currentParticipant.isStudent ? ` • ${currentParticipant.studentId || "—"}` : ""}
-                                {currentParticipant.mobile ? ` • ${currentParticipant.mobile}` : ""}
+                                Ticket #{current.queueNumber} •{" "}
+                                {currentParticipant.name}
+                                {currentPurpose !== "—"
+                                    ? ` • ${currentPurpose}`
+                                    : ""}
+                                {currentParticipant.isStudent
+                                    ? ` • ${
+                                          currentParticipant.studentId || "—"
+                                      }`
+                                    : ""}
+                                {currentParticipant.mobile
+                                    ? ` • ${currentParticipant.mobile}`
+                                    : ""}
                             </>
                         ) : (
                             " No active ticket selected."
@@ -89,20 +104,30 @@ export function StaffServingSmsDialog({
                     <div className="flex items-start gap-2 rounded-md border bg-muted p-3 text-sm text-muted-foreground">
                         <AlertTriangle className="mt-0.5 h-4 w-4 text-foreground" />
                         <div className="min-w-0">
-                            <div className="font-medium text-foreground">SMS temporarily unavailable</div>
+                            <div className="font-medium text-foreground">
+                                SMS temporarily unavailable
+                            </div>
                             <div className="mt-1">{SMS_UNAVAILABLE_NOTICE}</div>
                         </div>
                     </div>
 
                     <div className="grid gap-2">
                         <Label htmlFor="smsSenderSelect">Sender name</Label>
-                        <Select value={smsSenderOption} onValueChange={(v) => setSmsSenderOption(normalizeSmsSenderOption(v))}>
+                        <Select
+                            value={smsSenderOption}
+                            onValueChange={(v) =>
+                                setSmsSenderOption(normalizeSmsSenderOption(v))
+                            }
+                        >
                             <SelectTrigger id="smsSenderSelect" className="w-full">
                                 <SelectValue placeholder="Select sender" />
                             </SelectTrigger>
                             <SelectContent>
                                 {SMS_SENDER_OPTIONS.map((opt) => (
-                                    <SelectItem key={opt.value} value={opt.value}>
+                                    <SelectItem
+                                        key={opt.value}
+                                        value={opt.value}
+                                    >
                                         {opt.label}
                                     </SelectItem>
                                 ))}
@@ -112,7 +137,9 @@ export function StaffServingSmsDialog({
                         {smsSenderOption === "custom" ? (
                             <Input
                                 value={smsSenderCustom}
-                                onChange={(e) => setSmsSenderCustom(e.target.value)}
+                                onChange={(e) =>
+                                    setSmsSenderCustom(e.target.value)
+                                }
                                 placeholder="Type custom sender name..."
                             />
                         ) : null}
@@ -133,7 +160,9 @@ export function StaffServingSmsDialog({
                         <Switch
                             id="smsUseDefaultMessage"
                             checked={smsUseDefaultMessage}
-                            onCheckedChange={(v) => setSmsUseDefaultMessage(Boolean(v))}
+                            onCheckedChange={(v) =>
+                                setSmsUseDefaultMessage(Boolean(v))
+                            }
                             disabled={!SMS_SENDING_AVAILABLE}
                         />
                     </div>
@@ -141,16 +170,23 @@ export function StaffServingSmsDialog({
                     {smsUseDefaultMessage ? (
                         <div className="rounded-md border bg-muted p-3 text-sm text-muted-foreground">
                             {current
-                                ? defaultSmsCalledMessage(current.queueNumber, windowNumber)
+                                ? defaultSmsCalledMessage(
+                                      current.queueNumber ?? 0,
+                                      windowNumber
+                                  )
                                 : "Queue update message preview will appear when an active ticket is selected."}
                         </div>
                     ) : (
                         <div className="grid gap-2">
-                            <Label htmlFor="smsCustomMessage">Custom message</Label>
+                            <Label htmlFor="smsCustomMessage">
+                                Custom message
+                            </Label>
                             <Textarea
                                 id="smsCustomMessage"
                                 value={smsCustomMessage}
-                                onChange={(e) => setSmsCustomMessage(e.target.value)}
+                                onChange={(e) =>
+                                    setSmsCustomMessage(e.target.value)
+                                }
                                 placeholder="Type your custom SMS message..."
                                 rows={4}
                                 disabled={!SMS_SENDING_AVAILABLE}
@@ -160,13 +196,20 @@ export function StaffServingSmsDialog({
                 </div>
 
                 <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={smsBusy}>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => onOpenChange(false)}
+                        disabled={smsBusy}
+                    >
                         Cancel
                     </Button>
                     <Button
                         type="button"
                         onClick={() => void onSend()}
-                        disabled={!SMS_SENDING_AVAILABLE || smsBusy || !current?._id}
+                        disabled={
+                            !SMS_SENDING_AVAILABLE || smsBusy || !current?._id
+                        }
                         className="gap-2"
                     >
                         <Send className="h-4 w-4" />

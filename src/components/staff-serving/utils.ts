@@ -1,9 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { pickTransactionPurpose } from "@/lib/http"
-import {
-    type DepartmentAssignment,
-    type Ticket as TicketType,
-} from "@/api/staff"
+import type { DepartmentAssignment, Ticket as TicketType } from "./types"
 
 export function fmtTime(v?: string | null) {
     if (!v) return "—"
@@ -27,7 +24,11 @@ export function parsePanelCount(search: string, fallback = 3) {
 }
 
 export function isSpeechSupported() {
-    return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
+    return (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        "SpeechSynthesisUtterance" in window
+    )
 }
 
 export function getTransactionPurposeText(anyObj?: any): string {
@@ -97,7 +98,12 @@ function firstSegment(line?: string | null) {
     return String(seg || "").trim()
 }
 
-function buildParticipantDisplay(params: { name: string; isStudent: boolean; studentId?: string | null; mobile?: string | null }) {
+function buildParticipantDisplay(params: {
+    name: string
+    isStudent: boolean
+    studentId?: string | null
+    mobile?: string | null
+}) {
     const name = String(params.name || "").trim()
     const sid = String(params.studentId || "").trim()
     const mobile = String(params.mobile || "").trim()
@@ -110,23 +116,38 @@ function buildParticipantDisplay(params: { name: string; isStudent: boolean; stu
     return parts.join(" • ")
 }
 
-export function getParticipantDetails(source?: ParticipantLike | null): ParticipantDetails {
-    const type = String(source?.participantType ?? "").trim().toUpperCase()
+export function getParticipantDetails(
+    source?: ParticipantLike | null
+): ParticipantDetails {
+    const type = String(source?.participantType ?? "")
+        .trim()
+        .toUpperCase()
     const isStudent = type === "STUDENT"
 
-    const displayRaw = String(source?.participantDisplay ?? "").trim() || String(source?.participantLabel ?? "").trim()
+    const displayRaw =
+        String(source?.participantDisplay ?? "").trim() ||
+        String(source?.participantLabel ?? "").trim()
 
-    let nameRaw = String(source?.participantFullName ?? "").trim() || firstSegment(displayRaw)
+    let nameRaw =
+        String(source?.participantFullName ?? "").trim() ||
+        firstSegment(displayRaw)
 
     if (looksLikePhoneNumber(nameRaw)) nameRaw = ""
 
     const legacyIdentifier = String(source?.studentId ?? "").trim()
 
-    const legacyStudentId = legacyIdentifier && !looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : ""
-    const legacyPhone = legacyIdentifier && looksLikePhoneNumber(legacyIdentifier) ? legacyIdentifier : ""
+    const legacyStudentId =
+        legacyIdentifier && !looksLikePhoneNumber(legacyIdentifier)
+            ? legacyIdentifier
+            : ""
+    const legacyPhone =
+        legacyIdentifier && looksLikePhoneNumber(legacyIdentifier)
+            ? legacyIdentifier
+            : ""
 
     const studentId = isStudent
-        ? String(source?.participantStudentId ?? "").trim() || (legacyStudentId ? legacyStudentId : "")
+        ? String(source?.participantStudentId ?? "").trim() ||
+          (legacyStudentId ? legacyStudentId : "")
         : ""
 
     const mobile =
@@ -134,9 +155,20 @@ export function getParticipantDetails(source?: ParticipantLike | null): Particip
         String(source?.phone ?? "").trim() ||
         (legacyPhone ? legacyPhone : "")
 
-    const name = nameRaw || (isStudent && studentId ? studentId : "") || (legacyStudentId ? legacyStudentId : "") || "Participant"
+    const name =
+        nameRaw ||
+        (isStudent && studentId ? studentId : "") ||
+        (legacyStudentId ? legacyStudentId : "") ||
+        "Participant"
 
-    const display = displayRaw || buildParticipantDisplay({ name, isStudent, studentId: studentId || null, mobile: mobile || null })
+    const display =
+        displayRaw ||
+        buildParticipantDisplay({
+            name,
+            isStudent,
+            studentId: studentId || null,
+            mobile: mobile || null,
+        })
 
     return {
         name,
@@ -253,7 +285,13 @@ const MAN_VOICE_HINTS = [
     "william",
 ]
 
-const EN_US_HINTS = ["en-us", "united states", "us english", "american", "english (united states)"]
+const EN_US_HINTS = [
+    "en-us",
+    "united states",
+    "us english",
+    "american",
+    "english (united states)",
+]
 
 export function mapBoardWindowToTicketLike(row: {
     id: string
@@ -273,7 +311,9 @@ export function mapBoardWindowToTicketLike(row: {
         transactionPurpose: row.transactionPurpose ?? null,
         transactionLabel: row.transactionLabel ?? undefined,
         transactionLabels: row.transactionLabels ?? undefined,
-        purpose: row.transactionPurpose ? String(row.transactionPurpose).trim() : undefined,
+        purpose: row.transactionPurpose
+            ? String(row.transactionPurpose).trim()
+            : undefined,
     } as TicketType
 }
 
@@ -298,10 +338,13 @@ function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
     const map = new Map<string, SpeechSynthesisVoice>()
 
     for (const v of list) {
-        const key = String(v.voiceURI || "").trim() || `${v.name}-${v.lang}`
+        const key =
+            String(v.voiceURI || "").trim() || `${v.name}-${v.lang}`
         if (!key) continue
 
-        const lang = normalizeLangTag(v.lang || "").trim().toLowerCase()
+        const lang = normalizeLangTag(v.lang || "")
+            .trim()
+            .toLowerCase()
         if (!lang.startsWith("en")) continue
 
         if (!map.has(key)) map.set(key, v)
@@ -322,7 +365,9 @@ function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
         const bLocal = (b as any)?.localService ? 0 : 1
         if (aLocal !== bLocal) return aLocal - bLocal
 
-        const langCmp = String(a.lang || "").localeCompare(String(b.lang || ""))
+        const langCmp = String(a.lang || "").localeCompare(
+            String(b.lang || "")
+        )
         if (langCmp !== 0) return langCmp
         return String(a.name || "").localeCompare(String(b.name || ""))
     })
@@ -330,20 +375,30 @@ function normalizeEnglishVoices(list: SpeechSynthesisVoice[]) {
 
 function isLikelyWomanVoice(v: SpeechSynthesisVoice) {
     const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
-    return containsAnyHint(blob, WOMAN_VOICE_HINTS) || /(?:^|[-_ ])f(?:$|[-_ 0-9])/i.test(blob)
+    return (
+        containsAnyHint(blob, WOMAN_VOICE_HINTS) ||
+        /(?:^|[-_ ])f(?:$|[-_ 0-9])/i.test(blob)
+    )
 }
 
 function isLikelyManVoice(v: SpeechSynthesisVoice) {
     const blob = `${v.name || ""} ${v.voiceURI || ""}`.toLowerCase()
-    return containsAnyHint(blob, MAN_VOICE_HINTS) || /(?:^|[-_ ])m(?:$|[-_ 0-9])/i.test(blob)
+    return (
+        containsAnyHint(blob, MAN_VOICE_HINTS) ||
+        /(?:^|[-_ ])m(?:$|[-_ 0-9])/i.test(blob)
+    )
 }
 
-export function resolveGenderedEnglishVoices(list: SpeechSynthesisVoice[]): ResolvedEnglishVoices {
+export function resolveGenderedEnglishVoices(
+    list: SpeechSynthesisVoice[]
+): ResolvedEnglishVoices {
     const english = normalizeEnglishVoices(list)
     if (!english.length) return { english: [] }
 
     const woman = english.find((v) => isLikelyWomanVoice(v))
-    const man = english.find((v) => isLikelyManVoice(v) && v.voiceURI !== woman?.voiceURI)
+    const man = english.find(
+        (v) => isLikelyManVoice(v) && v.voiceURI !== woman?.voiceURI
+    )
 
     const fallbackForWoman = english.find((v) => v.voiceURI !== man?.voiceURI)
     const fallbackForMan = english.find((v) => v.voiceURI !== woman?.voiceURI)
@@ -373,7 +428,9 @@ export function formatVoiceLabel(v?: SpeechSynthesisVoice) {
     return `${v.name} (${v.lang})`
 }
 
-export function uniqueDepartmentAssignments(list?: DepartmentAssignment[] | null): DepartmentAssignment[] {
+export function uniqueDepartmentAssignments(
+    list?: DepartmentAssignment[] | null
+): DepartmentAssignment[] {
     if (!Array.isArray(list)) return []
 
     const seen = new Set<string>()
@@ -387,8 +444,12 @@ export function uniqueDepartmentAssignments(list?: DepartmentAssignment[] | null
         out.push({
             id,
             name: typeof item?.name === "string" ? item.name : undefined,
-            code: typeof item?.code === "string" ? item.code : null,
-            transactionManager: typeof item?.transactionManager === "string" ? item.transactionManager : null,
+            code:
+                typeof item?.code === "string" ? item.code : null,
+            transactionManager:
+                typeof item?.transactionManager === "string"
+                    ? item.transactionManager
+                    : null,
             enabled: item?.enabled !== false,
         })
     }
@@ -404,8 +465,12 @@ export function departmentLabel(dep?: Partial<DepartmentAssignment> | null) {
     return name || code || "—"
 }
 
-export function defaultSmsCalledMessage(queueNumber: number, windowNumber?: number) {
-    const windowText = typeof windowNumber === "number" ? ` at Window ${windowNumber}` : ""
+export function defaultSmsCalledMessage(
+    queueNumber: number,
+    windowNumber?: number
+) {
+    const windowText =
+        typeof windowNumber === "number" ? ` at Window ${windowNumber}` : ""
     return `Queue update: Your ticket #${queueNumber} is now being served${windowText}.`
 }
 
@@ -424,7 +489,10 @@ export function normalizeTtsText(text: string) {
     return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`
 }
 
-export function buildNowServingAnnouncement(queueNumber: number, windowNumber?: number) {
+export function buildNowServingAnnouncement(
+    queueNumber: number,
+    windowNumber?: number
+) {
     const n = Number(queueNumber)
     const w = typeof windowNumber === "number" ? Number(windowNumber) : NaN
 
@@ -437,10 +505,25 @@ export function buildNowServingAnnouncement(queueNumber: number, windowNumber?: 
     return `Now serving... ticket number ${n}.`
 }
 
-export type SmsSenderOption = "default" | "QUEUE" | "JRMSU" | "REGISTRAR" | "CASHIER" | "GUIDANCE" | "custom"
+export type SmsSenderOption =
+    | "default"
+    | "QUEUE"
+    | "JRMSU"
+    | "REGISTRAR"
+    | "CASHIER"
+    | "GUIDANCE"
+    | "custom"
 
-export const SMS_SENDER_OPTIONS: Array<{ value: SmsSenderOption; label: string; hint?: string }> = [
-    { value: "default", label: "Default (server)", hint: "Use backend default sender name (recommended)." },
+export const SMS_SENDER_OPTIONS: Array<{
+    value: SmsSenderOption
+    label: string
+    hint?: string
+}> = [
+    {
+        value: "default",
+        label: "Default (server)",
+        hint: "Use backend default sender name (recommended).",
+    },
     { value: "QUEUE", label: "QUEUE" },
     { value: "JRMSU", label: "JRMSU" },
     { value: "REGISTRAR", label: "REGISTRAR" },
@@ -451,8 +534,18 @@ export const SMS_SENDER_OPTIONS: Array<{ value: SmsSenderOption; label: string; 
 
 export function normalizeSmsSenderOption(v: unknown): SmsSenderOption {
     const s = String(v ?? "").trim()
-    const allowed = new Set<SmsSenderOption>(["default", "QUEUE", "JRMSU", "REGISTRAR", "CASHIER", "GUIDANCE", "custom"])
-    return allowed.has(s as SmsSenderOption) ? (s as SmsSenderOption) : "default"
+    const allowed = new Set<SmsSenderOption>([
+        "default",
+        "QUEUE",
+        "JRMSU",
+        "REGISTRAR",
+        "CASHIER",
+        "GUIDANCE",
+        "custom",
+    ])
+    return allowed.has(s as SmsSenderOption)
+        ? (s as SmsSenderOption)
+        : "default"
 }
 
 export function formatStatusSummary(summary?: Record<string, number>) {
