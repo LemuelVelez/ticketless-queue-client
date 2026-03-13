@@ -7,14 +7,15 @@ import { Building2, ClipboardList } from "lucide-react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
+import type {
+    Department,
+    ServiceWindow,
+    TransactionPurpose,
+    TransactionScope,
+} from "@/components/admin/departments/types"
 
-import {
-    adminApi,
-    type Department,
-    type ServiceWindow,
-    type TransactionPurpose,
-    type TransactionScope,
-} from "@/api/admin"
+import { API_PATHS } from "@/api/api"
+import { api, ApiError } from "@/lib/http"
 import { useSession } from "@/hooks/use-session"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -39,6 +40,315 @@ import {
     toggleScope,
     toggleDepartmentId,
 } from "@/components/admin/departments/utils"
+
+type ListResult<T> = {
+    items: T[]
+}
+
+const DEPARTMENTS_BASE_PATH = "/departments"
+const SERVICE_WINDOWS_BASE_PATH = "/service-windows"
+const TRANSACTION_PURPOSES_BASE_PATH = "/transaction-purposes"
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function normalizeText(value: unknown): string {
+    if (typeof value === "string") return value.trim()
+    if (typeof value === "number") return String(value).trim()
+    return ""
+}
+
+function normalizeNullableText(value: unknown): string | null {
+    const clean = normalizeText(value)
+    return clean || null
+}
+
+function resolveEntityId(value: unknown): string {
+    if (typeof value === "string" || typeof value === "number") {
+        return String(value).trim()
+    }
+
+    if (isRecord(value)) {
+        return normalizeText(value._id ?? value.id)
+    }
+
+    return ""
+}
+
+function extractArray(value: unknown, keys: string[]): unknown[] {
+    if (Array.isArray(value)) return value
+
+    if (!isRecord(value)) return []
+
+    for (const key of keys) {
+        const candidate = value[key]
+        if (Array.isArray(candidate)) return candidate
+    }
+
+    return []
+}
+
+function toSortOrderValue(value: unknown): number {
+    const num = Number(value)
+    return Number.isFinite(num) ? num : 1000
+}
+
+function normalizeDepartment(item: unknown): Department | null {
+    if (!isRecord(item)) return null
+
+    const id = resolveEntityId(item)
+    if (!id) return null
+
+    const normalized = {
+        ...(item as Record<string, unknown>),
+        _id: normalizeText(item._id) || id,
+        id: normalizeText(item.id) || id,
+        name: normalizeText(item.name),
+        code: normalizeNullableText(item.code),
+        transactionManager: normalizeNullableText(item.transactionManager),
+        enabled: item.enabled,
+    } as Department
+
+    return normalized
+}
+
+function normalizeWindow(item: unknown): ServiceWindow | null {
+    if (!isRecord(item)) return null
+
+    const id = resolveEntityId(item)
+    const directDepartment = resolveEntityId(item.department)
+    const departmentId =
+        directDepartment ||
+        resolveEntityId(item.departmentId) ||
+        resolveEntityId(item.assignedDepartment) ||
+        null
+
+    const normalized = {
+        ...(item as Record<string, unknown>),
+        _id: normalizeText(item._id) || id || undefined,
+        id: normalizeText(item.id) || id || undefined,
+        name: normalizeNullableText(item.name) ?? undefined,
+        department: departmentId,
+    } as ServiceWindow & Record<string, unknown>
+
+    if (Array.isArray(item.departmentIds)) {
+        normalized.departmentIds = uniqueStringIds(
+            item.departmentIds.map((value) => resolveEntityId(value))
+        )
+    }
+
+    if (Array.isArray(item.assignedDepartments)) {
+        normalized.assignedDepartments = uniqueStringIds(
+            item.assignedDepartments.map((value) => resolveEntityId(value))
+        )
+    }
+
+    if (Array.isArray(item.departments)) {
+        normalized.departments = item.departments
+    }
+
+    if (item.departmentId != null) {
+        normalized.departmentId = normalizeNullableText(item.departmentId)
+    }
+
+    if (item.assignedDepartment != null) {
+        normalized.assignedDepartment = normalizeNullableText(
+            item.assignedDepartment
+        )
+    }
+
+    return normalized as ServiceWindow
+}
+
+function normalizeScope(scope: unknown): TransactionScope | null {
+    const clean = normalizeText(scope).toUpperCase()
+    if (clean === "INTERNAL" || clean === "EXTERNAL") {
+        return clean as TransactionScope
+    }
+    return null
+}
+
+function normalizePurpose(item: unknown): TransactionPurpose | null {
+    if (!isRecord(item)) return null
+
+    const id = resolveEntityId(item)
+    if (!id) return null
+
+    const scopes = Array.isArray(item.scopes)
+        ? item.scopes
+              .map(normalizeScope)
+              .filter((value): value is TransactionScope => Boolean(value))
+        : []
+
+    const departmentIds = Array.isArray(item.departmentIds)
+        ? uniqueStringIds(item.departmentIds.map((value) => resolveEntityId(value)))
+        : []
+
+    const normalized = {
+        ...(item as Record<string, unknown>),
+        id,
+        _id: normalizeText(item._id) || id,
+        key: normalizeText(item.key),
+        label: normalizeText(item.label),
+        category: normalizeNullableText(item.category),
+        scopes,
+        departmentIds,
+        enabled: item.enabled,
+        sortOrder: toSortOrderValue(item.sortOrder),
+    } as TransactionPurpose
+
+    return normalized
+}
+
+function toListResult<T>(
+    value: unknown,
+    keys: string[],
+    normalizer: (item: unknown) => T | null
+): ListResult<T> {
+    const items = extractArray(value, keys)
+        .map(normalizer)
+        .filter((item): item is T => Boolean(item))
+
+    return { items }
+}
+
+async function requestWithUpdateFallback<T>(
+    path: string,
+    body: unknown
+): Promise<T> {
+    try {
+        return await api.patchData<T>(path, body, { auth: "staff" })
+    } catch (error) {
+        if (
+            error instanceof ApiError &&
+            (error.status === 404 || error.status === 405)
+        ) {
+            return api.putData<T>(path, body, { auth: "staff" })
+        }
+
+        throw error
+    }
+}
+
+const adminApi = {
+    async listDepartments() {
+        const response = await api.getData<any>(DEPARTMENTS_BASE_PATH, {
+            auth: "staff",
+        })
+
+        const result = toListResult<Department>(
+            response,
+            ["departments", "items", "results", "data"],
+            normalizeDepartment
+        )
+
+        return { departments: result.items }
+    },
+
+    async listWindows() {
+        const response = await api.getData<any>(SERVICE_WINDOWS_BASE_PATH, {
+            auth: "staff",
+        })
+
+        const result = toListResult<ServiceWindow>(
+            response,
+            ["windows", "serviceWindows", "items", "results", "data"],
+            normalizeWindow
+        )
+
+        return { windows: result.items }
+    },
+
+    async listTransactionPurposes(params?: { includeDisabled?: boolean }) {
+        const response = await api.getData<any>(TRANSACTION_PURPOSES_BASE_PATH, {
+            auth: "staff",
+            params,
+        })
+
+        const result = toListResult<TransactionPurpose>(
+            response,
+            ["transactions", "transactionPurposes", "purposes", "items", "results", "data"],
+            normalizePurpose
+        )
+
+        return { transactions: result.items }
+    },
+
+    async createDepartment(payload: {
+        name: string
+        code?: string
+        transactionManager: string
+    }) {
+        return api.postData<Department>(DEPARTMENTS_BASE_PATH, payload, {
+            auth: "staff",
+        })
+    },
+
+    async updateDepartment(
+        id: string,
+        payload: {
+            name: string
+            code?: string
+            transactionManager: string
+            enabled: boolean
+        }
+    ) {
+        return requestWithUpdateFallback<Department>(
+            API_PATHS.departments.byId(id),
+            payload
+        )
+    },
+
+    async deleteDepartment(id: string) {
+        return api.deleteData<unknown>(API_PATHS.departments.byId(id), {
+            auth: "staff",
+        })
+    },
+
+    async createTransactionPurpose(payload: {
+        category: string
+        key: string
+        label: string
+        scopes: TransactionScope[]
+        enabled: boolean
+        sortOrder: number
+        applyToAllDepartments: boolean
+        departmentIds: string[]
+    }) {
+        return api.postData<TransactionPurpose>(
+            TRANSACTION_PURPOSES_BASE_PATH,
+            payload,
+            { auth: "staff" }
+        )
+    },
+
+    async updateTransactionPurpose(
+        id: string,
+        payload: {
+            category: string
+            key: string
+            label: string
+            scopes: TransactionScope[]
+            enabled: boolean
+            sortOrder: number
+            applyToAllDepartments: boolean
+            departmentIds: string[]
+        }
+    ) {
+        return requestWithUpdateFallback<TransactionPurpose>(
+            `${TRANSACTION_PURPOSES_BASE_PATH}/${encodeURIComponent(id)}`,
+            payload
+        )
+    },
+
+    async deleteTransactionPurpose(id: string) {
+        return api.deleteData<unknown>(
+            `${TRANSACTION_PURPOSES_BASE_PATH}/${encodeURIComponent(id)}`,
+            { auth: "staff" }
+        )
+    },
+}
 
 export default function AdminDepartmentsPage() {
     const location = useLocation()
@@ -171,7 +481,10 @@ export default function AdminDepartmentsPage() {
     ])
 
     const enabledDepartments = React.useMemo(
-        () => departments.filter((dept) => isEnabledFlag(dept.enabled)).sort((a, b) => a.name.localeCompare(b.name)),
+        () =>
+            departments
+                .filter((dept) => isEnabledFlag(dept.enabled))
+                .sort((a, b) => a.name.localeCompare(b.name)),
         [departments]
     )
 
@@ -232,7 +545,7 @@ export default function AdminDepartmentsPage() {
                 const bManager = normalizeManagerKey(b.category || DEFAULT_MANAGER)
                 if (aManager !== bManager) return aManager.localeCompare(bManager)
 
-                const sortDelta = (a.sortOrder ?? 1000) - (b.sortOrder ?? 1000)
+                const sortDelta = toSortOrderValue(a.sortOrder) - toSortOrderValue(b.sortOrder)
                 if (sortDelta !== 0) return sortDelta
 
                 return (a.label ?? "").localeCompare(b.label ?? "")
@@ -353,7 +666,7 @@ export default function AdminDepartmentsPage() {
                 const bManager = normalizeManagerKey(b.category || DEFAULT_MANAGER)
                 if (aManager !== bManager) return aManager.localeCompare(bManager)
 
-                const sortDelta = (a.sortOrder ?? 1000) - (b.sortOrder ?? 1000)
+                const sortDelta = toSortOrderValue(a.sortOrder) - toSortOrderValue(b.sortOrder)
                 if (sortDelta !== 0) return sortDelta
 
                 return (a.label ?? "").localeCompare(b.label ?? "")
@@ -392,7 +705,7 @@ export default function AdminDepartmentsPage() {
                 const bManager = normalizeManagerKey(b.category || DEFAULT_MANAGER)
                 if (aManager !== bManager) return aManager.localeCompare(bManager)
 
-                const sortDelta = (a.sortOrder ?? 1000) - (b.sortOrder ?? 1000)
+                const sortDelta = toSortOrderValue(a.sortOrder) - toSortOrderValue(b.sortOrder)
                 if (sortDelta !== 0) return sortDelta
 
                 return (a.label ?? "").localeCompare(b.label ?? "")
@@ -422,7 +735,7 @@ export default function AdminDepartmentsPage() {
         setEPurposeApplyAllDepartments((purpose.departmentIds || []).length === 0)
         setEPurposeDepartmentIds([...(purpose.departmentIds || [])])
         setEPurposeEnabled(isEnabledFlag(purpose.enabled))
-        setEPurposeSortOrder(Number.isFinite(Number(purpose.sortOrder)) ? Number(purpose.sortOrder) : 1000)
+        setEPurposeSortOrder(toSortOrderValue(purpose.sortOrder))
         setEditPurposeOpen(true)
     }
 
@@ -704,7 +1017,7 @@ export default function AdminDepartmentsPage() {
 
                 const sameCategory = normalizeManagerKey(existing.category || DEFAULT_MANAGER) === category
                 const sameLabel = String(existing.label || "").trim() === tx.label
-                const sameSortOrder = Number(existing.sortOrder ?? 1000) === tx.sortOrder
+                const sameSortOrder = toSortOrderValue(existing.sortOrder) === tx.sortOrder
                 const sameEnabled = isEnabledFlag(existing.enabled)
                 const sameGlobalBinding = (existing.departmentIds || []).length === 0
 
