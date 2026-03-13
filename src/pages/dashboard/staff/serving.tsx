@@ -9,12 +9,8 @@ import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { useSession } from "@/hooks/use-session"
-import {
-    staffApi,
-    type DepartmentAssignment,
-    type StaffDisplaySnapshotResponse,
-    type Ticket as TicketType,
-} from "@/api/staff"
+import { API_PATHS } from "@/api/api"
+import { api, ApiError } from "@/lib/http"
 
 import { Card, CardContent } from "@/components/ui/card"
 
@@ -22,6 +18,12 @@ import { StaffServingBoardMode } from "@/components/staff-serving/board-mode"
 import { StaffServingControlPanel } from "@/components/staff-serving/control-panel"
 import { StaffServingOperatorView } from "@/components/staff-serving/operator-view"
 import { StaffServingSmsDialog } from "@/components/staff-serving/sms-dialog"
+import type {
+    DepartmentAssignment,
+    StaffDisplayBoardWindow,
+    StaffDisplaySnapshotResponse,
+    Ticket as TicketType,
+} from "@/components/staff-serving/types"
 import {
     buildNowServingAnnouncement,
     defaultSmsCalledMessage,
@@ -30,7 +32,6 @@ import {
     getTransactionPurposeText,
     isSpeechSupported,
     looksLikePhoneNumber,
-    mapBoardWindowToTicketLike,
     normalizeLangTag,
     normalizeSmsSenderOption,
     normalizeTtsText,
@@ -45,6 +46,629 @@ import {
     type SmsSenderOption,
     type WindowWithScreenDetails,
 } from "@/components/staff-serving/utils"
+
+type WindowInfo = {
+    id: string
+    name: string
+    number: number
+}
+
+type AssignmentResult = {
+    departmentId: string | null
+    window: WindowInfo | null
+    assignedDepartments: DepartmentAssignment[]
+    handledDepartments: DepartmentAssignment[]
+}
+
+type TicketResponse = {
+    ticket: TicketType | null
+}
+
+type TicketListResponse = {
+    tickets: TicketType[]
+}
+
+type SmsResponse = {
+    ok?: boolean
+    outcome?: "sent" | "failed" | "unknown" | "skipped"
+    message?: string
+    reason?: string
+    error?: string
+    number?: string
+    httpStatus?: number
+    receiptsCount?: number
+    statusSummary?: Record<string, number>
+    [key: string]: unknown
+}
+
+const STAFF_API_CANDIDATES = {
+    myAssignment: [
+        "/staff/me/assignment",
+        "/staff/my-assignment",
+        "/staff/assignment",
+        "/serving/assignment",
+    ],
+    displaySnapshot: [
+        "/staff/display-snapshot",
+        "/staff/display/snapshot",
+        "/staff/serving/display-snapshot",
+        "/serving/display-snapshot",
+    ],
+    currentCalledForWindow: [
+        "/staff/current-called-for-window",
+        "/staff/current-called",
+        "/staff/window/current-called",
+        "/staff/serving/current-called",
+    ],
+    waiting: [
+        "/staff/waiting",
+        "/staff/tickets/waiting",
+        "/tickets/waiting",
+    ],
+    hold: [
+        "/staff/hold",
+        "/staff/tickets/hold",
+        "/tickets/hold",
+    ],
+    callNext: ["/staff/call-next", "/tickets/call-next"],
+    sendSms: ["/staff/send-sms", "/sms/send"],
+} as const
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function normalizeString(value: unknown): string | null {
+    if (typeof value !== "string") return null
+    const clean = value.trim()
+    return clean ? clean : null
+}
+
+function normalizeNumber(value: unknown): number | null {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+}
+
+function extractFirstNumber(value: unknown): number | null {
+    const raw = String(value ?? "").trim()
+    if (!raw) return null
+    const match = raw.match(/\d+/)
+    return match ? normalizeNumber(match[0]) : null
+}
+
+function uniqueStrings(values: string[]) {
+    return Array.from(
+        new Set(values.map((v) => String(v ?? "").trim()).filter(Boolean))
+    )
+}
+
+function normalizeDepartmentAssignmentsFromUnknown(
+    value: unknown
+): DepartmentAssignment[] {
+    if (!Array.isArray(value)) return []
+
+    const mapped = value
+        .map((item) => {
+            if (!isRecord(item)) return null
+
+            const id =
+                normalizeString(item.id) ??
+                normalizeString(item._id) ??
+                normalizeString(item.departmentId)
+
+            if (!id) return null
+
+            return {
+                id,
+                name:
+                    normalizeString(item.name) ??
+                    normalizeString(item.departmentName) ??
+                    undefined,
+                code:
+                    normalizeString(item.code) ??
+                    normalizeString(item.departmentCode) ??
+                    null,
+                transactionManager:
+                    normalizeString(item.transactionManager) ??
+                    normalizeString(item.manager) ??
+                    null,
+                enabled: item.enabled !== false,
+            } satisfies DepartmentAssignment
+        })
+        .filter(Boolean) as DepartmentAssignment[]
+
+    return uniqueDepartmentAssignments(mapped)
+}
+
+function normalizeWindowInfo(value: unknown): WindowInfo | null {
+    if (!isRecord(value)) return null
+
+    const id = normalizeString(value.id) ?? normalizeString(value._id)
+    const number =
+        normalizeNumber(value.number) ??
+        normalizeNumber(value.windowNumber) ??
+        extractFirstNumber(value.name) ??
+        extractFirstNumber(value.label)
+
+    if (!id && !number) return null
+
+    return {
+        id: id ?? `window-${number ?? "unknown"}`,
+        name:
+            normalizeString(value.name) ??
+            (number ? `Window ${number}` : "Window"),
+        number: number ?? 0,
+    }
+}
+
+function normalizeAssignmentResult(value: unknown): AssignmentResult {
+    const record = isRecord(value) ? value : {}
+
+    const departmentId =
+        normalizeString(record.departmentId) ??
+        (isRecord(record.department)
+            ? normalizeString(record.department.id) ??
+              normalizeString(record.department._id)
+            : null)
+
+    const assignedDepartments = normalizeDepartmentAssignmentsFromUnknown(
+        record.assignedDepartments ??
+            record.departments ??
+            (record.department ? [record.department] : [])
+    )
+
+    const handledDepartments = normalizeDepartmentAssignmentsFromUnknown(
+        record.handledDepartments ??
+            record.managedDepartments ??
+            record.assignedDepartments ??
+            record.departments ??
+            (record.department ? [record.department] : [])
+    )
+
+    const window =
+        normalizeWindowInfo(record.window) ??
+        normalizeWindowInfo(record.assignedWindow) ??
+        normalizeWindowInfo(record.serviceWindow)
+
+    return {
+        departmentId,
+        window,
+        assignedDepartments,
+        handledDepartments,
+    }
+}
+
+function unwrapTicket(value: unknown): TicketType | null {
+    if (!value) return null
+
+    if (Array.isArray(value)) {
+        const first = value.find((item) => isRecord(item))
+        return first ? (first as TicketType) : null
+    }
+
+    if (!isRecord(value)) return null
+
+    if (isRecord(value.ticket)) return value.ticket as TicketType
+    if (isRecord(value.current)) return value.current as TicketType
+    if (isRecord(value.active)) return value.active as TicketType
+
+    if (
+        "queueNumber" in value ||
+        "_id" in value ||
+        "id" in value ||
+        "status" in value
+    ) {
+        return value as TicketType
+    }
+
+    return null
+}
+
+function unwrapTickets(value: unknown): TicketType[] {
+    if (!value) return []
+
+    if (Array.isArray(value)) {
+        return value.filter((item) => isRecord(item)) as TicketType[]
+    }
+
+    if (!isRecord(value)) return []
+
+    const candidates = [
+        value.tickets,
+        value.items,
+        value.rows,
+        value.results,
+        value.queue,
+        value.upNext,
+        value.holdTickets,
+        value.hold,
+        value.waiting,
+        value.active,
+    ]
+
+    for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+            return candidate.filter((item) => isRecord(item)) as TicketType[]
+        }
+    }
+
+    const single = unwrapTicket(value)
+    return single ? [single] : []
+}
+
+function normalizeSnapshot(value: unknown): StaffDisplaySnapshotResponse | null {
+    if (!isRecord(value)) return null
+
+    if (
+        "board" in value ||
+        "upNext" in value ||
+        "holdTickets" in value ||
+        "meta" in value
+    ) {
+        return value as StaffDisplaySnapshotResponse
+    }
+
+    const windows = unwrapBoardWindows(value.windows)
+    const upNext = unwrapTickets(value.upNext ?? value.queue ?? value.waiting)
+    const holdTickets = unwrapTickets(value.holdTickets ?? value.hold)
+
+    return {
+        board: {
+            transactionManager:
+                normalizeString(value.transactionManager) ??
+                normalizeString(value.manager) ??
+                null,
+            windows,
+        },
+        upNext,
+        holdTickets,
+        meta: {
+            generatedAt:
+                normalizeString(value.generatedAt) ?? new Date().toISOString(),
+        },
+    }
+}
+
+function unwrapBoardWindows(value: unknown): StaffDisplayBoardWindow[] {
+    const list = Array.isArray(value)
+        ? value
+        : isRecord(value) && Array.isArray(value.windows)
+          ? value.windows
+          : []
+
+    return list
+        .map((item) => {
+            if (!isRecord(item)) return null
+
+            const id =
+                normalizeString(item.id) ??
+                normalizeString(item._id) ??
+                normalizeString(item.windowId)
+
+            const number =
+                normalizeNumber(item.number) ??
+                normalizeNumber(item.windowNumber) ??
+                extractFirstNumber(item.name)
+
+            if (!id && !number) return null
+
+            return {
+                id: id ?? `window-${number ?? "unknown"}`,
+                number: number ?? 0,
+                name:
+                    normalizeString(item.name) ??
+                    (number ? `Window ${number}` : null),
+                nowServing: unwrapTicket(
+                    item.nowServing ?? item.current ?? item.ticket
+                ),
+            } satisfies StaffDisplayBoardWindow
+        })
+        .filter(Boolean) as StaffDisplayBoardWindow[]
+}
+
+function extractTicketWindowNumber(ticket: unknown): number | null {
+    if (!isRecord(ticket)) return null
+
+    return (
+        normalizeNumber(ticket.windowNumber) ??
+        normalizeNumber(ticket.window) ??
+        (isRecord(ticket.windowInfo)
+            ? normalizeNumber(ticket.windowInfo.number)
+            : null) ??
+        (isRecord(ticket.serviceWindow)
+            ? normalizeNumber(ticket.serviceWindow.number)
+            : null)
+    )
+}
+
+async function getFirstStaffData<T>(
+    paths: readonly string[],
+    params?: Record<string, string | number | boolean | null | undefined>
+): Promise<T> {
+    let lastError: unknown = null
+
+    for (const path of uniqueStrings([...paths])) {
+        try {
+            return await api.getData<T>(path, {
+                auth: "staff",
+                ...(params ? { params } : {}),
+            })
+        } catch (error) {
+            lastError = error
+
+            if (
+                error instanceof ApiError &&
+                (error.status === 404 || error.status === 405)
+            ) {
+                continue
+            }
+
+            throw error
+        }
+    }
+
+    throw lastError ?? new Error("No matching API route found.")
+}
+
+async function postFirstStaffData<T>(
+    paths: readonly string[],
+    body?: unknown
+): Promise<T> {
+    let lastError: unknown = null
+
+    for (const path of uniqueStrings([...paths])) {
+        try {
+            return await api.postData<T>(path, body, { auth: "staff" })
+        } catch (error) {
+            lastError = error
+
+            if (
+                error instanceof ApiError &&
+                (error.status === 404 || error.status === 405)
+            ) {
+                continue
+            }
+
+            throw error
+        }
+    }
+
+    throw lastError ?? new Error("No matching API route found.")
+}
+
+const staffServingApi = {
+    async myAssignment(): Promise<AssignmentResult> {
+        const raw = await getFirstStaffData<unknown>(
+            STAFF_API_CANDIDATES.myAssignment
+        )
+        return normalizeAssignmentResult(raw)
+    },
+
+    async getDisplaySnapshot(
+        departmentId: string | null,
+        handledDepartments: DepartmentAssignment[]
+    ): Promise<StaffDisplaySnapshotResponse | null> {
+        try {
+            const raw = await getFirstStaffData<unknown>(
+                STAFF_API_CANDIDATES.displaySnapshot,
+                departmentId ? { departmentId } : undefined
+            )
+            return normalizeSnapshot(raw)
+        } catch (error) {
+            if (
+                !(error instanceof ApiError) ||
+                (error.status !== 404 && error.status !== 405)
+            ) {
+                throw error
+            }
+        }
+
+        if (!departmentId) return null
+
+        const [windowsRaw, activeRaw, waitingRaw] = await Promise.all([
+            api.getData<unknown>(API_PATHS.serviceWindows.byDepartment(departmentId), {
+                auth: "staff",
+            }).catch(() => null),
+            api.getData<unknown>(API_PATHS.tickets.activeByDepartment(departmentId), {
+                auth: "staff",
+            }).catch(() => null),
+            api.getData<unknown>(API_PATHS.tickets.queueByDepartment(departmentId), {
+                auth: "staff",
+                params: { limit: 16 },
+            }).catch(() => null),
+        ])
+
+        const windows = unwrapBoardWindows(windowsRaw)
+        const activeTickets = unwrapTickets(activeRaw)
+        const upNext = unwrapTickets(waitingRaw)
+
+        return {
+            board: {
+                transactionManager:
+                    handledDepartments.find((dep) => dep.transactionManager)
+                        ?.transactionManager ?? null,
+                windows: windows.map((windowItem) => ({
+                    ...windowItem,
+                    nowServing:
+                        activeTickets.find(
+                            (ticket) =>
+                                extractTicketWindowNumber(ticket) ===
+                                normalizeNumber(windowItem.number)
+                        ) ?? null,
+                })),
+            },
+            upNext,
+            holdTickets: [],
+            meta: {
+                generatedAt: new Date().toISOString(),
+            },
+        }
+    },
+
+    async currentCalledForWindow(
+        departmentId: string,
+        windowNumber?: number | null
+    ): Promise<TicketResponse> {
+        try {
+            const raw = await getFirstStaffData<unknown>(
+                STAFF_API_CANDIDATES.currentCalledForWindow,
+                {
+                    departmentId,
+                    ...(typeof windowNumber === "number"
+                        ? { windowNumber }
+                        : {}),
+                }
+            )
+
+            return { ticket: unwrapTicket(raw) }
+        } catch (error) {
+            if (
+                !(error instanceof ApiError) ||
+                (error.status !== 404 && error.status !== 405)
+            ) {
+                throw error
+            }
+        }
+
+        const raw = await api.getData<unknown>(
+            API_PATHS.tickets.activeByDepartment(departmentId),
+            { auth: "staff" }
+        )
+
+        const tickets = unwrapTickets(raw)
+        const matched =
+            (typeof windowNumber === "number"
+                ? tickets.find(
+                      (ticket) =>
+                          extractTicketWindowNumber(ticket) === windowNumber
+                  )
+                : null) ?? tickets[0] ?? null
+
+        return { ticket: matched }
+    },
+
+    async listWaiting(
+        departmentId: string,
+        opts?: { limit?: number }
+    ): Promise<TicketListResponse> {
+        try {
+            const raw = await getFirstStaffData<unknown>(
+                STAFF_API_CANDIDATES.waiting,
+                {
+                    departmentId,
+                    limit: opts?.limit ?? 16,
+                }
+            )
+
+            return { tickets: unwrapTickets(raw) }
+        } catch (error) {
+            if (
+                !(error instanceof ApiError) ||
+                (error.status !== 404 && error.status !== 405)
+            ) {
+                throw error
+            }
+        }
+
+        const raw = await api.getData<unknown>(
+            API_PATHS.tickets.queueByDepartment(departmentId),
+            {
+                auth: "staff",
+                params: { limit: opts?.limit ?? 16 },
+            }
+        )
+
+        return { tickets: unwrapTickets(raw) }
+    },
+
+    async listHold(
+        departmentId: string,
+        opts?: { limit?: number }
+    ): Promise<TicketListResponse> {
+        try {
+            const raw = await getFirstStaffData<unknown>(
+                STAFF_API_CANDIDATES.hold,
+                {
+                    departmentId,
+                    limit: opts?.limit ?? 16,
+                }
+            )
+
+            return { tickets: unwrapTickets(raw) }
+        } catch (error) {
+            if (
+                !(error instanceof ApiError) ||
+                (error.status !== 404 && error.status !== 405)
+            ) {
+                throw error
+            }
+        }
+
+        const raw = await api.getData<unknown>(
+            API_PATHS.tickets.queueByDepartment(departmentId),
+            {
+                auth: "staff",
+                params: {
+                    limit: opts?.limit ?? 16,
+                    status: "HOLD",
+                },
+            }
+        )
+
+        return { tickets: unwrapTickets(raw) }
+    },
+
+    async callNext(): Promise<TicketResponse> {
+        const raw = await postFirstStaffData<unknown>(
+            STAFF_API_CANDIDATES.callNext
+        )
+        return { ticket: unwrapTicket(raw) }
+    },
+
+    async markServed(ticketId: string): Promise<TicketResponse> {
+        const raw = await postFirstStaffData<unknown>(
+            [
+                `/staff/tickets/${encodeURIComponent(ticketId)}/served`,
+                `/staff/mark-served/${encodeURIComponent(ticketId)}`,
+                `/tickets/${encodeURIComponent(ticketId)}/served`,
+            ],
+            {}
+        )
+
+        return { ticket: unwrapTicket(raw) }
+    },
+
+    async holdNoShow(ticketId: string): Promise<TicketResponse> {
+        const raw = await postFirstStaffData<unknown>(
+            [
+                `/staff/tickets/${encodeURIComponent(ticketId)}/hold-no-show`,
+                `/staff/hold-no-show/${encodeURIComponent(ticketId)}`,
+                `/tickets/${encodeURIComponent(ticketId)}/hold-no-show`,
+            ],
+            {}
+        )
+
+        return { ticket: unwrapTicket(raw) }
+    },
+
+    async sendTicketSms(ticketId: string, body: Record<string, unknown>) {
+        return postFirstStaffData<SmsResponse>(
+            [
+                `/staff/tickets/${encodeURIComponent(ticketId)}/sms`,
+                `/staff/send-ticket-sms/${encodeURIComponent(ticketId)}`,
+                `/tickets/${encodeURIComponent(ticketId)}/sms`,
+            ],
+            body
+        )
+    },
+
+    async sendSms(body: Record<string, unknown>) {
+        return postFirstStaffData<SmsResponse>(
+            STAFF_API_CANDIDATES.sendSms,
+            body
+        )
+    },
+}
 
 export default function StaffServingPage() {
     const location = useLocation()
@@ -68,32 +692,52 @@ export default function StaffServingPage() {
     const [busy, setBusy] = React.useState(false)
 
     const [departmentId, setDepartmentId] = React.useState<string | null>(null)
-    const [windowInfo, setWindowInfo] = React.useState<{ id: string; name: string; number: number } | null>(null)
-    const [assignedDepartments, setAssignedDepartments] = React.useState<DepartmentAssignment[]>([])
-    const [handledDepartments, setHandledDepartments] = React.useState<DepartmentAssignment[]>([])
+    const [windowInfo, setWindowInfo] = React.useState<WindowInfo | null>(null)
+    const [assignedDepartments, setAssignedDepartments] = React.useState<
+        DepartmentAssignment[]
+    >([])
+    const [handledDepartments, setHandledDepartments] = React.useState<
+        DepartmentAssignment[]
+    >([])
 
     const [current, setCurrent] = React.useState<TicketType | null>(null)
     const [upNext, setUpNext] = React.useState<TicketType[]>([])
     const [holdTickets, setHoldTickets] = React.useState<TicketType[]>([])
-    const [snapshot, setSnapshot] = React.useState<StaffDisplaySnapshotResponse | null>(null)
+    const [snapshot, setSnapshot] =
+        React.useState<StaffDisplaySnapshotResponse | null>(null)
 
     const [autoRefresh, setAutoRefresh] = React.useState(true)
-    const [panelCount, setPanelCount] = React.useState<number>(() => parsePanelCount(location.search, 3))
+    const [panelCount, setPanelCount] = React.useState<number>(() =>
+        parsePanelCount(location.search, 3)
+    )
 
-    const [monitorOptions, setMonitorOptions] = React.useState<MonitorOption[]>([])
-    const [selectedMonitorId, setSelectedMonitorId] = React.useState<string>("")
+    const [monitorOptions, setMonitorOptions] = React.useState<MonitorOption[]>(
+        []
+    )
+    const [selectedMonitorId, setSelectedMonitorId] =
+        React.useState<string>("")
     const [monitorApiSupported, setMonitorApiSupported] = React.useState(false)
     const [loadingMonitors, setLoadingMonitors] = React.useState(false)
     const monitorWarnedRef = React.useRef(false)
 
-    const assignedDepartmentItems = React.useMemo(() => uniqueDepartmentAssignments(assignedDepartments), [assignedDepartments])
-    const handledDepartmentItems = React.useMemo(() => uniqueDepartmentAssignments(handledDepartments), [handledDepartments])
+    const assignedDepartmentItems = React.useMemo(
+        () => uniqueDepartmentAssignments(assignedDepartments),
+        [assignedDepartments]
+    )
+    const handledDepartmentItems = React.useMemo(
+        () => uniqueDepartmentAssignments(handledDepartments),
+        [handledDepartments]
+    )
 
-    const assignedOk = Boolean(departmentId && windowInfo?.id)
+    const assignedOk = Boolean(
+        (departmentId && windowInfo?.id) ||
+            (sessionUser?.assignedDepartment && sessionUser?.assignedWindow)
+    )
 
     const [voiceEnabled, setVoiceEnabled] = React.useState(true)
     const [voiceSupported, setVoiceSupported] = React.useState(true)
-    const [selectedVoiceType, setSelectedVoiceType] = React.useState<AnnouncementVoiceOption>("woman")
+    const [selectedVoiceType, setSelectedVoiceType] =
+        React.useState<AnnouncementVoiceOption>("woman")
     const voiceUnsupportedWarnedRef = React.useRef(false)
     const englishVoiceWarnedRef = React.useRef(false)
     const lastAnnouncedRef = React.useRef<number | null>(null)
@@ -110,7 +754,8 @@ export default function StaffServingPage() {
     const [smsUseDefaultMessage, setSmsUseDefaultMessage] = React.useState(true)
     const [smsCustomMessage, setSmsCustomMessage] = React.useState("")
 
-    const [smsSenderOption, setSmsSenderOption] = React.useState<SmsSenderOption>("default")
+    const [smsSenderOption, setSmsSenderOption] =
+        React.useState<SmsSenderOption>("default")
     const [smsSenderCustom, setSmsSenderCustom] = React.useState("")
 
     const resolvedSenderName = React.useMemo(() => {
@@ -150,13 +795,15 @@ export default function StaffServingPage() {
         onError: (error: Error) => {
             if (voiceUnsupportedWarnedRef.current) return
             voiceUnsupportedWarnedRef.current = true
-            toast.message(error?.message || "Voice announcement failed in this browser.")
+            toast.message(
+                error?.message || "Voice announcement failed in this browser."
+            )
         },
     })
 
     const resolvedEnglishVoices = React.useMemo(
         () => resolveGenderedEnglishVoices(Array.isArray(voices) ? voices : []),
-        [voices],
+        [voices]
     )
 
     React.useEffect(() => {
@@ -179,7 +826,9 @@ export default function StaffServingPage() {
         if (englishVoiceWarnedRef.current) return
 
         englishVoiceWarnedRef.current = true
-        toast.message("No English TTS voice was found. Your browser default voice will be used.")
+        toast.message(
+            "No English TTS voice was found. Your browser default voice will be used."
+        )
     }, [resolvedEnglishVoices.english.length, voiceSupported, voices])
 
     React.useEffect(() => {
@@ -197,14 +846,22 @@ export default function StaffServingPage() {
             if (!voiceSupported) return
             if (typeof window === "undefined") return
 
-            const preferred = selectedVoiceType === "woman" ? resolvedEnglishVoices.woman : resolvedEnglishVoices.man
-            const fallback = selectedVoiceType === "woman" ? resolvedEnglishVoices.man : resolvedEnglishVoices.woman
+            const preferred =
+                selectedVoiceType === "woman"
+                    ? resolvedEnglishVoices.woman
+                    : resolvedEnglishVoices.man
+            const fallback =
+                selectedVoiceType === "woman"
+                    ? resolvedEnglishVoices.man
+                    : resolvedEnglishVoices.woman
             const chosen = preferred || fallback || resolvedEnglishVoices.english[0]
 
             const voiceURI = chosen?.voiceURI
             const voiceLangRaw = normalizeLangTag(chosen?.lang || "")
             const voiceLang = voiceLangRaw || "en-US"
-            const finalLang = voiceLang.toLowerCase().startsWith("en-") ? voiceLang : "en-US"
+            const finalLang = voiceLang.toLowerCase().startsWith("en-")
+                ? voiceLang
+                : "en-US"
 
             if (speakTimerRef.current) {
                 window.clearTimeout(speakTimerRef.current)
@@ -242,7 +899,7 @@ export default function StaffServingPage() {
             speakWithPackage,
             stopSpeech,
             voiceSupported,
-        ],
+        ]
     )
 
     const announceCall = React.useCallback(
@@ -253,7 +910,9 @@ export default function StaffServingPage() {
             if (!voiceSupported) {
                 if (!voiceUnsupportedWarnedRef.current) {
                     voiceUnsupportedWarnedRef.current = true
-                    toast.message("Voice announcement is not supported in this browser.")
+                    toast.message(
+                        "Voice announcement is not supported in this browser."
+                    )
                 }
                 return
             }
@@ -263,17 +922,27 @@ export default function StaffServingPage() {
 
             speak(text)
         },
-        [speak, voiceEnabled, voiceSupported, windowInfo?.number],
+        [speak, voiceEnabled, voiceSupported, windowInfo?.number]
     )
 
     const onRecallVoice = React.useCallback(() => {
         const n = current?.queueNumber ?? lastAnnouncedRef.current
-        if (!n) return toast.message("No ticket to announce.")
+        if (!n) {
+            toast.message("No ticket to announce.")
+            return
+        }
         announceCall(n)
     }, [announceCall, current?.queueNumber])
 
     const sendCalledSms = React.useCallback(
-        async (ticket: TicketType, opts?: { message?: string; senderName?: string; toastOnSuccess?: boolean }) => {
+        async (
+            ticket: TicketType,
+            opts?: {
+                message?: string
+                senderName?: string
+                toastOnSuccess?: boolean
+            }
+        ) => {
             if (!SMS_SENDING_AVAILABLE) {
                 toast.message(SMS_UNAVAILABLE_NOTICE)
                 return false
@@ -287,10 +956,14 @@ export default function StaffServingPage() {
             const windowNumber = windowInfo?.number
             const messageOverride = String(opts?.message ?? "").trim()
             const senderName = String(opts?.senderName ?? "").trim()
-            const fallbackMessage = messageOverride || defaultSmsCalledMessage(ticket.queueNumber, windowNumber)
+            const fallbackMessage =
+                messageOverride ||
+                defaultSmsCalledMessage(ticket.queueNumber ?? 0, windowNumber)
 
             const participant = getParticipantDetails(ticket as any)
-            const fallbackMobile = looksLikePhoneNumber(participant.mobile) ? String(participant.mobile || "").trim() : ""
+            const fallbackMobile = looksLikePhoneNumber(participant.mobile)
+                ? String(participant.mobile || "").trim()
+                : ""
 
             const lower = (v: unknown) => String(v ?? "").trim().toLowerCase()
 
@@ -301,7 +974,7 @@ export default function StaffServingPage() {
 
             setSmsBusy(true)
             try {
-                const res = await staffApi.sendTicketSms(ticket._id, {
+                const res = await staffServingApi.sendTicketSms(ticket._id, {
                     ...(messageOverride ? { message: messageOverride } : {}),
                     ...(senderName ? { senderName } : {}),
                     status: "CALLED",
@@ -314,24 +987,33 @@ export default function StaffServingPage() {
                 if (confirmedSent) {
                     if (opts?.toastOnSuccess !== false) {
                         toast.success(
-                            `SMS sent for #${ticket.queueNumber}${res?.number ? ` to ${res.number}` : ""}.${summarySuffix}`,
+                            `SMS sent for #${ticket.queueNumber}${
+                                res?.number ? ` to ${res.number}` : ""
+                            }.${summarySuffix}`
                         )
                     }
                     return true
                 }
 
                 if (res?.outcome === "skipped") {
-                    toast.message(res?.message || res?.reason || "SMS was skipped by server policy.")
+                    toast.message(
+                        res?.message || res?.reason || "SMS was skipped by server policy."
+                    )
                     return false
                 }
 
                 const hasReceiptsSignal =
                     typeof res?.receiptsCount === "number"
                         ? res.receiptsCount > 0
-                        : Boolean(res?.statusSummary && Object.keys(res.statusSummary).length)
+                        : Boolean(
+                              res?.statusSummary &&
+                                  Object.keys(res.statusSummary).length
+                          )
 
                 if (res?.ok === true && !hasReceiptsSignal) {
-                    toast.message("SMS request was accepted, but provider receipt was not returned. Not confirmed.")
+                    toast.message(
+                        "SMS request was accepted, but provider receipt was not returned. Not confirmed."
+                    )
                     return false
                 }
 
@@ -345,15 +1027,21 @@ export default function StaffServingPage() {
                     lower(res?.reason).includes("network_error")
 
                 if (serverErrorish && fallbackMobile) {
-                    toast.message("Ticket SMS endpoint failed. Trying direct SMS fallback...")
+                    toast.message(
+                        "Ticket SMS endpoint failed. Trying direct SMS fallback..."
+                    )
 
-                    const raw = await staffApi.sendSms({
+                    const raw = await staffServingApi.sendSms({
                         numbers: fallbackMobile,
                         message: fallbackMessage,
                         ...(senderName ? { senderName } : {}),
                         entityType: "ticket",
                         entityId: ticket._id,
-                        meta: { source: "staff/serving", status: "CALLED", queueNumber: ticket.queueNumber },
+                        meta: {
+                            source: "staff/serving",
+                            status: "CALLED",
+                            queueNumber: ticket.queueNumber,
+                        },
                     })
 
                     const rawSuffix = setSuffix(raw?.statusSummary)
@@ -361,22 +1049,34 @@ export default function StaffServingPage() {
 
                     if (rawConfirmed) {
                         if (opts?.toastOnSuccess !== false) {
-                            toast.success(`SMS sent for #${ticket.queueNumber} (fallback).${rawSuffix}`)
+                            toast.success(
+                                `SMS sent for #${ticket.queueNumber} (fallback).${rawSuffix}`
+                            )
                         }
                         return true
                     }
 
                     if (raw?.outcome === "skipped") {
-                        toast.message(raw?.message || raw?.reason || "SMS was skipped by server policy.")
+                        toast.message(
+                            raw?.message || raw?.reason || "SMS was skipped by server policy."
+                        )
                         return false
                     }
 
-                    const rawErrMsg = raw?.message || raw?.reason || raw?.error || "SMS not confirmed by provider receipt."
+                    const rawErrMsg =
+                        raw?.message ||
+                        raw?.reason ||
+                        raw?.error ||
+                        "SMS not confirmed by provider receipt."
                     toast.error(`${rawErrMsg}${rawSuffix}`)
                     return false
                 }
 
-                const errMsg = res?.message || res?.reason || res?.error || "SMS not confirmed by provider receipt."
+                const errMsg =
+                    res?.message ||
+                    res?.reason ||
+                    res?.error ||
+                    "SMS not confirmed by provider receipt."
                 toast.error(`${errMsg}${summarySuffix}`)
                 return false
             } catch (e: any) {
@@ -387,7 +1087,7 @@ export default function StaffServingPage() {
                 setSmsBusy(false)
             }
         },
-        [windowInfo?.number],
+        [windowInfo?.number]
     )
 
     const onSendSmsFromDialog = React.useCallback(async () => {
@@ -418,7 +1118,13 @@ export default function StaffServingPage() {
         setSmsDialogOpen(false)
         setSmsUseDefaultMessage(true)
         setSmsCustomMessage("")
-    }, [current, resolvedSenderName, sendCalledSms, smsCustomMessage, smsUseDefaultMessage])
+    }, [
+        current,
+        resolvedSenderName,
+        sendCalledSms,
+        smsCustomMessage,
+        smsUseDefaultMessage,
+    ])
 
     const loadMonitorOptions = React.useCallback(async (silent = false) => {
         if (typeof window === "undefined") return
@@ -431,7 +1137,9 @@ export default function StaffServingPage() {
             if (typeof w.getScreenDetails === "function") {
                 try {
                     const details = await w.getScreenDetails()
-                    const screens = Array.isArray(details?.screens) ? details.screens : []
+                    const screens = Array.isArray(details?.screens)
+                        ? details.screens
+                        : []
                     for (let i = 0; i < screens.length; i += 1) {
                         const s = screens[i]
                         const width = Number(s?.availWidth ?? s?.width ?? 0)
@@ -441,12 +1149,21 @@ export default function StaffServingPage() {
                         const isPrimary = s?.isPrimary === true
                         const id = String(s?.id || `screen-${i}`)
 
-                        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+                        if (
+                            !Number.isFinite(width) ||
+                            !Number.isFinite(height) ||
+                            width <= 0 ||
+                            height <= 0
+                        ) {
                             continue
                         }
 
-                        const labelBase = s?.label?.trim() ? s.label.trim() : `Monitor ${i + 1}`
-                        const label = `${labelBase}${isPrimary ? " (Primary)" : ""} • ${Math.floor(width)}×${Math.floor(height)}`
+                        const labelBase = s?.label?.trim()
+                            ? s.label.trim()
+                            : `Monitor ${i + 1}`
+                        const label = `${labelBase}${
+                            isPrimary ? " (Primary)" : ""
+                        } • ${Math.floor(width)}×${Math.floor(height)}`
                         nextOptions.push({
                             id,
                             label,
@@ -483,7 +1200,9 @@ export default function StaffServingPage() {
 
                 if (!silent && !monitorWarnedRef.current) {
                     monitorWarnedRef.current = true
-                    toast.message("Hardware monitor API is unavailable. Using current monitor fallback.")
+                    toast.message(
+                        "Hardware monitor API is unavailable. Using current monitor fallback."
+                    )
                 }
             }
 
@@ -500,30 +1219,65 @@ export default function StaffServingPage() {
 
     const refresh = React.useCallback(async () => {
         try {
-            const a = await staffApi.myAssignment()
-            setDepartmentId(a.departmentId ?? null)
-            setWindowInfo(a.window ? { id: a.window._id, name: a.window.name, number: a.window.number } : null)
+            const assignment = await staffServingApi.myAssignment()
 
-            const normalizedAssigned = uniqueDepartmentAssignments(a.assignedDepartments)
-            const normalizedHandled = uniqueDepartmentAssignments(a.handledDepartments)
+            setDepartmentId(assignment.departmentId)
+            setWindowInfo(assignment.window)
+
+            const normalizedAssigned = uniqueDepartmentAssignments(
+                assignment.assignedDepartments
+            )
+            const normalizedHandled = uniqueDepartmentAssignments(
+                assignment.handledDepartments
+            )
 
             setAssignedDepartments(normalizedAssigned)
-            setHandledDepartments(normalizedHandled.length ? normalizedHandled : normalizedAssigned)
+            setHandledDepartments(
+                normalizedHandled.length ? normalizedHandled : normalizedAssigned
+            )
 
-            const [snapshotResult, currentResult, waitingResult, holdResult] = await Promise.all([
-                staffApi.getDisplaySnapshot().catch(() => null),
-                a.departmentId && a.window?._id
-                    ? staffApi.currentCalledForWindow().catch(() => ({ ticket: null }))
-                    : Promise.resolve({ ticket: null }),
-                a.departmentId && a.window?._id
-                    ? staffApi.listWaiting({ limit: 16 }).catch(() => ({ tickets: [] }))
-                    : Promise.resolve({ tickets: [] }),
-                a.departmentId && a.window?._id
-                    ? staffApi.listHold({ limit: 16 }).catch(() => ({ tickets: [] }))
-                    : Promise.resolve({ tickets: [] }),
-            ])
+            const [snapshotResult, currentResult, waitingResult, holdResult] =
+                await Promise.all([
+                    staffServingApi
+                        .getDisplaySnapshot(
+                            assignment.departmentId,
+                            normalizedHandled.length
+                                ? normalizedHandled
+                                : normalizedAssigned
+                        )
+                        .catch(() => null),
+                    assignment.departmentId
+                        ? staffServingApi
+                              .currentCalledForWindow(
+                                  assignment.departmentId,
+                                  assignment.window?.number ?? null
+                              )
+                              .catch(() => ({ ticket: null }))
+                        : Promise.resolve({ ticket: null }),
+                    assignment.departmentId
+                        ? staffServingApi
+                              .listWaiting(assignment.departmentId, {
+                                  limit: 16,
+                              })
+                              .catch(() => ({ tickets: [] }))
+                        : Promise.resolve({ tickets: [] }),
+                    assignment.departmentId
+                        ? staffServingApi
+                              .listHold(assignment.departmentId, {
+                                  limit: 16,
+                              })
+                              .catch(() => ({ tickets: [] }))
+                        : Promise.resolve({ tickets: [] }),
+                ])
 
-            const snapshotHandled = uniqueDepartmentAssignments(snapshotResult?.department?.handledDepartments)
+            const snapshotHandled = uniqueDepartmentAssignments(
+                snapshotResult?.board &&
+                    Array.isArray((snapshotResult.board as any).handledDepartments)
+                    ? ((snapshotResult.board as any)
+                          .handledDepartments as DepartmentAssignment[])
+                    : []
+            )
+
             if (!normalizedHandled.length && snapshotHandled.length) {
                 setHandledDepartments(snapshotHandled)
             }
@@ -538,12 +1292,16 @@ export default function StaffServingPage() {
             if (explicit.length) {
                 setUpNext(explicit)
             } else if (snapshotResult?.upNext?.length) {
-                setUpNext(snapshotResult.upNext.map(mapBoardWindowToTicketLike))
+                setUpNext(snapshotResult.upNext)
             } else {
                 setUpNext([])
             }
 
-            setHoldTickets(holdResult.tickets ?? [])
+            setHoldTickets(
+                holdResult.tickets?.length
+                    ? holdResult.tickets
+                    : snapshotResult?.holdTickets ?? []
+            )
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load now serving.")
         }
@@ -551,7 +1309,9 @@ export default function StaffServingPage() {
 
     const openBoardOnSelectedMonitor = React.useCallback(() => {
         if (typeof window === "undefined") return
-        const selected = monitorOptions.find((m) => m.id === selectedMonitorId) || monitorOptions[0]
+        const selected =
+            monitorOptions.find((m) => m.id === selectedMonitorId) ||
+            monitorOptions[0]
         const targetPanels = Math.max(3, panelCount)
 
         const qs = new URLSearchParams()
@@ -613,20 +1373,33 @@ export default function StaffServingPage() {
         return () => window.clearInterval(t)
     }, [autoRefresh, refresh])
 
-    async function onCallNext() {
-        if (!assignedOk) return toast.error("You are not assigned to a department/window.")
+    async function onCallNext(): Promise<void> {
+        if (!assignedOk) {
+            toast.error("You are not assigned to a department/window.")
+            return
+        }
+
         setBusy(true)
         try {
-            const res = await staffApi.callNext()
+            const res = await staffServingApi.callNext()
+            if (!res.ticket) throw new Error("No waiting tickets.")
+
             setCurrent(res.ticket)
 
             const purpose = getTransactionPurposeText(res.ticket)
-            toast.success(`Called #${res.ticket.queueNumber}${purpose ? ` • ${purpose}` : ""}`)
+            toast.success(
+                `Called #${res.ticket.queueNumber}${purpose ? ` • ${purpose}` : ""}`
+            )
 
-            announceCall(res.ticket.queueNumber)
+            if (typeof res.ticket.queueNumber === "number") {
+                announceCall(res.ticket.queueNumber)
+            }
 
             if (autoSmsOnCall && SMS_SENDING_AVAILABLE) {
-                await sendCalledSms(res.ticket, { toastOnSuccess: true, senderName: resolvedSenderName || undefined })
+                await sendCalledSms(res.ticket, {
+                    toastOnSuccess: true,
+                    senderName: resolvedSenderName || undefined,
+                })
             }
 
             await refresh()
@@ -641,7 +1414,7 @@ export default function StaffServingPage() {
         if (!current?._id) return
         setBusy(true)
         try {
-            await staffApi.markServed(current._id)
+            await staffServingApi.markServed(current._id)
             toast.success(`Marked #${current.queueNumber} as served.`)
             await refresh()
         } catch (e: any) {
@@ -655,11 +1428,11 @@ export default function StaffServingPage() {
         if (!current?._id) return
         setBusy(true)
         try {
-            const res = await staffApi.holdNoShow(current._id)
+            const res = await staffServingApi.holdNoShow(current._id)
             toast.success(
-                res.ticket.status === "OUT"
+                res.ticket?.status === "OUT"
                     ? `Ticket #${current.queueNumber} is OUT.`
-                    : `Ticket #${current.queueNumber} moved to HOLD.`,
+                    : `Ticket #${current.queueNumber} moved to HOLD.`
             )
             await refresh()
         } catch (e: any) {
@@ -692,7 +1465,12 @@ export default function StaffServingPage() {
     }
 
     return (
-        <DashboardLayout title="Now Serving" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+        <DashboardLayout
+            title="Now Serving"
+            navItems={STAFF_NAV_ITEMS}
+            user={dashboardUser}
+            activePath={location.pathname}
+        >
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 <Card className="min-w-0">
                     <StaffServingControlPanel
