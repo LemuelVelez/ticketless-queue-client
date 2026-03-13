@@ -17,19 +17,73 @@ import {
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import {
-    studentApi,
-    type Department,
-    type Ticket as TicketType,
-    type TicketDetails,
-} from "@/api/student"
+import { API_PATHS } from "@/api/api"
+import { getParticipantUser } from "@/lib/auth"
 import { api } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+
+type AnyRecord = Record<string, unknown>
+
+type Department = {
+    _id: string
+    id?: string
+    name: string
+    code?: string
+    [key: string]: unknown
+}
+
+type TicketType = {
+    _id: string
+    id?: string
+    queueNumber: number | string
+    status?: string
+    dateKey?: string
+    calledAt?: string | null
+    windowNumber?: number | null
+    studentId?: string
+    department?:
+        | string
+        | {
+              _id?: string
+              id?: string
+              name?: string
+              code?: string
+          }
+        | null
+    [key: string]: unknown
+}
+
+type TicketDetails = {
+    departmentId?: string
+    departmentName?: string
+    departmentCode?: string
+    participantTypeLabel?: string
+    officeLabel?: string
+    transactionManager?: string
+    windowName?: string
+    windowNumber?: number | string | null
+    staffName?: string
+    servedDepartments?: string[]
+    transactionLabels?: string[]
+    whereToGo?: string
+    [key: string]: unknown
+}
+
+type TicketBundleResponse = {
+    ticket: TicketType | null
+    ticketDetails: TicketDetails | null
+}
 
 type DepartmentDisplayResponse = {
     dateKey: string
@@ -50,17 +104,82 @@ type DepartmentDisplayResponse = {
 }
 
 type SessionParticipant = {
+    id?: string
+    _id?: string
     firstName?: string
+    middleName?: string
     lastName?: string
+    name?: string
     studentId?: string
     tcNumber?: string
     mobileNumber?: string
     phone?: string
     departmentId?: string
+    departmentCode?: string
+}
+
+function isRecord(value: unknown): value is AnyRecord {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function getRecordValue(record: AnyRecord, key: string): unknown {
+    return record[key]
 }
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
+}
+
+function normalizeStringOrNumber(
+    value: unknown,
+): string | number | null | undefined {
+    if (value == null) return null
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? value : null
+    }
+    if (typeof value === "string") {
+        const clean = value.trim()
+        return clean ? clean : null
+    }
+    return null
+}
+
+function toStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    return value
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+}
+
+function looksLikeTicket(value: unknown): value is AnyRecord {
+    if (!isRecord(value)) return false
+    return Boolean(
+        getRecordValue(value, "queueNumber") != null ||
+            getRecordValue(value, "ticketNumber") != null ||
+            getRecordValue(value, "number") != null ||
+            getRecordValue(value, "status") != null ||
+            getRecordValue(value, "dateKey") != null ||
+            getRecordValue(value, "calledAt") != null ||
+            getRecordValue(value, "department") != null ||
+            getRecordValue(value, "ticketId") != null,
+    )
+}
+
+function looksLikeTicketDetails(value: unknown): value is AnyRecord {
+    if (!isRecord(value)) return false
+    return Boolean(
+        getRecordValue(value, "departmentName") != null ||
+            getRecordValue(value, "departmentCode") != null ||
+            getRecordValue(value, "departmentId") != null ||
+            getRecordValue(value, "windowName") != null ||
+            getRecordValue(value, "windowNumber") != null ||
+            getRecordValue(value, "staffName") != null ||
+            getRecordValue(value, "whereToGo") != null ||
+            getRecordValue(value, "officeLabel") != null ||
+            getRecordValue(value, "transactionManager") != null ||
+            getRecordValue(value, "transactionLabels") != null ||
+            getRecordValue(value, "servedDepartments") != null,
+    )
 }
 
 function deptNameFromTicketDepartment(dept: any, fallback?: string) {
@@ -130,18 +249,249 @@ function buildWindowLabel(params: {
     ticket?: TicketType | null
 }) {
     const windowName = pickNonEmptyString(params.details?.windowName)
-    const windowNo =
+    const detailsWindowNumber =
         params.details?.windowNumber != null
             ? Number(params.details.windowNumber)
-            : params.ticket?.windowNumber != null
-              ? Number(params.ticket.windowNumber)
-              : undefined
-
+            : undefined
+    const ticketWindowNumber =
+        params.ticket?.windowNumber != null
+            ? Number(params.ticket.windowNumber)
+            : undefined
+    const windowNo = detailsWindowNumber ?? ticketWindowNumber
     const hasNo = windowNo != null && Number.isFinite(windowNo) && windowNo > 0
+
     if (windowName && hasNo) return `${windowName} (Window ${windowNo})`
     if (windowName) return windowName
     if (hasNo) return `Window ${windowNo}`
     return ""
+}
+
+function normalizeDepartment(input: unknown): Department | null {
+    if (!isRecord(input)) return null
+
+    const id =
+        pickNonEmptyString(getRecordValue(input, "_id")) ||
+        pickNonEmptyString(getRecordValue(input, "id")) ||
+        pickNonEmptyString(getRecordValue(input, "departmentId"))
+    const name =
+        pickNonEmptyString(getRecordValue(input, "name")) ||
+        pickNonEmptyString(getRecordValue(input, "departmentName")) ||
+        pickNonEmptyString(getRecordValue(input, "label"))
+
+    if (!id || !name) return null
+
+    return {
+        ...input,
+        _id: id,
+        id,
+        name,
+        code:
+            pickNonEmptyString(getRecordValue(input, "code")) ||
+            pickNonEmptyString(getRecordValue(input, "departmentCode")) ||
+            undefined,
+    }
+}
+
+function extractDepartments(payload: unknown): Department[] {
+    const candidates: unknown[] = [payload]
+
+    if (isRecord(payload)) {
+        candidates.push(
+            getRecordValue(payload, "departments"),
+            getRecordValue(payload, "items"),
+            getRecordValue(payload, "results"),
+            getRecordValue(payload, "list"),
+            getRecordValue(payload, "rows"),
+            getRecordValue(payload, "data"),
+        )
+
+        const payloadData = getRecordValue(payload, "data")
+        if (isRecord(payloadData)) {
+            candidates.push(
+                getRecordValue(payloadData, "departments"),
+                getRecordValue(payloadData, "items"),
+                getRecordValue(payloadData, "results"),
+                getRecordValue(payloadData, "list"),
+                getRecordValue(payloadData, "rows"),
+            )
+        }
+    }
+
+    for (const candidate of candidates) {
+        if (!Array.isArray(candidate)) continue
+        const list = candidate
+            .map((item) => normalizeDepartment(item))
+            .filter(Boolean) as Department[]
+        if (list.length || candidate.length === 0) return list
+    }
+
+    return []
+}
+
+function normalizeTicket(input: unknown): TicketType | null {
+    if (!looksLikeTicket(input)) return null
+
+    const nestedTicket = isRecord(getRecordValue(input, "ticket"))
+        ? (getRecordValue(input, "ticket") as AnyRecord)
+        : null
+
+    const id =
+        pickNonEmptyString(getRecordValue(input, "_id")) ||
+        pickNonEmptyString(getRecordValue(input, "id")) ||
+        pickNonEmptyString(getRecordValue(input, "ticketId")) ||
+        pickNonEmptyString(nestedTicket?._id) ||
+        pickNonEmptyString(nestedTicket?.id)
+
+    const queueCandidate =
+        getRecordValue(input, "queueNumber") ??
+        getRecordValue(input, "ticketNumber") ??
+        getRecordValue(input, "number") ??
+        getRecordValue(input, "queue_no")
+    const queueString = String(queueCandidate ?? "").trim()
+    const queueNumber =
+        queueString && !Number.isNaN(Number(queueString))
+            ? Number(queueString)
+            : queueString || 0
+
+    const fallbackId = `ticket-${pickNonEmptyString(getRecordValue(input, "dateKey")) || "current"}-${String(
+        queueNumber || "unknown",
+    )}`
+
+    const departmentId = pickNonEmptyString(getRecordValue(input, "departmentId"))
+    const normalizedDepartment =
+        getRecordValue(input, "department") ??
+        (departmentId ? { _id: departmentId } : null)
+
+    const rawWindowNumber = getRecordValue(input, "windowNumber")
+    const rawCalledAt = getRecordValue(input, "calledAt")
+
+    return {
+        ...input,
+        _id: id || fallbackId,
+        id: id || fallbackId,
+        queueNumber,
+        status: pickNonEmptyString(getRecordValue(input, "status")) || undefined,
+        dateKey: pickNonEmptyString(getRecordValue(input, "dateKey")) || undefined,
+        calledAt:
+            rawCalledAt == null ? null : pickNonEmptyString(rawCalledAt) || null,
+        windowNumber:
+            rawWindowNumber == null || rawWindowNumber === ""
+                ? null
+                : Number(rawWindowNumber),
+        studentId:
+            pickNonEmptyString(getRecordValue(input, "studentId")) ||
+            pickNonEmptyString(getRecordValue(input, "tcNumber")) ||
+            undefined,
+        department: normalizedDepartment as TicketType["department"],
+    }
+}
+
+function normalizeTicketDetails(input: unknown): TicketDetails | null {
+    if (!looksLikeTicketDetails(input)) return null
+
+    const rawWindowNumber = getRecordValue(input, "windowNumber")
+
+    return {
+        ...input,
+        departmentId:
+            pickNonEmptyString(getRecordValue(input, "departmentId")) || undefined,
+        departmentName:
+            pickNonEmptyString(getRecordValue(input, "departmentName")) || undefined,
+        departmentCode:
+            pickNonEmptyString(getRecordValue(input, "departmentCode")) || undefined,
+        participantTypeLabel:
+            pickNonEmptyString(getRecordValue(input, "participantTypeLabel")) ||
+            undefined,
+        officeLabel:
+            pickNonEmptyString(getRecordValue(input, "officeLabel")) || undefined,
+        transactionManager:
+            pickNonEmptyString(getRecordValue(input, "transactionManager")) ||
+            undefined,
+        windowName:
+            pickNonEmptyString(getRecordValue(input, "windowName")) || undefined,
+        windowNumber: normalizeStringOrNumber(rawWindowNumber),
+        staffName:
+            pickNonEmptyString(getRecordValue(input, "staffName")) || undefined,
+        servedDepartments: toStringArray(getRecordValue(input, "servedDepartments")),
+        transactionLabels: toStringArray(getRecordValue(input, "transactionLabels")),
+        whereToGo:
+            pickNonEmptyString(getRecordValue(input, "whereToGo")) || undefined,
+    }
+}
+
+function resolveTicketBundle(candidate: unknown): TicketBundleResponse | null {
+    if (!candidate) return null
+
+    if (Array.isArray(candidate)) {
+        for (const item of candidate) {
+            const resolved = resolveTicketBundle(item)
+            if (resolved?.ticket) return resolved
+        }
+        return null
+    }
+
+    if (!isRecord(candidate)) return null
+
+    const directTicket = normalizeTicket(
+        getRecordValue(candidate, "ticket") ??
+            getRecordValue(candidate, "activeTicket") ??
+            getRecordValue(candidate, "currentTicket"),
+    )
+    const directDetails = normalizeTicketDetails(
+        getRecordValue(candidate, "ticketDetails") ??
+            getRecordValue(candidate, "details") ??
+            getRecordValue(candidate, "detail"),
+    )
+
+    if (directTicket || directDetails) {
+        return {
+            ticket: directTicket,
+            ticketDetails: directDetails,
+        }
+    }
+
+    if (looksLikeTicket(candidate)) {
+        return {
+            ticket: normalizeTicket(candidate),
+            ticketDetails: normalizeTicketDetails(
+                getRecordValue(candidate, "ticketDetails") ??
+                    getRecordValue(candidate, "details") ??
+                    getRecordValue(candidate, "detail"),
+            ),
+        }
+    }
+
+    const nestedCandidates: unknown[] = [
+        getRecordValue(candidate, "data"),
+        getRecordValue(candidate, "result"),
+        getRecordValue(candidate, "results"),
+        getRecordValue(candidate, "items"),
+        getRecordValue(candidate, "tickets"),
+        getRecordValue(candidate, "list"),
+        getRecordValue(candidate, "rows"),
+    ]
+
+    for (const next of nestedCandidates) {
+        const resolved = resolveTicketBundle(next)
+        if (resolved?.ticket) return resolved
+    }
+
+    return null
+}
+
+function extractTicketBundle(payload: unknown): TicketBundleResponse {
+    const resolved = resolveTicketBundle(payload)
+    if (resolved) {
+        return {
+            ticket: resolved.ticket ?? null,
+            ticketDetails: resolved.ticketDetails ?? null,
+        }
+    }
+
+    return {
+        ticket: null,
+        ticketDetails: null,
+    }
 }
 
 async function copyTextToClipboard(text: string) {
@@ -155,7 +505,6 @@ async function copyTextToClipboard(text: string) {
         await navigator.clipboard.writeText(clean)
         toast.success("Copied to clipboard.")
     } catch {
-        // Fallback
         try {
             const el = document.createElement("textarea")
             el.value = clean
@@ -188,7 +537,9 @@ function InfoRow({ icon, label, value, hint }: InfoRowProps) {
                 <span>{label}</span>
             </div>
             <div className="mt-1 truncate text-sm font-medium">{value}</div>
-            {hint ? <div className="mt-1 text-xs text-muted-foreground">{hint}</div> : null}
+            {hint ? (
+                <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+            ) : null}
         </div>
     )
 }
@@ -196,16 +547,30 @@ function InfoRow({ icon, label, value, hint }: InfoRowProps) {
 export default function StudentMyTicketsPage() {
     const location = useLocation()
 
-    const qs = React.useMemo(() => new URLSearchParams(location.search || ""), [location.search])
-    const preDeptId = React.useMemo(() => pickNonEmptyString(qs.get("departmentId")), [qs])
-    const preStudentId = React.useMemo(() => pickNonEmptyString(qs.get("studentId")), [qs])
-    const ticketId = React.useMemo(() => pickNonEmptyString(qs.get("ticketId") || qs.get("id")), [qs])
+    const qs = React.useMemo(
+        () => new URLSearchParams(location.search || ""),
+        [location.search],
+    )
+    const preDeptId = React.useMemo(
+        () => pickNonEmptyString(qs.get("departmentId")),
+        [qs],
+    )
+    const preStudentId = React.useMemo(
+        () => pickNonEmptyString(qs.get("studentId")),
+        [qs],
+    )
+    const ticketId = React.useMemo(
+        () => pickNonEmptyString(qs.get("ticketId") || qs.get("id")),
+        [qs],
+    )
 
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [departments, setDepartments] = React.useState<Department[]>([])
 
     const [loadingSession, setLoadingSession] = React.useState(true)
-    const [participant, setParticipant] = React.useState<SessionParticipant | null>(null)
+    const [participant, setParticipant] = React.useState<SessionParticipant | null>(
+        null,
+    )
     const [sessionDepartmentId, setSessionDepartmentId] = React.useState<string>("")
     const [sessionStudentId, setSessionStudentId] = React.useState<string>("")
 
@@ -213,24 +578,28 @@ export default function StudentMyTicketsPage() {
     const [studentId, setStudentId] = React.useState<string>(preStudentId)
 
     const [ticket, setTicket] = React.useState<TicketType | null>(null)
-    const [ticketDetails, setTicketDetails] = React.useState<TicketDetails | null>(null)
+    const [ticketDetails, setTicketDetails] = React.useState<TicketDetails | null>(
+        null,
+    )
     const [busy, setBusy] = React.useState(false)
 
-    // Public display preview state (department display)
     const [displayLoading, setDisplayLoading] = React.useState(false)
     const [displayDateKey, setDisplayDateKey] = React.useState<string>("")
     const [displayNowServing, setDisplayNowServing] =
         React.useState<DepartmentDisplayResponse["nowServing"]>(null)
-    const [displayUpNext, setDisplayUpNext] = React.useState<DepartmentDisplayResponse["upNext"]>([])
+    const [displayUpNext, setDisplayUpNext] = React.useState<
+        DepartmentDisplayResponse["upNext"]
+    >([])
 
     const selectedDept = React.useMemo(
         () => departments.find((d) => d._id === departmentId) || null,
         [departments, departmentId],
     )
 
-    // ✅ Student restriction: lock department after registration/profile sync (when not viewing a specific ticketId)
     const isDepartmentLocked = React.useMemo(() => {
-        return Boolean(!ticketId && participant && pickNonEmptyString(sessionDepartmentId))
+        return Boolean(
+            !ticketId && participant && pickNonEmptyString(sessionDepartmentId),
+        )
     }, [ticketId, participant, sessionDepartmentId])
 
     const isActiveTicket = React.useMemo(() => {
@@ -244,20 +613,21 @@ export default function StudentMyTicketsPage() {
         return Number(displayNowServing.queueNumber) === Number(ticket.queueNumber)
     }, [ticket, displayNowServing])
 
-    const loadSession = React.useCallback(async () => {
+    const loadSession = React.useCallback(() => {
         setLoadingSession(true)
-        try {
-            const res = await studentApi.getSession({})
-            const p = (res.participant ?? null) as SessionParticipant | null
-            setParticipant(p)
 
-            const sid = pickNonEmptyString(p?.tcNumber) || pickNonEmptyString(p?.studentId)
+        try {
+            const p = getParticipantUser<SessionParticipant>()
+            setParticipant(p ?? null)
+
+            const sid =
+                pickNonEmptyString(p?.tcNumber) ||
+                pickNonEmptyString(p?.studentId)
             const dept = pickNonEmptyString(p?.departmentId)
 
             setSessionStudentId(sid)
             setSessionDepartmentId(dept)
 
-            // Prefer profile context for normal view (not ticketId deep-link)
             if (!ticketId) {
                 if (sid) setStudentId(sid)
                 if (dept) setDepartmentId(dept)
@@ -274,11 +644,12 @@ export default function StudentMyTicketsPage() {
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
         try {
-            const res = await studentApi.listDepartments()
-            const list = res.departments ?? []
+            const res = await api.getData<unknown>(API_PATHS.departments.enabled, {
+                auth: false,
+            })
+            const list = extractDepartments(res)
             setDepartments(list)
 
-            // Initial department selection (final lock is handled by effect below)
             const canUsePre = preDeptId && list.some((d) => d._id === preDeptId)
             const next = canUsePre ? preDeptId : list[0]?._id ?? ""
             setDepartmentId((prev) => prev || next)
@@ -298,32 +669,43 @@ export default function StudentMyTicketsPage() {
 
             if (!departmentId || !sid) {
                 if (!silent) {
-                    toast.error("Unable to refresh ticket. Missing required ticket context.")
+                    toast.error(
+                        "Unable to refresh ticket. Missing required ticket context.",
+                    )
                 }
                 return
             }
 
-            // ✅ Abuse prevention: throttle refresh active ticket
-            const key = `qp:student:my-tickets:refresh-ticket:${departmentId}:${sid}`
-            const remaining = cooldownRemainingMs(key, 2500)
-            if (remaining > 0) {
-                if (!silent) toast.message(`Please wait ${Math.ceil(remaining / 1000)}s before refreshing again.`)
-                return
+            if (!silent) {
+                const key = `qp:student:my-tickets:refresh-ticket:${departmentId}:${sid}`
+                const remaining = cooldownRemainingMs(key, 2500)
+                if (remaining > 0) {
+                    toast.message(
+                        `Please wait ${Math.ceil(
+                            remaining / 1000,
+                        )}s before refreshing again.`,
+                    )
+                    return
+                }
+                writeNowTs(key)
             }
-            writeNowTs(key)
 
             setBusy(true)
             try {
-                const res = await studentApi.findActiveByStudent({
-                    departmentId,
-                    studentId: sid,
+                const res = await api.getData<unknown>(API_PATHS.tickets.recent, {
+                    params: {
+                        departmentId,
+                        studentId: sid,
+                        tcNumber: sid,
+                    },
                 })
 
-                setTicket(res.ticket ?? null)
-                setTicketDetails(res.ticketDetails ?? null)
+                const next = extractTicketBundle(res)
+                setTicket(next.ticket)
+                setTicketDetails(next.ticketDetails)
 
                 if (!silent) {
-                    if (res.ticket) {
+                    if (next.ticket) {
                         toast.success("Ticket refreshed.")
                     } else {
                         toast.message("No active ticket found for today.")
@@ -351,20 +733,26 @@ export default function StudentMyTicketsPage() {
 
             const silent = Boolean(opts?.silent)
 
-            // ✅ Abuse prevention: throttle display refresh to reduce flooding
-            const key = `qp:student:my-tickets:refresh-display:${departmentId}`
-            const remaining = cooldownRemainingMs(key, 2500)
-            if (remaining > 0) {
-                if (!silent) toast.message(`Please wait ${Math.ceil(remaining / 1000)}s before refreshing again.`)
-                return
+            if (!silent) {
+                const key = `qp:student:my-tickets:refresh-display:${departmentId}`
+                const remaining = cooldownRemainingMs(key, 2500)
+                if (remaining > 0) {
+                    toast.message(
+                        `Please wait ${Math.ceil(
+                            remaining / 1000,
+                        )}s before refreshing again.`,
+                    )
+                    return
+                }
+                writeNowTs(key)
             }
-            writeNowTs(key)
 
             if (!silent) setDisplayLoading(true)
             try {
-                const res = await api.get<DepartmentDisplayResponse>(`/display/${encodeURIComponent(departmentId)}`, {
-                    auth: false,
-                })
+                const res = await api.getData<DepartmentDisplayResponse>(
+                    `/display/${encodeURIComponent(departmentId)}`,
+                    { auth: false },
+                )
 
                 setDisplayDateKey(pickNonEmptyString(res?.dateKey))
                 setDisplayNowServing(res?.nowServing ?? null)
@@ -382,19 +770,28 @@ export default function StudentMyTicketsPage() {
 
     const loadTicketById = React.useCallback(async () => {
         if (!ticketId) return
+
         setBusy(true)
         try {
-            const res = await studentApi.getTicket(ticketId)
-            setTicket(res.ticket ?? null)
-            setTicketDetails(res.ticketDetails ?? null)
+            const res = await api.getData<unknown>(API_PATHS.tickets.byId(ticketId))
+            const next = extractTicketBundle(res)
 
-            const dept = (res.ticket as any)?.department
+            setTicket(next.ticket)
+            setTicketDetails(next.ticketDetails)
+
+            const dept = next.ticket?.department
             const deptIdFromTicket =
-                typeof dept === "string" ? dept : pickNonEmptyString(dept?._id) || pickNonEmptyString(dept?.id)
+                (typeof dept === "string" ? dept : "") ||
+                pickNonEmptyString((dept as any)?._id) ||
+                pickNonEmptyString((dept as any)?.id) ||
+                pickNonEmptyString(next.ticketDetails?.departmentId)
 
             if (deptIdFromTicket) setDepartmentId(deptIdFromTicket)
 
-            const sid = pickNonEmptyString((res.ticket as any)?.studentId)
+            const sid =
+                pickNonEmptyString((next.ticket as any)?.studentId) ||
+                pickNonEmptyString((next.ticket as any)?.tcNumber)
+
             if (sid) setStudentId(sid)
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load ticket.")
@@ -404,7 +801,7 @@ export default function StudentMyTicketsPage() {
     }, [ticketId])
 
     React.useEffect(() => {
-        void loadSession()
+        loadSession()
         void loadDepartments()
     }, [loadSession, loadDepartments])
 
@@ -413,13 +810,11 @@ export default function StudentMyTicketsPage() {
 
         const has = (id: string) => !!id && departments.some((d) => d._id === id)
 
-        // ✅ Student restriction: enforce locked profile department (normal view)
         if (isDepartmentLocked && has(sessionDepartmentId)) {
             setDepartmentId(sessionDepartmentId)
             return
         }
 
-        // otherwise keep valid current, or use preDeptId if valid, or fallback to first
         setDepartmentId((prev) => {
             if (has(prev)) return prev
             if (has(preDeptId)) return preDeptId
@@ -452,20 +847,29 @@ export default function StudentMyTicketsPage() {
     const joinUrl = React.useMemo(() => {
         const q = new URLSearchParams()
         if (effectiveJoinDeptId) q.set("departmentId", effectiveJoinDeptId)
-        if (effectiveJoinStudentId.trim()) q.set("studentId", effectiveJoinStudentId.trim())
+        if (effectiveJoinStudentId.trim()) {
+            q.set("studentId", effectiveJoinStudentId.trim())
+        }
         const qsStr = q.toString()
         return `/student/join${qsStr ? `?${qsStr}` : ""}`
     }, [effectiveJoinDeptId, effectiveJoinStudentId])
 
-    const windowLabel = React.useMemo(() => buildWindowLabel({ details: ticketDetails, ticket }), [ticketDetails, ticket])
+    const windowLabel = React.useMemo(
+        () => buildWindowLabel({ details: ticketDetails, ticket }),
+        [ticketDetails, ticket],
+    )
 
     const servedDepartmentsCompact = React.useMemo(() => {
-        const list = Array.isArray(ticketDetails?.servedDepartments) ? ticketDetails!.servedDepartments : []
+        const list = Array.isArray(ticketDetails?.servedDepartments)
+            ? ticketDetails.servedDepartments
+            : []
         return joinCompact(list, 8)
     }, [ticketDetails])
 
     const txCompact = React.useMemo(() => {
-        const list = Array.isArray(ticketDetails?.transactionLabels) ? ticketDetails!.transactionLabels : []
+        const list = Array.isArray(ticketDetails?.transactionLabels)
+            ? ticketDetails.transactionLabels
+            : []
         return joinCompact(list, 8)
     }, [ticketDetails])
 
@@ -473,19 +877,20 @@ export default function StudentMyTicketsPage() {
 
     const quickInstruction = React.useMemo(() => {
         if (primaryWhereToGo) return primaryWhereToGo
-        const base =
-            windowLabel
-                ? `Please proceed to ${windowLabel}.`
-                : "Please check the display monitor for your assigned window."
-        return base
+        return windowLabel
+            ? `Please proceed to ${windowLabel}.`
+            : "Please check the display monitor for your assigned window."
     }, [primaryWhereToGo, windowLabel])
 
     const copyPayload = React.useMemo(() => {
         if (!ticket) return ""
+
         const parts = [
-            `Queue Ticket`,
+            "Queue Ticket",
             `Queue #: ${ticket.queueNumber}`,
-            ticketDetails?.participantTypeLabel ? `Type: ${ticketDetails.participantTypeLabel}` : "",
+            ticketDetails?.participantTypeLabel
+                ? `Type: ${ticketDetails.participantTypeLabel}`
+                : "",
             ticketDetails?.departmentName
                 ? ticketDetails.departmentCode
                     ? `Department: ${ticketDetails.departmentName} (${ticketDetails.departmentCode})`
@@ -493,14 +898,20 @@ export default function StudentMyTicketsPage() {
                 : ticketDeptName
                   ? `Department: ${ticketDeptName}`
                   : "",
-            ticketDetails?.officeLabel ? `Office: ${ticketDetails.officeLabel}` : "",
-            windowLabel ? `Window: ${windowLabel}` : "",
-            ticketDetails?.staffName ? `Staff in charge: ${ticketDetails.staffName}` : "",
-            Array.isArray(ticketDetails?.transactionLabels) && ticketDetails!.transactionLabels.length
-                ? `Transactions: ${ticketDetails!.transactionLabels.join(", ")}`
+            ticketDetails?.officeLabel
+                ? `Office: ${ticketDetails.officeLabel}`
                 : "",
-            Array.isArray(ticketDetails?.servedDepartments) && ticketDetails!.servedDepartments.length
-                ? `Serves: ${ticketDetails!.servedDepartments.join(", ")}`
+            windowLabel ? `Window: ${windowLabel}` : "",
+            ticketDetails?.staffName
+                ? `Staff in charge: ${ticketDetails.staffName}`
+                : "",
+            Array.isArray(ticketDetails?.transactionLabels) &&
+            ticketDetails.transactionLabels.length
+                ? `Transactions: ${ticketDetails.transactionLabels.join(", ")}`
+                : "",
+            Array.isArray(ticketDetails?.servedDepartments) &&
+            ticketDetails.servedDepartments.length
+                ? `Serves: ${ticketDetails.servedDepartments.join(", ")}`
                 : "",
             `Status: ${String(ticket.status || "").toUpperCase()}`,
             ticket.calledAt ? `Called at: ${fmtTime(ticket.calledAt)}` : "",
@@ -509,6 +920,7 @@ export default function StudentMyTicketsPage() {
         ]
             .map((x) => String(x || "").trim())
             .filter(Boolean)
+
         return parts.join("\n")
     }, [ticket, ticketDetails, ticketDeptName, windowLabel, quickInstruction])
 
@@ -523,7 +935,8 @@ export default function StudentMyTicketsPage() {
                         My Tickets
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        View your queue status and your exact “where to go” instructions (window, staff, and transactions).
+                        View your queue status and your exact “where to go”
+                        instructions (window, staff, and transactions).
                     </p>
                 </div>
 
@@ -537,18 +950,27 @@ export default function StudentMyTicketsPage() {
                                         Queue Display & Join Queue
                                     </CardTitle>
                                     <CardDescription>
-                                        Join queue and view the live department queue board preview.
+                                        Join queue and view the live department queue
+                                        board preview.
                                     </CardDescription>
                                     <div className="flex flex-wrap items-center gap-2 pt-2">
                                         {loadingSession ? (
                                             <Skeleton className="h-5 w-28" />
                                         ) : participant ? (
                                             <>
-                                                <Badge variant="secondary">Profile synced</Badge>
-                                                {isDepartmentLocked ? <Badge variant="secondary">Department locked</Badge> : null}
+                                                <Badge variant="secondary">
+                                                    Profile synced
+                                                </Badge>
+                                                {isDepartmentLocked ? (
+                                                    <Badge variant="secondary">
+                                                        Department locked
+                                                    </Badge>
+                                                ) : null}
                                             </>
                                         ) : (
-                                            <Badge variant="outline">Guest mode</Badge>
+                                            <Badge variant="outline">
+                                                Guest mode
+                                            </Badge>
                                         )}
                                     </div>
                                 </div>
@@ -556,8 +978,16 @@ export default function StudentMyTicketsPage() {
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                     <Button
                                         variant="outline"
-                                        onClick={() => void loadDepartmentDisplay({ silent: false })}
-                                        disabled={displayLoading || !departmentId || loadingDepts}
+                                        onClick={() =>
+                                            void loadDepartmentDisplay({
+                                                silent: false,
+                                            })
+                                        }
+                                        disabled={
+                                            displayLoading ||
+                                            !departmentId ||
+                                            loadingDepts
+                                        }
                                         className="w-full gap-2 sm:w-auto"
                                     >
                                         <RefreshCw className="h-4 w-4" />
@@ -579,17 +1009,24 @@ export default function StudentMyTicketsPage() {
                             ) : (
                                 <>
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <Badge variant="outline">Date: {displayDateKey || "—"}</Badge>
+                                        <Badge variant="outline">
+                                            Date: {displayDateKey || "—"}
+                                        </Badge>
                                         {isDepartmentLocked && selectedDept ? (
-                                            <Badge variant="secondary">Department: {selectedDept.name}</Badge>
+                                            <Badge variant="secondary">
+                                                Department: {selectedDept.name}
+                                            </Badge>
                                         ) : null}
                                     </div>
 
                                     {isActiveTicket ? (
                                         <div className="rounded-lg border bg-muted p-4 text-sm">
-                                            <div className="font-medium">Active queue detected</div>
+                                            <div className="font-medium">
+                                                Active queue detected
+                                            </div>
                                             <div className="mt-1 text-muted-foreground">
-                                                New ticket generation is blocked while you have an active ticket.
+                                                New ticket generation is blocked
+                                                while you have an active ticket.
                                             </div>
                                         </div>
                                     ) : null}
@@ -599,10 +1036,15 @@ export default function StudentMyTicketsPage() {
                                         className="w-full gap-2 sm:w-auto"
                                         onClick={
                                             isActiveTicket
-                                                ? () => toast.message("Join Queue is blocked while you have an active ticket.")
+                                                ? () =>
+                                                      toast.message(
+                                                          "Join Queue is blocked while you have an active ticket.",
+                                                      )
                                                 : undefined
                                         }
-                                        {...(isActiveTicket ? { "aria-disabled": true } : {})}
+                                        {...(isActiveTicket
+                                            ? { "aria-disabled": true }
+                                            : {})}
                                     >
                                         {isActiveTicket ? (
                                             <span className="inline-flex items-center gap-2">
@@ -631,9 +1073,14 @@ export default function StudentMyTicketsPage() {
                                     ) : (
                                         <Card className="overflow-hidden">
                                             <CardHeader>
-                                                <CardTitle>Public Queue Board Preview</CardTitle>
+                                                <CardTitle>
+                                                    Public Queue Board Preview
+                                                </CardTitle>
                                                 <CardDescription>
-                                                    This mirrors the participant-facing queue board: now serving and up next.
+                                                    This mirrors the
+                                                    participant-facing queue
+                                                    board: now serving and up
+                                                    next.
                                                 </CardDescription>
                                             </CardHeader>
 
@@ -645,26 +1092,47 @@ export default function StudentMyTicketsPage() {
                                                                 <div className="text-sm uppercase tracking-widest text-muted-foreground">
                                                                     Now serving
                                                                 </div>
-                                                                {displayNowServing ? <Badge>CALLED</Badge> : <Badge variant="secondary">—</Badge>}
+                                                                {displayNowServing ? (
+                                                                    <Badge>
+                                                                        CALLED
+                                                                    </Badge>
+                                                                ) : (
+                                                                    <Badge variant="secondary">
+                                                                        —
+                                                                    </Badge>
+                                                                )}
                                                             </div>
 
                                                             <div className="mt-4">
                                                                 {displayNowServing ? (
                                                                     <>
                                                                         <div className="text-6xl font-semibold leading-none tracking-tight sm:text-7xl">
-                                                                            #{displayNowServing.queueNumber}
+                                                                            #
+                                                                            {
+                                                                                displayNowServing.queueNumber
+                                                                            }
                                                                         </div>
                                                                         <div className="mt-4 text-sm text-muted-foreground">
                                                                             Window:{" "}
-                                                                            {displayNowServing.windowNumber ? `#${displayNowServing.windowNumber}` : "—"}
+                                                                            {displayNowServing.windowNumber
+                                                                                ? `#${displayNowServing.windowNumber}`
+                                                                                : "—"}
                                                                         </div>
                                                                         <div className="text-sm text-muted-foreground">
-                                                                            Called at: {fmtTime(displayNowServing.calledAt)}
+                                                                            Called
+                                                                            at:{" "}
+                                                                            {fmtTime(
+                                                                                displayNowServing.calledAt,
+                                                                            )}
                                                                         </div>
                                                                     </>
                                                                 ) : (
                                                                     <div className="rounded-lg border bg-background p-6 text-sm text-muted-foreground">
-                                                                        No ticket is currently being called.
+                                                                        No ticket
+                                                                        is
+                                                                        currently
+                                                                        being
+                                                                        called.
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -677,26 +1145,56 @@ export default function StudentMyTicketsPage() {
                                                                 <div className="text-sm uppercase tracking-widest text-muted-foreground">
                                                                     Up next
                                                                 </div>
-                                                                <Badge variant="secondary">{displayUpNext.length}</Badge>
+                                                                <Badge variant="secondary">
+                                                                    {
+                                                                        displayUpNext.length
+                                                                    }
+                                                                </Badge>
                                                             </div>
 
-                                                            {displayUpNext.length === 0 ? (
+                                                            {displayUpNext.length ===
+                                                            0 ? (
                                                                 <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                                    No waiting tickets.
+                                                                    No waiting
+                                                                    tickets.
                                                                 </div>
                                                             ) : (
                                                                 <div className="grid gap-3">
-                                                                    {displayUpNext.slice(0, 8).map((t, idx) => (
-                                                                        <div
-                                                                            key={t.id}
-                                                                            className="flex items-center justify-between rounded-xl border p-4"
-                                                                        >
-                                                                            <div className="text-2xl font-semibold">#{t.queueNumber}</div>
-                                                                            <Badge variant={idx === 0 ? "default" : "secondary"}>
-                                                                                {idx === 0 ? "Next" : "Waiting"}
-                                                                            </Badge>
-                                                                        </div>
-                                                                    ))}
+                                                                    {displayUpNext
+                                                                        .slice(0, 8)
+                                                                        .map(
+                                                                            (
+                                                                                t,
+                                                                                idx,
+                                                                            ) => (
+                                                                                <div
+                                                                                    key={
+                                                                                        t.id
+                                                                                    }
+                                                                                    className="flex items-center justify-between rounded-xl border p-4"
+                                                                                >
+                                                                                    <div className="text-2xl font-semibold">
+                                                                                        #
+                                                                                        {
+                                                                                            t.queueNumber
+                                                                                        }
+                                                                                    </div>
+                                                                                    <Badge
+                                                                                        variant={
+                                                                                            idx ===
+                                                                                            0
+                                                                                                ? "default"
+                                                                                                : "secondary"
+                                                                                        }
+                                                                                    >
+                                                                                        {idx ===
+                                                                                        0
+                                                                                            ? "Next"
+                                                                                            : "Waiting"}
+                                                                                    </Badge>
+                                                                                </div>
+                                                                            ),
+                                                                        )}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -717,14 +1215,20 @@ export default function StudentMyTicketsPage() {
                                     <div className="min-w-0">
                                         <CardTitle>Active Ticket</CardTitle>
                                         <CardDescription>
-                                            Your queue details and exactly which window to go to (Student / Alumni / Guest).
+                                            Your queue details and exactly which
+                                            window to go to (Student / Alumni /
+                                            Guest).
                                         </CardDescription>
                                     </div>
 
                                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                                         <Button
                                             variant="outline"
-                                            onClick={() => void copyTextToClipboard(copyPayload)}
+                                            onClick={() =>
+                                                void copyTextToClipboard(
+                                                    copyPayload,
+                                                )
+                                            }
                                             disabled={!copyPayload}
                                             className="w-full gap-2 sm:w-auto"
                                         >
@@ -734,8 +1238,16 @@ export default function StudentMyTicketsPage() {
 
                                         <Button
                                             variant="outline"
-                                            onClick={() => void findActive({ silent: false })}
-                                            disabled={busy || !departmentId || !studentId.trim()}
+                                            onClick={() =>
+                                                void findActive({
+                                                    silent: false,
+                                                })
+                                            }
+                                            disabled={
+                                                busy ||
+                                                !departmentId ||
+                                                !studentId.trim()
+                                            }
                                             className="w-full gap-2 sm:w-auto"
                                         >
                                             <RefreshCw className="h-4 w-4" />
@@ -749,30 +1261,66 @@ export default function StudentMyTicketsPage() {
                                 <div className="rounded-2xl border bg-muted p-6">
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                         <div className="min-w-0">
-                                            <div className="text-sm text-muted-foreground">Department</div>
+                                            <div className="text-sm text-muted-foreground">
+                                                Department
+                                            </div>
                                             <div className="truncate text-lg font-medium">
-                                                {pickNonEmptyString(ticketDetails?.departmentName) || ticketDeptName}
-                                                {pickNonEmptyString(ticketDetails?.departmentCode)
-                                                    ? ` (${pickNonEmptyString(ticketDetails?.departmentCode)})`
+                                                {pickNonEmptyString(
+                                                    ticketDetails?.departmentName,
+                                                ) || ticketDeptName}
+                                                {pickNonEmptyString(
+                                                    ticketDetails?.departmentCode,
+                                                )
+                                                    ? ` (${pickNonEmptyString(
+                                                          ticketDetails?.departmentCode,
+                                                      )})`
                                                     : ""}
                                             </div>
                                             <div className="mt-1 flex flex-wrap items-center gap-2">
-                                                {pickNonEmptyString(ticketDetails?.participantTypeLabel) ? (
-                                                    <Badge variant="secondary">{pickNonEmptyString(ticketDetails?.participantTypeLabel)}</Badge>
+                                                {pickNonEmptyString(
+                                                    ticketDetails?.participantTypeLabel,
+                                                ) ? (
+                                                    <Badge variant="secondary">
+                                                        {pickNonEmptyString(
+                                                            ticketDetails?.participantTypeLabel,
+                                                        )}
+                                                    </Badge>
                                                 ) : null}
-                                                {pickNonEmptyString(ticketDetails?.officeLabel) ? (
-                                                    <Badge variant="outline">{pickNonEmptyString(ticketDetails?.officeLabel)}</Badge>
-                                                ) : pickNonEmptyString(ticketDetails?.transactionManager) ? (
-                                                    <Badge variant="outline">{pickNonEmptyString(ticketDetails?.transactionManager)}</Badge>
+                                                {pickNonEmptyString(
+                                                    ticketDetails?.officeLabel,
+                                                ) ? (
+                                                    <Badge variant="outline">
+                                                        {pickNonEmptyString(
+                                                            ticketDetails?.officeLabel,
+                                                        )}
+                                                    </Badge>
+                                                ) : pickNonEmptyString(
+                                                      ticketDetails?.transactionManager,
+                                                  ) ? (
+                                                    <Badge variant="outline">
+                                                        {pickNonEmptyString(
+                                                            ticketDetails?.transactionManager,
+                                                        )}
+                                                    </Badge>
                                                 ) : null}
                                             </div>
                                         </div>
 
                                         <div className="flex items-center gap-2">
-                                            <Badge variant={statusBadgeVariant(ticket.status) as any}>
-                                                {String(ticket.status || "").toUpperCase()}
+                                            <Badge
+                                                variant={
+                                                    statusBadgeVariant(
+                                                        ticket.status,
+                                                    ) as any
+                                                }
+                                            >
+                                                {String(
+                                                    ticket.status || "",
+                                                ).toUpperCase()}
                                             </Badge>
-                                            <Badge variant="secondary">{ticket.dateKey}</Badge>
+                                            <Badge variant="secondary">
+                                                {ticket.dateKey || "—"}
+                                            </Badge>
                                         </div>
                                     </div>
 
@@ -780,15 +1328,26 @@ export default function StudentMyTicketsPage() {
 
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                                         <div>
-                                            <div className="text-sm text-muted-foreground">Queue Number</div>
-                                            <div className="mt-1 text-6xl font-semibold tracking-tight">#{ticket.queueNumber}</div>
+                                            <div className="text-sm text-muted-foreground">
+                                                Queue Number
+                                            </div>
+                                            <div className="mt-1 text-6xl font-semibold tracking-tight">
+                                                #{ticket.queueNumber}
+                                            </div>
                                             <div className="mt-2 text-sm text-muted-foreground">
-                                                Called at: {fmtTime(ticket.calledAt || displayNowServing?.calledAt)}
+                                                Called at:{" "}
+                                                {fmtTime(
+                                                    ticket.calledAt ||
+                                                        displayNowServing?.calledAt,
+                                                )}
                                             </div>
                                         </div>
 
                                         <div className="text-sm text-muted-foreground">
-                                            Ticket ID: <span className="font-mono">{ticket._id}</span>
+                                            Ticket ID:{" "}
+                                            <span className="font-mono">
+                                                {ticket._id}
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
@@ -798,8 +1357,14 @@ export default function StudentMyTicketsPage() {
                                         <div className="min-w-0">
                                             <div className="flex items-center gap-2">
                                                 <MapPin className="h-4 w-4 text-muted-foreground" />
-                                                <div className="text-sm font-semibold">Where to go</div>
-                                                {isBeingCalledNow ? <Badge>YOU ARE BEING CALLED</Badge> : null}
+                                                <div className="text-sm font-semibold">
+                                                    Where to go
+                                                </div>
+                                                {isBeingCalledNow ? (
+                                                    <Badge>
+                                                        YOU ARE BEING CALLED
+                                                    </Badge>
+                                                ) : null}
                                             </div>
                                             <div className="mt-2 text-sm leading-relaxed text-muted-foreground">
                                                 {quickInstruction}
@@ -809,8 +1374,15 @@ export default function StudentMyTicketsPage() {
                                         <div className="flex w-full flex-col gap-2 sm:w-auto">
                                             <Button
                                                 variant="outline"
-                                                onClick={() => void loadDepartmentDisplay({ silent: false })}
-                                                disabled={displayLoading || !departmentId}
+                                                onClick={() =>
+                                                    void loadDepartmentDisplay({
+                                                        silent: false,
+                                                    })
+                                                }
+                                                disabled={
+                                                    displayLoading ||
+                                                    !departmentId
+                                                }
                                                 className="w-full gap-2 sm:w-auto"
                                             >
                                                 <RefreshCw className="h-4 w-4" />
@@ -825,7 +1397,11 @@ export default function StudentMyTicketsPage() {
                                         <InfoRow
                                             icon={<DoorOpen className="h-4 w-4" />}
                                             label="Window"
-                                            value={windowLabel ? windowLabel : "Check display monitor"}
+                                            value={
+                                                windowLabel
+                                                    ? windowLabel
+                                                    : "Check display monitor"
+                                            }
                                             hint={
                                                 !windowLabel
                                                     ? "Window assignment may appear when your ticket is called."
@@ -836,11 +1412,17 @@ export default function StudentMyTicketsPage() {
                                         <InfoRow
                                             icon={<Users className="h-4 w-4" />}
                                             label="Staff in charge"
-                                            value={pickNonEmptyString(ticketDetails?.staffName) || "—"}
+                                            value={
+                                                pickNonEmptyString(
+                                                    ticketDetails?.staffName,
+                                                ) || "—"
+                                            }
                                         />
 
                                         <InfoRow
-                                            icon={<Building2 className="h-4 w-4" />}
+                                            icon={
+                                                <Building2 className="h-4 w-4" />
+                                            }
                                             label="Serves"
                                             value={servedDepartmentsCompact.text}
                                             hint={
@@ -851,15 +1433,27 @@ export default function StudentMyTicketsPage() {
                                         />
 
                                         <InfoRow
-                                            icon={<ClipboardList className="h-4 w-4" />}
+                                            icon={
+                                                <ClipboardList className="h-4 w-4" />
+                                            }
                                             label="Transactions"
                                             value={txCompact.text}
-                                            hint={txCompact.extra > 0 ? `+${txCompact.extra} more` : undefined}
+                                            hint={
+                                                txCompact.extra > 0
+                                                    ? `+${txCompact.extra} more`
+                                                    : undefined
+                                            }
                                         />
                                     </div>
 
-                                    {(Array.isArray(ticketDetails?.transactionLabels) && ticketDetails!.transactionLabels.length) ||
-                                    (Array.isArray(ticketDetails?.servedDepartments) && ticketDetails!.servedDepartments.length) ? (
+                                    {(Array.isArray(
+                                        ticketDetails?.transactionLabels,
+                                    ) &&
+                                        ticketDetails.transactionLabels.length) ||
+                                    (Array.isArray(
+                                        ticketDetails?.servedDepartments,
+                                    ) &&
+                                        ticketDetails.servedDepartments.length) ? (
                                         <>
                                             <Separator className="my-5" />
 
@@ -869,14 +1463,30 @@ export default function StudentMyTicketsPage() {
                                                         Your Transactions
                                                     </div>
                                                     <div className="mt-2 flex flex-wrap gap-2">
-                                                        {(ticketDetails?.transactionLabels || []).slice(0, 12).map((t) => (
-                                                            <Badge key={t} variant="secondary">
-                                                                {t}
-                                                            </Badge>
-                                                        ))}
-                                                        {(ticketDetails?.transactionLabels || []).length > 12 ? (
+                                                        {(
+                                                            ticketDetails?.transactionLabels ||
+                                                            []
+                                                        )
+                                                            .slice(0, 12)
+                                                            .map((t) => (
+                                                                <Badge
+                                                                    key={t}
+                                                                    variant="secondary"
+                                                                >
+                                                                    {t}
+                                                                </Badge>
+                                                            ))}
+                                                        {(
+                                                            ticketDetails?.transactionLabels ||
+                                                            []
+                                                        ).length > 12 ? (
                                                             <Badge variant="outline">
-                                                                +{(ticketDetails?.transactionLabels || []).length - 12} more
+                                                                +
+                                                                {(
+                                                                    ticketDetails?.transactionLabels ||
+                                                                    []
+                                                                ).length - 12}{" "}
+                                                                more
                                                             </Badge>
                                                         ) : null}
                                                     </div>
@@ -884,17 +1494,34 @@ export default function StudentMyTicketsPage() {
 
                                                 <div className="lg:col-span-6">
                                                     <div className="text-xs uppercase tracking-widest text-muted-foreground">
-                                                        Window Serves (Departments)
+                                                        Window Serves
+                                                        (Departments)
                                                     </div>
                                                     <div className="mt-2 flex flex-wrap gap-2">
-                                                        {(ticketDetails?.servedDepartments || []).slice(0, 12).map((d) => (
-                                                            <Badge key={d} variant="outline">
-                                                                {d}
-                                                            </Badge>
-                                                        ))}
-                                                        {(ticketDetails?.servedDepartments || []).length > 12 ? (
+                                                        {(
+                                                            ticketDetails?.servedDepartments ||
+                                                            []
+                                                        )
+                                                            .slice(0, 12)
+                                                            .map((d) => (
+                                                                <Badge
+                                                                    key={d}
+                                                                    variant="outline"
+                                                                >
+                                                                    {d}
+                                                                </Badge>
+                                                            ))}
+                                                        {(
+                                                            ticketDetails?.servedDepartments ||
+                                                            []
+                                                        ).length > 12 ? (
                                                             <Badge variant="outline">
-                                                                +{(ticketDetails?.servedDepartments || []).length - 12} more
+                                                                +
+                                                                {(
+                                                                    ticketDetails?.servedDepartments ||
+                                                                    []
+                                                                ).length - 12}{" "}
+                                                                more
                                                             </Badge>
                                                         ) : null}
                                                     </div>
@@ -911,13 +1538,24 @@ export default function StudentMyTicketsPage() {
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div className="min-w-0">
                                         <CardTitle>Active Ticket</CardTitle>
-                                        <CardDescription>Your active ticket will appear here once available.</CardDescription>
+                                        <CardDescription>
+                                            Your active ticket will appear here
+                                            once available.
+                                        </CardDescription>
                                     </div>
 
                                     <Button
                                         variant="outline"
-                                        onClick={() => void findActive({ silent: false })}
-                                        disabled={busy || !departmentId || !studentId.trim()}
+                                        onClick={() =>
+                                            void findActive({
+                                                silent: false,
+                                            })
+                                        }
+                                        disabled={
+                                            busy ||
+                                            !departmentId ||
+                                            !studentId.trim()
+                                        }
                                         className="w-full gap-2 sm:w-auto"
                                     >
                                         <RefreshCw className="h-4 w-4" />
