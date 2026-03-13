@@ -220,7 +220,6 @@ type RequestOptions = {
     signal?: AbortSignal
 }
 
-
 function isAbsoluteUrl(input: string) {
     const s = String(input ?? "").trim()
     return /^https?:\/\//i.test(s) || s.startsWith("//")
@@ -262,7 +261,6 @@ function normalizeDevHostname(hostname: string) {
     if (raw === "0.0.0.0" || raw === "::1") return "127.0.0.1"
     return raw
 }
-
 
 function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = String(value ?? "").trim().replace(/\/+$/, "")
@@ -395,6 +393,14 @@ function getSessionTokenHeaderValue(headers: Record<string, string>) {
     )
 }
 
+function hasAnyTokenAuthHeader(headers: Record<string, string>) {
+    return (
+        hasHeader(headers, "Authorization") ||
+        hasHeader(headers, "X-Session-Token") ||
+        hasHeader(headers, "X-SessionToken")
+    )
+}
+
 function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
     const mode: RequestAuthMode = auth === undefined ? "auto" : auth
 
@@ -512,12 +518,19 @@ function snippet(val: unknown, max = 220) {
 
 function resolveCredentials(
     url: string,
-    explicit?: RequestCredentials
+    explicit?: RequestCredentials,
+    headers?: Record<string, string>
 ): RequestCredentials {
     if (explicit) return explicit
 
     // In SSR / Node contexts, omit by default.
     if (typeof window === "undefined") return "omit"
+
+    // ✅ If we are already authenticating with token headers, do not also send cookies by default.
+    // This avoids stale cookie sessions overriding valid Bearer/X-Session-Token auth on same-origin APIs.
+    if (headers && hasAnyTokenAuthHeader(headers)) {
+        return "omit"
+    }
 
     // If API is same-origin, keep include (supports cookie-based admin/staff sessions if any).
     // If cross-origin, omit to avoid common CORS failures (wildcard origins + credentials is blocked by browsers).
@@ -701,7 +714,7 @@ export async function apiRequest<T>(
             headers: finalHeaders,
             body: finalBody,
             signal,
-            credentials: resolveCredentials(url, credentials),
+            credentials: resolveCredentials(url, credentials, finalHeaders),
         })
     } catch (err: any) {
         const msg = `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`
