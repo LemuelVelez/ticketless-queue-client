@@ -24,9 +24,27 @@ function encodeRouteParam(value: ApiRouteParam) {
     return encodeURIComponent(String(value ?? "").trim())
 }
 
+function inferLocalDevApiBaseUrl() {
+    if (typeof window === "undefined") return ""
+
+    const { protocol, hostname, port } = window.location
+    const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1"
+    const isFrontendDevPort =
+        port === "3000" || port === "3001" || port === "4173" || port === "5173"
+
+    if (!isLocalHost || !isFrontendDevPort) return ""
+
+    return `${protocol}//${hostname}:5000${API_PREFIX}`
+}
+
 function normalizeApiBaseUrl(value: string) {
     const base = stripTrailingSlash(String(value ?? "").trim())
-    if (!base) return API_PREFIX
+
+    if (!base || base === API_PREFIX) {
+        const inferred = inferLocalDevApiBaseUrl()
+        return inferred || API_PREFIX
+    }
+
     return /\/api$/i.test(base) ? base : `${base}${API_PREFIX}`
 }
 
@@ -77,6 +95,7 @@ export const API_PATHS = {
             `/audit-logs/actor/${encodeRouteParam(actorId)}`,
     },
     departments: {
+        list: "/departments",
         enabled: "/departments/enabled",
         byId: (id: ApiRouteParam) =>
             `/departments/${encodeRouteParam(id)}`,
@@ -86,11 +105,15 @@ export const API_PATHS = {
             )}`,
     },
     serviceWindows: {
+        list: "/service-windows",
         enabled: "/service-windows/enabled",
         byId: (id: ApiRouteParam) =>
             `/service-windows/${encodeRouteParam(id)}`,
         byDepartment: (departmentId: ApiRouteParam) =>
             `/service-windows/department/${encodeRouteParam(departmentId)}`,
+    },
+    transactionPurposes: {
+        list: "/transaction-purposes",
     },
     tickets: {
         recent: "/tickets/recent",
@@ -126,6 +149,7 @@ export const API_ROUTES = {
             toApiUrl(API_PATHS.auditLogs.byActor(actorId)),
     },
     departments: {
+        list: () => toApiUrl(API_PATHS.departments.list),
         enabled: () => toApiUrl(API_PATHS.departments.enabled),
         byId: (id: ApiRouteParam) => toApiUrl(API_PATHS.departments.byId(id)),
         byTransactionManager: (transactionManager: ApiRouteParam) =>
@@ -134,11 +158,15 @@ export const API_ROUTES = {
             ),
     },
     serviceWindows: {
+        list: () => toApiUrl(API_PATHS.serviceWindows.list),
         enabled: () => toApiUrl(API_PATHS.serviceWindows.enabled),
         byId: (id: ApiRouteParam) =>
             toApiUrl(API_PATHS.serviceWindows.byId(id)),
         byDepartment: (departmentId: ApiRouteParam) =>
             toApiUrl(API_PATHS.serviceWindows.byDepartment(departmentId)),
+    },
+    transactionPurposes: {
+        list: () => toApiUrl(API_PATHS.transactionPurposes.list),
     },
     tickets: {
         recent: () => toApiUrl(API_PATHS.tickets.recent),
