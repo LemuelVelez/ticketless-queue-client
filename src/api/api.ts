@@ -224,6 +224,7 @@ export const API_PATHS = {
             `/tickets/department/${encodeRouteParam(departmentId)}/active`,
     },
     reports: {
+        summary: "/reports/summary",
         timeseries: "/reports/timeseries",
     },
     users: {
@@ -294,6 +295,7 @@ export const API_ROUTES = {
             toApiUrl(API_PATHS.tickets.activeByDepartment(departmentId)),
     },
     reports: {
+        summary: () => toApiUrl(API_PATHS.reports.summary),
         timeseries: () => toApiUrl(API_PATHS.reports.timeseries),
     },
     users: {
