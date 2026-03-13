@@ -6,10 +6,10 @@ export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
 
-const LEGACY_API_PATH_ALIASES: Record<string, string> = {
-    "/admin/staff": "/users/staff",
-    "/admin/participants": "/users/participants",
-}
+const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
+    ["/admin/staff", "/users/staff"],
+    ["/admin/participants", "/users/participants"],
+]
 
 function stripTrailingSlash(value: string) {
     return String(value ?? "").replace(/\/+$/, "")
@@ -29,7 +29,15 @@ function stripApiPrefix(value: string) {
 
 function resolveLegacyApiPath(value: string) {
     const normalized = ensureLeadingSlash(value)
-    return LEGACY_API_PATH_ALIASES[normalized] || normalized
+
+    for (const [legacyPath, resolvedPath] of LEGACY_API_PATH_ALIASES) {
+        if (normalized === legacyPath) return resolvedPath
+        if (normalized.startsWith(`${legacyPath}/`)) {
+            return `${resolvedPath}${normalized.slice(legacyPath.length)}`
+        }
+    }
+
+    return normalized
 }
 
 function encodeRouteParam(value: ApiRouteParam) {
@@ -71,6 +79,24 @@ function isFrontendDevPort(port: string) {
     return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
 }
 
+function normalizeExplicitLocalDevApiBase(value: string) {
+    const raw = stripTrailingSlash(String(value ?? "").trim())
+    if (!raw || raw === API_PREFIX) return raw
+
+    try {
+        const url = new URL(raw)
+        if (!isLikelyLocalDevHostname(url.hostname)) return raw
+        if (!isFrontendDevPort(url.port)) return raw
+
+        const hostname = normalizeDevHostname(url.hostname)
+        if (!hostname) return raw
+
+        return `${url.protocol}//${hostname}:5000${API_PREFIX}`
+    } catch {
+        return raw
+    }
+}
+
 function inferBrowserDevApiBaseUrl() {
     if (typeof window === "undefined") return ""
 
@@ -88,9 +114,11 @@ function inferServerDevApiBaseUrl() {
     if (typeof window !== "undefined") return ""
 
     const explicitBase = stripTrailingSlash(
-        getRuntimeEnv("VITE_API_BASE_URL") ||
-            getRuntimeEnv("NEXT_PUBLIC_API_BASE_URL") ||
-            getRuntimeEnv("API_BASE_URL")
+        normalizeExplicitLocalDevApiBase(
+            getRuntimeEnv("VITE_API_BASE_URL") ||
+                getRuntimeEnv("NEXT_PUBLIC_API_BASE_URL") ||
+                getRuntimeEnv("API_BASE_URL")
+        )
     )
 
     if (explicitBase && explicitBase !== API_PREFIX) {
@@ -110,7 +138,8 @@ function inferLocalDevApiBaseUrl() {
 }
 
 function normalizeApiBaseUrl(value: string) {
-    const base = stripTrailingSlash(String(value ?? "").trim())
+    const normalizedInput = normalizeExplicitLocalDevApiBase(value)
+    const base = stripTrailingSlash(String(normalizedInput ?? "").trim())
 
     if (!base || base === API_PREFIX) {
         const inferred = inferLocalDevApiBaseUrl()
@@ -142,7 +171,7 @@ export function toApiUrl(path: string) {
     if (!raw) return getResolvedApiBaseUrl()
 
     if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) {
-        return raw
+        return normalizeApiBaseUrl(raw)
     }
 
     const apiPath = toApiPath(raw)
@@ -201,10 +230,18 @@ export const API_PATHS = {
         byStudentId: (studentId: ApiRouteParam) =>
             `/users/student/${encodeRouteParam(studentId)}`,
         staff: "/users/staff",
+        staffSendLogin: (id: ApiRouteParam) =>
+            `/users/staff/${encodeRouteParam(id)}/send-login`,
+        staffResendLogin: (id: ApiRouteParam) =>
+            `/users/staff/${encodeRouteParam(id)}/resend-login`,
         participants: "/users/participants",
     },
     admin: {
         staff: "/admin/staff",
+        staffSendLogin: (id: ApiRouteParam) =>
+            `/admin/staff/${encodeRouteParam(id)}/send-login`,
+        staffResendLogin: (id: ApiRouteParam) =>
+            `/admin/staff/${encodeRouteParam(id)}/resend-login`,
         participants: "/admin/participants",
     },
 } as const
@@ -258,10 +295,18 @@ export const API_ROUTES = {
         byStudentId: (studentId: ApiRouteParam) =>
             toApiUrl(API_PATHS.users.byStudentId(studentId)),
         staff: () => toApiUrl(API_PATHS.users.staff),
+        staffSendLogin: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.users.staffSendLogin(id)),
+        staffResendLogin: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.users.staffResendLogin(id)),
         participants: () => toApiUrl(API_PATHS.users.participants),
     },
     admin: {
         staff: () => toApiUrl(API_PATHS.admin.staff),
+        staffSendLogin: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.admin.staffSendLogin(id)),
+        staffResendLogin: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.admin.staffResendLogin(id)),
         participants: () => toApiUrl(API_PATHS.admin.participants),
     },
 } as const

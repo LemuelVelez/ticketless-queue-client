@@ -220,6 +220,8 @@ type RequestOptions = {
     signal?: AbortSignal
 }
 
+const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
+
 function isAbsoluteUrl(input: string) {
     const s = String(input ?? "").trim()
     return /^https?:\/\//i.test(s) || s.startsWith("//")
@@ -241,8 +243,52 @@ function getRuntimeEnv(name: string) {
     return String(env?.[name] ?? "").trim()
 }
 
-function normalizeApiOriginBase(value: string) {
+function isLikelyLocalDevHostname(hostname: string) {
+    const raw = String(hostname ?? "").trim().toLowerCase()
+    if (!raw) return false
+
+    if (raw === "localhost" || raw === "0.0.0.0" || raw === "::1") return true
+    if (raw.endsWith(".local")) return true
+    if (/^127(?:\.\d{1,3}){3}$/.test(raw)) return true
+    if (/^10(?:\.\d{1,3}){3}$/.test(raw)) return true
+    if (/^192\.168(?:\.\d{1,3}){2}$/.test(raw)) return true
+    if (/^172\.(1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}$/.test(raw)) return true
+
+    return false
+}
+
+function normalizeDevHostname(hostname: string) {
+    const raw = String(hostname ?? "").trim()
+    if (!raw) return ""
+    if (raw === "0.0.0.0" || raw === "::1") return "127.0.0.1"
+    return raw
+}
+
+function isFrontendDevPort(port: string) {
+    return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
+}
+
+function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = String(value ?? "").trim().replace(/\/+$/, "")
+    if (!raw || raw === API_PREFIX) return raw
+
+    try {
+        const url = new URL(raw)
+        if (!isLikelyLocalDevHostname(url.hostname)) return raw
+        if (!isFrontendDevPort(url.port)) return raw
+
+        const hostname = normalizeDevHostname(url.hostname)
+        if (!hostname) return raw
+
+        return `${url.protocol}//${hostname}:5000${API_PREFIX}`
+    } catch {
+        return raw
+    }
+}
+
+function normalizeApiOriginBase(value: string) {
+    const explicit = normalizeExplicitLocalDevApiBase(value)
+    const raw = String(explicit ?? "").trim().replace(/\/+$/, "")
     if (!raw || raw === API_PREFIX) return ""
     return /\/api$/i.test(raw) ? raw : `${raw}${API_PREFIX}`
 }
