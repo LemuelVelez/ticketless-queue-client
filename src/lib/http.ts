@@ -543,6 +543,32 @@ function resolveCredentials(
     }
 }
 
+function isBrowserSameOriginUrl(url: string) {
+    if (typeof window === "undefined") return false
+
+    try {
+        const resolved = new URL(url, window.location.origin)
+        return resolved.origin === window.location.origin
+    } catch {
+        return false
+    }
+}
+
+function canRetryUnauthorizedWithIncludedCredentials(
+    method: HttpMethod,
+    url: string,
+    explicit?: RequestCredentials,
+    headers?: Record<string, string>
+) {
+    if (typeof window === "undefined") return false
+    if (explicit) return false
+    if (method !== "GET") return false
+    if (!headers || !hasAnyTokenAuthHeader(headers)) return false
+    if (!isBrowserSameOriginUrl(url)) return false
+
+    return true
+}
+
 function formatServerReason(reason: unknown): string {
     const s = String(reason ?? "").trim()
     if (!s) return ""
@@ -706,6 +732,7 @@ export async function apiRequest<T>(
     }
 
     const url = buildUrl(withQuery(path, params))
+    const resolvedCredentials = resolveCredentials(url, credentials, finalHeaders)
 
     let res: Response
     try {
@@ -714,7 +741,7 @@ export async function apiRequest<T>(
             headers: finalHeaders,
             body: finalBody,
             signal,
-            credentials: resolveCredentials(url, credentials, finalHeaders),
+            credentials: resolvedCredentials,
         })
     } catch (err: any) {
         const msg = `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`
@@ -736,6 +763,29 @@ export async function apiRequest<T>(
         }
 
         throw new ApiError(msg, 0, err, { method, url, path })
+    }
+
+    if (
+        res.status === 401 &&
+        resolvedCredentials !== "include" &&
+        canRetryUnauthorizedWithIncludedCredentials(
+            method,
+            url,
+            credentials,
+            finalHeaders
+        )
+    ) {
+        try {
+            res = await fetch(url, {
+                method,
+                headers: finalHeaders,
+                body: finalBody,
+                signal,
+                credentials: "include",
+            })
+        } catch {
+            // keep original 401 response if fallback request cannot be made
+        }
     }
 
     const data = await parseResponseSafe(res)
