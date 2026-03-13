@@ -17,13 +17,13 @@ import {
     RefreshCw,
 } from "lucide-react"
 
+import { API_PATHS } from "@/api/api"
 import { api } from "@/lib/http"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { useSession } from "@/hooks/use-session"
-import { staffApi, type Ticket as LegacyTicket } from "@/api/staff"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -65,12 +65,7 @@ type TicketView = {
     [key: string]: any
 }
 
-/**
- * ✅ TicketLike now supports BOTH shapes:
- * - centralized TicketView (department is an object)
- * - legacy Ticket (department is string)
- */
-type TicketLike = TicketView | Partial<LegacyTicket>
+type TicketLike = TicketView | (Partial<TicketView> & Record<string, any>)
 
 type StaffQueueState = {
     serverTime: string
@@ -100,12 +95,60 @@ type DuplicateActivePair = {
     count: number
 }
 
-const POLL_MS = 2500 // ✅ 2.5s loop
+type AssignmentDepartment = {
+    id?: string
+    _id?: string
+    name?: string
+    code?: string
+}
+
+type AssignmentWindow = {
+    id?: string
+    _id?: string
+    name?: string
+    number?: number
+    departmentId?: string
+    department?: AssignmentDepartment
+}
+
+type StaffAssignmentResponse = {
+    departmentId?: string | null
+    assignedDepartmentIds?: string[] | null
+    handledDepartmentIds?: string[] | null
+    assignedDepartments?: AssignmentDepartment[] | null
+    handledDepartments?: AssignmentDepartment[] | null
+    window?: AssignmentWindow | null
+    [key: string]: unknown
+}
+
+type QueryValue = string | number | boolean | null | undefined
+
+const POLL_MS = 2500
 const LEADER_TTL_MS = 10_000
 
 const QUEUE_POLL_LEADER_KEY = "queuepass:staff:queue_poll_leader_v1"
 const QUEUE_SYNC_CHANNEL = "queuepass:staff:queue_state_sync_v1"
 const QUEUE_SYNC_SNAPSHOT_KEY = "queuepass:staff:queue_state_snapshot_v1"
+
+const STAFF_QUEUE_PATHS = {
+    assignment: ["/staff/assignment", "/staff/my-assignment"] as const,
+    state: "/staff/queue/state",
+    callNextCentral: "/staff/queue/call-next-central",
+    serve: "/staff/queue/serve",
+    hold: "/staff/queue/hold",
+    out: ["/staff/queue/out"] as const,
+    history: ["/staff/queue/history"] as const,
+    returnFromHold: [
+        "/staff/queue/return-from-hold",
+        "/staff/queue/return-hold",
+        "/staff/queue/hold/return",
+    ] as const,
+    displaySnapshot: [
+        "/display/snapshot-full",
+        "/display/snapshot",
+        "/staff/queue/display-snapshot",
+    ] as const,
+} as const
 
 function fmtTime(v?: string | null) {
     if (!v) return "—"
@@ -209,23 +252,15 @@ function composeName(parts: unknown[]) {
     return s
 }
 
-/**
- * ✅ Heuristic: detect if a field is likely a *human name* (not a participant type label).
- * This fixes cases where backend sends the full name via `participantLabel`.
- */
 function isLikelyHumanName(label: unknown, identifier?: string) {
     const s = String(label ?? "").trim()
     if (!s) return false
     if (identifier && s === String(identifier).trim()) return false
 
-    // Reject participant-type labels (robust to spacing/slashes)
     const typeKey = normalizeParticipantTypeKey(s)
     if (typeKey === "STUDENT" || typeKey === "ALUMNI_VISITOR" || typeKey === "GUEST") return false
 
-    // phone-like / numeric-heavy
     if (/^\+?\d[\d\s()-]{6,}$/.test(s)) return false
-
-    // must contain at least one letter
     if (!/[a-z]/i.test(s)) return false
 
     return true
@@ -240,7 +275,7 @@ function getDepartmentMeta(ticket: TicketLike) {
     const t = ticket as any
     const depObj = t?.department && typeof t.department === "object" ? t.department : null
 
-    const id = String(depObj?.id ?? t?.departmentId ?? t?.department ?? "").trim()
+    const id = String(depObj?.id ?? depObj?._id ?? t?.departmentId ?? t?.department ?? "").trim()
     const name = String(depObj?.name ?? t?.departmentName ?? "").trim()
     const code = String(depObj?.code ?? t?.departmentCode ?? "").trim()
     const transactionManager = String(depObj?.transactionManager ?? t?.transactionManager ?? "").trim()
@@ -258,7 +293,7 @@ function getWindowMeta(ticket: TicketLike) {
     const winObj = t?.window && typeof t.window === "object" ? t.window : null
     const number = Number(winObj?.number ?? t?.windowNumber ?? 0)
     const name = String(winObj?.name ?? t?.windowName ?? "").trim()
-    const id = String(winObj?.id ?? t?.windowId ?? t?.window ?? "").trim()
+    const id = String(winObj?.id ?? winObj?._id ?? t?.windowId ?? t?.window ?? "").trim()
 
     return {
         id,
@@ -272,7 +307,6 @@ function getParticipantName(ticket: TicketLike): string {
 
     const studentId = String(t?.participant?.studentId ?? t?.studentId ?? t?.tcNumber ?? "").trim()
 
-    // ✅ Pull from legacy/centralized fields (prefer full name)
     const fromSelections = firstNonEmptyFromArray(t?.transactionSelections, (x) => {
         const sid = String(x?.studentId ?? x?.participantStudentId ?? "").trim()
         const refId = sid || studentId
@@ -292,37 +326,27 @@ function getParticipantName(ticket: TicketLike): string {
     const metaLabelName = isLikelyHumanName(t?.meta?.participantLabel, studentId) ? String(t?.meta?.participantLabel ?? "").trim() : ""
 
     const name = firstNonEmptyText([
-        // ✅ legacy Ticket fields
         t?.participantFullName,
         t?.participant_full_name,
         t?.participantFullname,
-
-        // ✅ sometimes nested inside selections/transactions/meta
         fromSelections,
         t?.transactions?.participantFullName,
         txLabelName,
         t?.meta?.participantFullName,
         t?.meta?.participantName,
         metaLabelName,
-
-        // ✅ centralized TicketView / enriched participant object
         t?.participant?.fullName,
         t?.participant?.full_name,
         t?.participant?.fullname,
         t?.participant?.name,
-
-        // ✅ other common shapes
         t?.participantName,
         t?.__participantName,
         t?.user?.name,
         t?.name,
-
-        // ✅ root label sometimes contains the full name (fix)
         rootLabelName,
     ])
     if (name) return name
 
-    // ✅ Try composing from possible parts (if backend sends structured fields)
     const composed = composeName([
         t?.participant?.firstName,
         t?.participant?.middleName,
@@ -337,9 +361,6 @@ function getParticipantName(ticket: TicketLike): string {
     return composed || ""
 }
 
-/**
- * ✅ Ensure we ALWAYS have `participantFullName` for UI.
- */
 function normalizeTicketForDisplay<T>(ticket: T): T {
     if (!ticket || typeof ticket !== "object") return ticket
 
@@ -538,19 +559,6 @@ function safeErrorMessage(err: any, fallback: string) {
     return err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || fallback
 }
 
-/**
- * Unwraps:
- * 1) axios response -> response.data
- * 2) QueueManagementController envelope -> { ok:true, data: T } -> T
- * 3) other payloads -> as-is
- */
-function unwrapPayload<T>(value: any): T {
-    let v = value
-    if (v && typeof v === "object" && "data" in v) v = (v as any).data
-    if (v && typeof v === "object" && "ok" in v && "data" in v) v = (v as any).data
-    return v as T
-}
-
 function pad3(n: number) {
     const s = String(Math.max(0, Math.floor(n)))
     return s.length >= 3 ? s : s.padStart(3, "0")
@@ -608,6 +616,191 @@ function formatSeconds(ms: number) {
     return s.toFixed(1)
 }
 
+function normalizeString(value: unknown) {
+    if (typeof value !== "string") return ""
+    return value.trim()
+}
+
+function normalizeId(value: unknown) {
+    return String(value ?? "").trim()
+}
+
+function normalizeNumber(value: unknown) {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : 0
+}
+
+function uniqueNonEmpty(values: Array<unknown>) {
+    const out: string[] = []
+    const seen = new Set<string>()
+
+    for (const value of values) {
+        const clean = String(value ?? "").trim()
+        if (!clean || seen.has(clean)) continue
+        seen.add(clean)
+        out.push(clean)
+    }
+
+    return out
+}
+
+function toWindowName(value: AssignmentWindow | null | undefined, fallback?: string) {
+    const name = normalizeString(value?.name)
+    if (name) return name
+
+    const number = normalizeNumber(value?.number)
+    if (number > 0) return `Window ${number}`
+
+    return fallback || "Window"
+}
+
+function matchesAssignedWindow(win: AssignmentWindow, assignedWindow: string) {
+    const target = normalizeString(assignedWindow)
+    if (!target) return false
+
+    const targetLower = target.toLowerCase()
+    const winId = normalizeId(win?.id ?? win?._id)
+    const winName = normalizeString(win?.name)
+    const winNameLower = winName.toLowerCase()
+    const winNumber = normalizeNumber(win?.number)
+
+    if (winId && target === winId) return true
+    if (winName && targetLower === winNameLower) return true
+    if (winNumber > 0 && (target === String(winNumber) || targetLower === `window ${winNumber}`)) return true
+
+    return false
+}
+
+function matchesAssignedDepartment(dep: AssignmentDepartment, assignedDepartment: string) {
+    const target = normalizeString(assignedDepartment)
+    if (!target) return false
+
+    const targetLower = target.toLowerCase()
+
+    const depId = normalizeId(dep?.id ?? dep?._id)
+    const depName = normalizeString(dep?.name)
+    const depCode = normalizeString(dep?.code)
+
+    if (depId && target === depId) return true
+    if (depName && depName.toLowerCase() === targetLower) return true
+    if (depCode && depCode.toLowerCase() === targetLower) return true
+
+    return false
+}
+
+function extractCollection<T>(value: unknown, keys: string[] = []): T[] {
+    if (Array.isArray(value)) return value as T[]
+    if (!value || typeof value !== "object") return []
+
+    const record = value as Record<string, unknown>
+    const candidates = [
+        ...keys,
+        "items",
+        "rows",
+        "results",
+        "tickets",
+        "windows",
+        "serviceWindows",
+        "departments",
+        "data",
+    ]
+
+    for (const key of candidates) {
+        const candidate = record[key]
+        if (Array.isArray(candidate)) return candidate as T[]
+
+        if (candidate && typeof candidate === "object") {
+            const nested = candidate as Record<string, unknown>
+            for (const nestedKey of ["items", "rows", "results", "tickets", "data"]) {
+                if (Array.isArray(nested[nestedKey])) return nested[nestedKey] as T[]
+            }
+        }
+    }
+
+    return []
+}
+
+function extractTicketList(value: unknown): TicketLike[] {
+    return extractCollection<TicketLike>(value, ["tickets", "items", "results", "data"])
+}
+
+async function tryGetData<T>(
+    paths: readonly string[],
+    opts?: {
+        auth?: boolean | "staff" | "participant" | "auto"
+        params?: Record<string, QueryValue>
+    },
+) {
+    let lastError: unknown
+
+    for (const path of paths) {
+        try {
+            return await api.getData<T>(path, opts)
+        } catch (error) {
+            lastError = error
+        }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Request failed.")
+}
+
+async function tryPostData<T>(
+    paths: readonly string[],
+    body?: unknown,
+    opts?: {
+        auth?: boolean | "staff" | "participant" | "auto"
+        params?: Record<string, QueryValue>
+    },
+) {
+    let lastError: unknown
+
+    for (const path of paths) {
+        try {
+            return await api.postData<T>(path, body, opts)
+        } catch (error) {
+            lastError = error
+        }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Request failed.")
+}
+
+const staffQueueApi = {
+    myAssignment() {
+        return tryGetData<StaffAssignmentResponse>(STAFF_QUEUE_PATHS.assignment, {
+            auth: "staff",
+        })
+    },
+
+    listOut(params?: Record<string, QueryValue>) {
+        return tryGetData<unknown>(STAFF_QUEUE_PATHS.out, {
+            auth: "staff",
+            params,
+        })
+    },
+
+    listHistory(params?: Record<string, QueryValue>) {
+        return tryGetData<unknown>(STAFF_QUEUE_PATHS.history, {
+            auth: "staff",
+            params,
+        })
+    },
+
+    getDisplaySnapshot() {
+        return tryGetData<any>(STAFF_QUEUE_PATHS.displaySnapshot, {
+            auth: "staff",
+        })
+    },
+
+    returnFromHold(ticketId: string) {
+        return tryPostData<any>(
+            STAFF_QUEUE_PATHS.returnFromHold,
+            { ticketId },
+            { auth: "staff" },
+        )
+    },
+}
+
 export default function StaffQueuePage() {
     const location = useLocation()
     const { user: sessionUser } = useSession()
@@ -631,7 +824,6 @@ export default function StaffQueuePage() {
     const [queueState, setQueueState] = React.useState<StaffQueueState | null>(null)
     const [stateLoading, setStateLoading] = React.useState(false)
 
-    // ✅ Display snapshot (used to backfill participant FULL NAME for other windows)
     const [displaySnapshot, setDisplaySnapshot] = React.useState<any>(null)
 
     const [liveSync, setLiveSync] = React.useState(true)
@@ -662,7 +854,6 @@ export default function StaffQueuePage() {
         return departmentId ?? "—"
     }, [departmentId, departmentNames])
 
-    // -------- Voice announcement (Web Speech API) --------
     const [voiceEnabled, setVoiceEnabled] = React.useState(true)
     const [voiceSupported, setVoiceSupported] = React.useState(true)
     const voicesRef = React.useRef<SpeechSynthesisVoice[]>([])
@@ -797,7 +988,6 @@ export default function StaffQueuePage() {
         } as any)
     }, [announceTicket, queueState?.nowServing, windowInfo])
 
-    // -------- Central Audio Leader Election (per device) --------
     const AUDIO_LEADER_KEY = "queuepass:staff:audio_leader_v1"
     const claimAudioLeadership = React.useCallback(() => {
         try {
@@ -842,28 +1032,125 @@ export default function StaffQueuePage() {
         return () => window.clearInterval(iv)
     }, [centralAudio])
 
-    // -------- Unified (centralized) refresh --------
+    const resolveAssignmentFromSession = React.useCallback(async () => {
+        const assignedDepartmentValue = normalizeString(sessionUser?.assignedDepartment)
+        const assignedWindowValue = normalizeString(sessionUser?.assignedWindow)
+
+        if (!assignedDepartmentValue && !assignedWindowValue) return null
+
+        const [windowsRaw, departmentsRaw] = await Promise.all([
+            api.getData<any>(API_PATHS.serviceWindows.enabled, { auth: "staff" }).catch(() => null),
+            api.getData<any>(API_PATHS.departments.enabled, { auth: "staff" }).catch(() => null),
+        ])
+
+        const windows = extractCollection<AssignmentWindow>(windowsRaw, ["serviceWindows", "windows"])
+        const departments = extractCollection<AssignmentDepartment>(departmentsRaw, ["departments"])
+
+        const matchedWindow = assignedWindowValue
+            ? windows.find((win) => matchesAssignedWindow(win, assignedWindowValue)) ?? null
+            : null
+
+        const matchedDepartment = assignedDepartmentValue
+            ? departments.find((dep) => matchesAssignedDepartment(dep, assignedDepartmentValue)) ?? null
+            : null
+
+        const resolvedDepartmentId =
+            normalizeId(
+                matchedWindow?.departmentId ??
+                    matchedWindow?.department?.id ??
+                    matchedWindow?.department?._id ??
+                    matchedDepartment?.id ??
+                    matchedDepartment?._id,
+            ) || (assignedDepartmentValue ? assignedDepartmentValue : "")
+
+        const resolvedDepartmentNames = uniqueNonEmpty([
+            matchedDepartment?.name,
+            matchedWindow?.department?.name,
+            assignedDepartmentValue,
+        ])
+
+        const resolvedWindow = matchedWindow
+            ? {
+                  id: normalizeId(matchedWindow.id ?? matchedWindow._id),
+                  name: toWindowName(matchedWindow),
+                  number: normalizeNumber(matchedWindow.number),
+              }
+            : assignedWindowValue
+              ? {
+                    id: "",
+                    name: assignedWindowValue,
+                    number: normalizeNumber(
+                        assignedWindowValue.replace(/window\s*/i, ""),
+                    ),
+                }
+              : null
+
+        return {
+            departmentId: resolvedDepartmentId || null,
+            departmentNames: resolvedDepartmentNames,
+            window: resolvedWindow,
+        }
+    }, [sessionUser?.assignedDepartment, sessionUser?.assignedWindow])
+
     const fetchAssignment = React.useCallback(async () => {
-        const a = await staffApi.myAssignment()
+        try {
+            const a = await staffQueueApi.myAssignment()
 
-        const names = (a.assignedDepartments?.length ? a.assignedDepartments : a.handledDepartments ?? [])
-            .map((d) => String(d?.name ?? "").trim())
-            .filter(Boolean)
+            const names = uniqueNonEmpty([
+                ...(a.assignedDepartments ?? []).map((d) => d?.name),
+                ...(a.handledDepartments ?? []).map((d) => d?.name),
+                a.window?.department?.name,
+            ])
 
-        setDepartmentNames(names)
+            setDepartmentNames(names)
 
-        const firstAssignedDepartmentId: string | null = Array.isArray(a.assignedDepartmentIds) ? a.assignedDepartmentIds[0] ?? null : null
-        const firstHandledDepartmentId: string | null = Array.isArray(a.handledDepartmentIds) ? a.handledDepartmentIds[0] ?? null : null
+            const firstAssignedDepartmentId: string | null = Array.isArray(a.assignedDepartmentIds) ? a.assignedDepartmentIds[0] ?? null : null
+            const firstHandledDepartmentId: string | null = Array.isArray(a.handledDepartmentIds) ? a.handledDepartmentIds[0] ?? null : null
 
-        const resolvedDepartmentId: string | null = (a as any).departmentId ?? firstAssignedDepartmentId ?? firstHandledDepartmentId ?? null
+            const resolvedDepartmentId: string | null =
+                normalizeId(a.departmentId) ||
+                normalizeId(firstAssignedDepartmentId) ||
+                normalizeId(firstHandledDepartmentId) ||
+                normalizeId(a.window?.departmentId) ||
+                normalizeId(a.window?.department?.id) ||
+                normalizeId(a.window?.department?._id) ||
+                null
 
-        setDepartmentId(resolvedDepartmentId)
-        setWindowInfo(
-            a.window ? { id: String((a.window as any)._id ?? a.window.id), name: a.window.name, number: a.window.number } : null,
-        )
+            setDepartmentId(resolvedDepartmentId)
 
-        return { windowId: a.window ? String((a.window as any)._id ?? a.window.id ?? "").trim() : "" }
-    }, [])
+            setWindowInfo(
+                a.window
+                    ? {
+                          id: normalizeId((a.window as any)._id ?? a.window.id),
+                          name: toWindowName(a.window),
+                          number: normalizeNumber(a.window.number),
+                      }
+                    : null,
+            )
+
+            return {
+                windowId: a.window ? normalizeId((a.window as any)._id ?? a.window.id ?? "") : "",
+            }
+        } catch (error) {
+            const fallback = await resolveAssignmentFromSession()
+            if (fallback) {
+                setDepartmentId(fallback.departmentId)
+                setDepartmentNames(fallback.departmentNames)
+                setWindowInfo(
+                    fallback.window && fallback.window.id
+                        ? {
+                              id: fallback.window.id,
+                              name: fallback.window.name,
+                              number: fallback.window.number,
+                          }
+                        : null,
+                )
+                return { windowId: fallback.window?.id ?? "" }
+            }
+
+            throw error
+        }
+    }, [resolveAssignmentFromSession])
 
     const broadcastQueueState = React.useCallback(
         (payload: { ts: number; windowId: string; state: StaffQueueState }) => {
@@ -914,8 +1201,10 @@ export default function StaffQueuePage() {
             if (!opts?.silent) setStateLoading(true)
 
             try {
-                const raw = await api.get(`/staff/queue/state?windowId=${encodeURIComponent(windowInfo.id)}`)
-                const stateRaw = unwrapPayload<StaffQueueState>(raw)
+                const stateRaw = await api.getData<StaffQueueState>(STAFF_QUEUE_PATHS.state, {
+                    auth: "staff",
+                    params: { windowId: windowInfo.id },
+                })
                 const state = normalizeQueueStateForDisplay(stateRaw)
 
                 const baseTs = typeof opts?.tickTs === "number" && Number.isFinite(opts.tickTs) ? opts.tickTs : Date.now()
@@ -976,13 +1265,13 @@ export default function StaffQueuePage() {
 
         try {
             const [o, his, snap] = await Promise.all([
-                staffApi.listOut({ limit: 25 }).catch(() => ({ tickets: [] as any[] })),
-                staffApi.listHistory({ limit: 25, mine: historyMine }).catch(() => ({ tickets: [] as any[] })),
-                staffApi.getDisplaySnapshot().catch(() => null),
+                staffQueueApi.listOut({ limit: 25 }).catch(() => []),
+                staffQueueApi.listHistory({ limit: 25, mine: historyMine }).catch(() => []),
+                staffQueueApi.getDisplaySnapshot().catch(() => null),
             ])
 
-            setOut(((o as any).tickets ?? []) as TicketLike[])
-            setHistory(((his as any).tickets ?? []) as TicketLike[])
+            setOut(extractTicketList(o).map((t) => normalizeTicketForDisplay(t)))
+            setHistory(extractTicketList(his).map((t) => normalizeTicketForDisplay(t)))
 
             if (snap) setDisplaySnapshot(snap)
         } catch {
@@ -1047,7 +1336,7 @@ export default function StaffQueuePage() {
                 bc.onmessage = (ev) => {
                     const data = ev?.data
                     if (!data || typeof data !== "object") return
-                    if (data.type !== "QUEUE_STATE") return
+                    if ((data as any).type !== "QUEUE_STATE") return
                     applyRemoteQueueState({
                         ts: Number((data as any).ts ?? 0),
                         windowId: String((data as any).windowId ?? ""),
@@ -1195,7 +1484,6 @@ export default function StaffQueuePage() {
     const hold = React.useMemo(() => (queueState?.hold ?? []).slice(), [queueState?.hold])
     const called = React.useMemo(() => (queueState?.called ?? []).slice(), [queueState?.called])
 
-    // ✅ Build fallback name map from snapshot-full
     const snapshotNowServingByWindow = React.useMemo(() => {
         const map = new Map<number, { name: string; studentId?: string; queueNumber?: number; ticketId?: string }>()
 
@@ -1207,7 +1495,6 @@ export default function StaffQueuePage() {
             const nsRaw = w?.nowServing
             if (!nsRaw) continue
 
-            // ✅ normalize snapshot row so participantFullName is derived when possible
             const ns = normalizeTicketForDisplay(nsRaw as any) as any
 
             const sid = String(
@@ -1238,16 +1525,13 @@ export default function StaffQueuePage() {
         return map
     }, [displaySnapshot])
 
-    // ✅ FIX: DO NOT early-return when only studentId exists; still try snapshot fallback for FULL NAME
     const resolveNowServingParticipant = React.useCallback(
         (ticket: TicketLike) => {
             const directName = getParticipantName(ticket)
             const directSid = getStudentId(ticket)
 
-            // If we already have a name, use it (and keep sid if present)
             if (directName) return { name: directName, studentId: directSid }
 
-            // Otherwise: try snapshot fallback (name might exist there even if this ticket has only studentId)
             const win = getWindowMeta(ticket)
             if (!win.number) return { name: "", studentId: directSid }
 
@@ -1272,13 +1556,13 @@ export default function StaffQueuePage() {
 
             const prev = map.get(win.number)
             if (!prev) {
-                map.set(win.number, t)
+                map.set(win.number, t as TicketView)
                 continue
             }
 
             const prevAt = new Date(prev.calledAt ?? prev.updatedAt ?? prev.createdAt ?? 0).getTime()
-            const curAt = new Date(t.calledAt ?? t.updatedAt ?? t.createdAt ?? 0).getTime()
-            if (curAt > prevAt) map.set(win.number, t)
+            const curAt = new Date((t as any).calledAt ?? (t as any).updatedAt ?? (t as any).createdAt ?? 0).getTime()
+            if (curAt > prevAt) map.set(win.number, t as TicketView)
         }
 
         return Array.from(map.entries())
@@ -1326,8 +1610,11 @@ export default function StaffQueuePage() {
         try {
             if (centralAudio) claimAudioLeadership()
 
-            const raw = await api.post("/staff/queue/call-next-central", { windowId: windowInfo.id })
-            const ticketRaw = unwrapPayload<TicketView | null>(raw)
+            const ticketRaw = await api.postData<TicketView | null>(
+                STAFF_QUEUE_PATHS.callNextCentral,
+                { windowId: windowInfo.id },
+                { auth: "staff" },
+            )
             const ticket = ticketRaw ? normalizeTicketForDisplay(ticketRaw) : null
 
             if (!ticket) {
@@ -1361,8 +1648,11 @@ export default function StaffQueuePage() {
 
         setBusy(true)
         try {
-            const raw = await api.post("/staff/queue/serve", { ticketId })
-            const updatedRaw = unwrapPayload<TicketView>(raw)
+            const updatedRaw = await api.postData<TicketView>(
+                STAFF_QUEUE_PATHS.serve,
+                { ticketId },
+                { auth: "staff" },
+            )
             const updated = normalizeTicketForDisplay(updatedRaw)
 
             const dep = getDepartmentMeta(updated)
@@ -1383,8 +1673,11 @@ export default function StaffQueuePage() {
 
         setBusy(true)
         try {
-            const raw = await api.post("/staff/queue/hold", { ticketId })
-            const updatedRaw = unwrapPayload<TicketView>(raw)
+            const updatedRaw = await api.postData<TicketView>(
+                STAFF_QUEUE_PATHS.hold,
+                { ticketId },
+                { auth: "staff" },
+            )
             const updated = normalizeTicketForDisplay(updatedRaw)
 
             const dep = getDepartmentMeta(updated)
@@ -1408,8 +1701,10 @@ export default function StaffQueuePage() {
     async function onReturnFromHold(ticketId: string) {
         setBusy(true)
         try {
-            const res = await staffApi.returnFromHold(ticketId)
-            const qn = Number((res as any)?.ticket?.queueNumber ?? 0)
+            const res = await staffQueueApi.returnFromHold(ticketId)
+            const tickets = extractTicketList(res)
+            const firstTicket = tickets[0]
+            const qn = Number((firstTicket as any)?.queueNumber ?? (res as any)?.ticket?.queueNumber ?? 0)
             toast.success(`Returned ${qn ? `#${qn}` : "ticket"} to WAITING.`)
             await fetchCentralState({ broadcast: true, tickTs: Date.now() })
             await fetchSecondary()
@@ -1686,7 +1981,6 @@ export default function StaffQueuePage() {
                                     </Card>
                                 </div>
 
-                                {/* Now Serving Board */}
                                 <Card className="min-w-0">
                                     <CardHeader>
                                         <CardTitle className="text-base">Now Serving Board (All Windows)</CardTitle>
@@ -1754,9 +2048,7 @@ export default function StaffQueuePage() {
                                     </CardContent>
                                 </Card>
 
-                                {/* Main queue work area */}
                                 <div className="grid gap-6 lg:grid-cols-12">
-                                    {/* Current Ticket */}
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
                                             <CardTitle>Current called</CardTitle>
@@ -1841,7 +2133,6 @@ export default function StaffQueuePage() {
                                         </CardContent>
                                     </Card>
 
-                                    {/* Waiting List */}
                                     <Card className="lg:col-span-8">
                                         <CardHeader>
                                             <CardTitle className="flex items-center gap-2">
@@ -1893,7 +2184,6 @@ export default function StaffQueuePage() {
                                         </CardContent>
                                     </Card>
 
-                                    {/* Hold List */}
                                     <Card className="lg:col-span-6">
                                         <CardHeader>
                                             <CardTitle className="flex items-center gap-2">
@@ -1959,7 +2249,6 @@ export default function StaffQueuePage() {
                                         </CardContent>
                                     </Card>
 
-                                    {/* OUT List */}
                                     <Card className="lg:col-span-6">
                                         <CardHeader>
                                             <CardTitle className="flex items-center gap-2">
@@ -2011,7 +2300,6 @@ export default function StaffQueuePage() {
                                         </CardContent>
                                     </Card>
 
-                                    {/* History */}
                                     <Card className="lg:col-span-12">
                                         <CardHeader className="gap-2">
                                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
