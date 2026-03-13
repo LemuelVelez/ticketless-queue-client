@@ -2,7 +2,15 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { BarChart3, Building2, FileText, LayoutGrid, RefreshCw, ShieldCheck, Users } from "lucide-react"
+import {
+    BarChart3,
+    Building2,
+    FileText,
+    LayoutGrid,
+    RefreshCw,
+    ShieldCheck,
+    Users,
+} from "lucide-react"
 import { format } from "date-fns"
 import {
     Bar,
@@ -20,50 +28,356 @@ import {
     YAxis,
 } from "recharts"
 
+import { API_PATHS } from "@/api/api"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
-
-import {
-    adminApi,
-    type AuditLogsResponse,
-    type Department,
-    type ReportsSummaryResponse,
-    type ServiceWindow,
-    type TicketStatus,
-} from "@/api/admin"
 import { useSession } from "@/hooks/use-session"
+import { api } from "@/lib/http"
 
 import { DataTable } from "@/components/data-table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 
 import type { ColumnDef } from "@tanstack/react-table"
 
 type AccountRole = "STAFF" | "ADMIN"
+type TicketStatus = "WAITING" | "CALLED" | "HOLD" | "SERVED" | "OUT"
 
 type AccountUser = {
-    id?: string
-    _id?: string
+    id: string
     name: string
     email: string
-    role?: AccountRole
+    role: AccountRole
     active: boolean
     assignedDepartment: string | null
     assignedWindow: string | null
 }
 
-type AuditLog = AuditLogsResponse["logs"] extends (infer U)[] ? U : any
+type Department = {
+    _id: string
+    name: string
+    code: string | null
+    enabled: boolean
+}
 
-function safeRole(role?: string): AccountRole {
-    return role === "ADMIN" ? "ADMIN" : "STAFF"
+type ServiceWindow = {
+    _id: string
+    name: string
+    number: number | null
+    department: string | null
+    departmentName: string | null
+    enabled: boolean
+}
+
+type AuditLog = {
+    id: string
+    createdAt: string | null
+    actorName: string | null
+    actorEmail: string | null
+    actorId: string | null
+    actorRole: AccountRole | null
+    action: string
+    entityType: string | null
+    entityId: string | null
+}
+
+type Ticket = {
+    _id: string
+    status: TicketStatus | null
+    departmentId: string | null
+    departmentName: string | null
+    createdAt: string | null
+    joinedAt: string | null
+    calledAt: string | null
+    servedAt: string | null
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function normalizeString(value: unknown): string | null {
+    if (typeof value !== "string") return null
+    const clean = value.trim()
+    return clean ? clean : null
+}
+
+function normalizeBoolean(value: unknown, fallback = false): boolean {
+    if (typeof value === "boolean") return value
+    if (typeof value === "number") return value !== 0
+    if (typeof value === "string") {
+        const clean = value.trim().toLowerCase()
+        if (["true", "1", "yes", "enabled", "active"].includes(clean)) return true
+        if (["false", "0", "no", "disabled", "inactive"].includes(clean))
+            return false
+    }
+    return fallback
+}
+
+function normalizeNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return value
+    if (typeof value === "string") {
+        const n = Number(value.trim())
+        if (Number.isFinite(n)) return n
+    }
+    return null
+}
+
+function safeRole(role?: string | null): AccountRole {
+    return String(role ?? "").trim().toUpperCase() === "ADMIN" ? "ADMIN" : "STAFF"
 }
 
 function isEnabledFlag(value: boolean | undefined) {
     return value !== false
+}
+
+function pickFirstString(...values: unknown[]): string | null {
+    for (const value of values) {
+        const clean = normalizeString(value)
+        if (clean) return clean
+    }
+    return null
+}
+
+function pickDateString(...values: unknown[]): string | null {
+    for (const value of values) {
+        if (value instanceof Date && !Number.isNaN(value.getTime())) {
+            return value.toISOString()
+        }
+
+        if (typeof value === "number" && Number.isFinite(value)) {
+            const date = new Date(value)
+            if (!Number.isNaN(date.getTime())) return date.toISOString()
+        }
+
+        if (typeof value === "string") {
+            const clean = value.trim()
+            if (!clean) continue
+            const date = new Date(clean)
+            if (!Number.isNaN(date.getTime())) return date.toISOString()
+        }
+    }
+    return null
+}
+
+function getDateMs(value: string | null | undefined): number | null {
+    if (!value) return null
+    const ms = new Date(value).getTime()
+    return Number.isFinite(ms) ? ms : null
+}
+
+function extractArray(value: unknown, keys: string[]): any[] {
+    if (Array.isArray(value)) return value
+
+    if (!isRecord(value)) return []
+
+    for (const key of keys) {
+        if (Array.isArray(value[key])) return value[key]
+    }
+
+    return []
+}
+
+function extractCount(value: unknown, fallback: number): number {
+    if (!isRecord(value)) return fallback
+
+    const direct =
+        normalizeNumber(value.total) ??
+        normalizeNumber(value.count) ??
+        normalizeNumber(value.totalCount)
+
+    return direct ?? fallback
+}
+
+function resolveAccountName(user: Record<string, any>) {
+    const direct = pickFirstString(user.name, user.fullName, user.displayName)
+    if (direct) return direct
+
+    const parts = [user.firstName, user.middleName, user.lastName]
+        .map((value) => normalizeString(value))
+        .filter(Boolean)
+
+    if (parts.length) return parts.join(" ")
+
+    return "Unnamed user"
+}
+
+function normalizeDepartment(raw: unknown): Department | null {
+    if (!isRecord(raw)) return null
+
+    const id = pickFirstString(raw._id, raw.id, raw.departmentId)
+    const name = pickFirstString(raw.name, raw.departmentName)
+    if (!id && !name) return null
+
+    return {
+        _id: id ?? name ?? "",
+        name: name ?? "Unnamed department",
+        code: pickFirstString(raw.code, raw.departmentCode),
+        enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
+    }
+}
+
+function normalizeServiceWindow(raw: unknown): ServiceWindow | null {
+    if (!isRecord(raw)) return null
+
+    const departmentRecord = isRecord(raw.department) ? raw.department : null
+    const id = pickFirstString(raw._id, raw.id, raw.windowId)
+    const number = normalizeNumber(raw.number ?? raw.windowNumber)
+
+    return {
+        _id: id ?? `window-${Math.random().toString(36).slice(2)}`,
+        name:
+            pickFirstString(raw.name, raw.label, raw.windowName) ??
+            (number !== null ? `Window ${number}` : "Unnamed window"),
+        number,
+        department:
+            pickFirstString(
+                raw.departmentId,
+                raw.assignedDepartment,
+                raw.department,
+                departmentRecord?._id,
+                departmentRecord?.id
+            ) ?? null,
+        departmentName:
+            pickFirstString(
+                raw.departmentName,
+                departmentRecord?.name,
+                departmentRecord?.departmentName
+            ) ?? null,
+        enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
+    }
+}
+
+function normalizeAccount(raw: unknown): AccountUser | null {
+    if (!isRecord(raw)) return null
+
+    const id = pickFirstString(raw.id, raw._id, raw.userId)
+    if (!id) return null
+
+    return {
+        id,
+        name: resolveAccountName(raw),
+        email: pickFirstString(raw.email) ?? "",
+        role: safeRole(pickFirstString(raw.role, raw.userRole) ?? "STAFF"),
+        active: normalizeBoolean(
+            raw.active ?? raw.isActive ?? raw.enabled ?? raw.status,
+            true
+        ),
+        assignedDepartment:
+            pickFirstString(
+                raw.assignedDepartment,
+                raw.assignedDepartmentId,
+                raw.departmentId,
+                raw.department?._id,
+                raw.department?.id
+            ) ?? null,
+        assignedWindow:
+            pickFirstString(
+                raw.assignedWindow,
+                raw.assignedWindowId,
+                raw.windowId,
+                raw.window?._id,
+                raw.window?.id
+            ) ?? null,
+    }
+}
+
+function normalizeAuditLog(raw: unknown): AuditLog | null {
+    if (!isRecord(raw)) return null
+
+    const actor = isRecord(raw.actor) ? raw.actor : null
+
+    return {
+        id: pickFirstString(raw.id, raw._id, raw.logId) ?? "",
+        createdAt: pickDateString(raw.createdAt, raw.timestamp, raw.date),
+        actorName:
+            pickFirstString(
+                raw.actorName,
+                actor?.name,
+                actor?.fullName,
+                raw.userName
+            ) ?? null,
+        actorEmail:
+            pickFirstString(raw.actorEmail, actor?.email, raw.userEmail) ?? null,
+        actorId: pickFirstString(raw.actorId, actor?._id, actor?.id, raw.userId),
+        actorRole: pickFirstString(raw.actorRole, actor?.role)
+            ? safeRole(pickFirstString(raw.actorRole, actor?.role))
+            : null,
+        action: pickFirstString(raw.action, raw.type, raw.event) ?? "UNKNOWN",
+        entityType:
+            pickFirstString(raw.entityType, raw.subjectType, raw.module) ?? null,
+        entityId: pickFirstString(raw.entityId, raw.subjectId, raw.recordId) ?? null,
+    }
+}
+
+function normalizeTicketStatus(value: unknown): TicketStatus | null {
+    const clean = String(value ?? "").trim().toUpperCase()
+    if (!clean) return null
+
+    if (["WAITING", "PENDING", "QUEUED"].includes(clean)) return "WAITING"
+    if (["CALLED", "IN_SERVICE", "IN_PROGRESS", "SERVING"].includes(clean))
+        return "CALLED"
+    if (["HOLD", "ON_HOLD"].includes(clean)) return "HOLD"
+    if (["SERVED", "DONE", "COMPLETED", "FINISHED"].includes(clean))
+        return "SERVED"
+    if (["OUT", "CANCELLED", "CANCELED", "NO_SHOW", "EXPIRED"].includes(clean))
+        return "OUT"
+
+    return null
+}
+
+function normalizeTicket(raw: unknown): Ticket | null {
+    if (!isRecord(raw)) return null
+
+    const departmentRecord = isRecord(raw.department) ? raw.department : null
+
+    return {
+        _id: pickFirstString(raw._id, raw.id, raw.ticketId) ?? "",
+        status: normalizeTicketStatus(raw.status ?? raw.queueStatus ?? raw.state),
+        departmentId:
+            pickFirstString(
+                raw.departmentId,
+                raw.department,
+                departmentRecord?._id,
+                departmentRecord?.id
+            ) ?? null,
+        departmentName:
+            pickFirstString(raw.departmentName, departmentRecord?.name) ?? null,
+        createdAt: pickDateString(
+            raw.createdAt,
+            raw.timestamp,
+            raw.date,
+            raw.joinedAt
+        ),
+        joinedAt: pickDateString(
+            raw.joinedAt,
+            raw.queuedAt,
+            raw.createdAt,
+            raw.timestamp
+        ),
+        calledAt: pickDateString(
+            raw.calledAt,
+            raw.calledOn,
+            raw.startedAt,
+            raw.serviceStartedAt
+        ),
+        servedAt: pickDateString(
+            raw.servedAt,
+            raw.servedOn,
+            raw.completedAt,
+            raw.finishedAt
+        ),
+    }
 }
 
 function formatNumber(n: number | null | undefined) {
@@ -85,7 +399,10 @@ function ymdKey(d: Date) {
     return format(d, "yyyy-MM-dd")
 }
 
-function getStatusCount(byStatus: Partial<Record<TicketStatus, number>> | undefined, s: TicketStatus) {
+function getStatusCount(
+    byStatus: Partial<Record<TicketStatus, number>> | undefined,
+    s: TicketStatus
+) {
     const v = byStatus?.[s]
     return typeof v === "number" ? v : 0
 }
@@ -116,10 +433,9 @@ export default function AdminDashboardPage() {
     const [departments, setDepartments] = React.useState<Department[]>([])
     const [windows, setWindows] = React.useState<ServiceWindow[]>([])
     const [accounts, setAccounts] = React.useState<AccountUser[]>([])
-    const [audit, setAudit] = React.useState<AuditLogsResponse | null>(null)
-
-    // ✅ Reports overview snapshot (same date range as dashboard)
-    const [reportsSummary, setReportsSummary] = React.useState<ReportsSummaryResponse | null>(null)
+    const [audits, setAudits] = React.useState<AuditLog[]>([])
+    const [auditTotal, setAuditTotal] = React.useState(0)
+    const [tickets, setTickets] = React.useState<Ticket[]>([])
 
     const [rangeDays, setRangeDays] = React.useState<7 | 30>(7)
 
@@ -140,7 +456,7 @@ export default function AdminDashboardPage() {
             borderRadius: 12,
             color: "var(--foreground)",
         }),
-        [],
+        []
     )
 
     const tooltipLabelStyle = React.useMemo<React.CSSProperties>(
@@ -148,43 +464,109 @@ export default function AdminDashboardPage() {
             color: "var(--foreground)",
             fontWeight: 600,
         }),
-        [],
+        []
     )
 
     const tooltipItemStyle = React.useMemo<React.CSSProperties>(
         () => ({
             color: "var(--foreground)",
         }),
-        [],
+        []
     )
 
     const fetchAll = React.useCallback(async () => {
         setLoading(true)
-        try {
-            const [deptRes, winRes, staffRes, auditRes, reportRes] = await Promise.all([
-                adminApi.listDepartments(),
-                adminApi.listWindows(),
-                adminApi.listStaff(),
-                adminApi.listAuditLogs({
-                    page: 1,
-                    limit: 200, // dashboard snapshot
-                    from: fromStr,
-                    to: toStr,
-                } as any),
-                adminApi
-                    .getReportsSummary({ from: fromStr, to: toStr, departmentId: undefined })
-                    .catch((e) => {
-                        const msg = e instanceof Error ? e.message : "Failed to load reports snapshot."
-                        toast.error(msg)
-                        return null
-                    }),
-            ])
 
-            setDepartments(deptRes.departments ?? [])
-            setWindows(winRes.windows ?? [])
-            setAccounts(((staffRes.staff ?? []) as any[]).map((u) => ({ ...u, role: safeRole(u.role) })))
-            setAudit(auditRes as any)
-            setReportsSummary(reportRes)
+        try {
+            const [deptRes, winRes, staffRes, auditRes, ticketRes] =
+                await Promise.all([
+                    api.getData<unknown>(API_PATHS.departments.enabled, {
+                        auth: "staff",
+                    }),
+                    api.getData<unknown>(API_PATHS.serviceWindows.enabled, {
+                        auth: "staff",
+                    }),
+                    api.getData<unknown>(API_PATHS.users.staff, {
+                        auth: "staff",
+                    }),
+                    api.getData<unknown>(API_PATHS.auditLogs.recent, {
+                        auth: "staff",
+                        params: {
+                            page: 1,
+                            limit: 200,
+                            from: fromStr,
+                            to: toStr,
+                        },
+                    }),
+                    api.getData<unknown>(API_PATHS.tickets.recent, {
+                        auth: "staff",
+                        params: {
+                            page: 1,
+                            limit: 500,
+                            from: fromStr,
+                            to: toStr,
+                        },
+                    }),
+                ])
+
+            const normalizedDepartments = extractArray(deptRes, [
+                "departments",
+                "items",
+                "rows",
+                "results",
+            ])
+                .map(normalizeDepartment)
+                .filter(Boolean) as Department[]
+
+            const normalizedWindows = extractArray(winRes, [
+                "windows",
+                "items",
+                "rows",
+                "results",
+            ])
+                .map(normalizeServiceWindow)
+                .filter(Boolean) as ServiceWindow[]
+
+            const normalizedAccounts = extractArray(staffRes, [
+                "staff",
+                "users",
+                "items",
+                "rows",
+                "results",
+            ])
+                .map(normalizeAccount)
+                .filter(Boolean) as AccountUser[]
+
+            const normalizedAudits = extractArray(auditRes, [
+                "logs",
+                "auditLogs",
+                "items",
+                "rows",
+                "results",
+            ])
+                .map(normalizeAuditLog)
+                .filter(Boolean) as AuditLog[]
+
+            const normalizedTickets = extractArray(ticketRes, [
+                "tickets",
+                "items",
+                "rows",
+                "results",
+            ])
+                .map(normalizeTicket)
+                .filter(Boolean) as Ticket[]
+
+            setDepartments(normalizedDepartments)
+            setWindows(normalizedWindows)
+            setAccounts(
+                normalizedAccounts.map((user) => ({
+                    ...user,
+                    role: safeRole(user.role),
+                }))
+            )
+            setAudits(normalizedAudits)
+            setAuditTotal(extractCount(auditRes, normalizedAudits.length))
+            setTickets(normalizedTickets)
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed to load dashboard data."
             toast.error(msg)
@@ -209,7 +591,9 @@ export default function AdminDashboardPage() {
 
     const deptNameById = React.useMemo(() => {
         const m = new Map<string, string>()
-        for (const d of departments ?? []) m.set(d._id, d.name)
+        for (const d of departments ?? []) {
+            if (d._id) m.set(d._id, d.name)
+        }
         return m
     }, [departments])
 
@@ -226,16 +610,27 @@ export default function AdminDashboardPage() {
     }, [windows])
 
     const windowsByDept = React.useMemo(() => {
-        const map = new Map<string, number>()
+        const map = new Map<string, { name: string; count: number }>()
+
         for (const w of windows) {
             const deptId = w.department ?? "unassigned"
-            map.set(deptId, (map.get(deptId) ?? 0) + 1)
+            const name =
+                deptId === "unassigned"
+                    ? "Unassigned"
+                    : deptNameById.get(deptId) ?? w.departmentName ?? "Unknown"
+
+            const prev = map.get(deptId)
+            map.set(deptId, {
+                name,
+                count: (prev?.count ?? 0) + 1,
+            })
         }
+
         return Array.from(map.entries())
-            .map(([deptId, count]) => ({
+            .map(([deptId, value]) => ({
                 deptId,
-                name: deptId === "unassigned" ? "Unassigned" : deptNameById.get(deptId) ?? "Unknown",
-                count,
+                name: value.name,
+                count: value.count,
             }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 8)
@@ -251,38 +646,50 @@ export default function AdminDashboardPage() {
     }, [accounts])
 
     const deptBreakdown = React.useMemo(() => {
-        const counts = new Map<string, number>()
+        const counts = new Map<string, { name: string; count: number }>()
+
         for (const u of accounts) {
             if (!u.active) continue
             if (safeRole(u.role) !== "STAFF") continue
+
             const deptId = u.assignedDepartment ?? "unassigned"
-            counts.set(deptId, (counts.get(deptId) ?? 0) + 1)
+            const name =
+                deptId === "unassigned"
+                    ? "Unassigned"
+                    : deptNameById.get(deptId) ?? "Unknown"
+
+            const prev = counts.get(deptId)
+            counts.set(deptId, {
+                name,
+                count: (prev?.count ?? 0) + 1,
+            })
         }
 
         return Array.from(counts.entries())
-            .map(([deptId, count]) => ({
+            .map(([deptId, value]) => ({
                 deptId,
-                name: deptId === "unassigned" ? "Unassigned" : deptNameById.get(deptId) ?? "Unknown",
-                count,
+                name: value.name,
+                count: value.count,
             }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 8)
     }, [accounts, deptNameById])
 
-    const audits = React.useMemo(() => (audit?.logs ?? []) as AuditLog[], [audit])
-
     const auditStats = React.useMemo(() => {
-        const total = audit?.total ?? audits.length ?? 0
+        const total = auditTotal || audits.length || 0
         const uniqueActors = new Set<string>()
+
         for (const l of audits) {
-            const actor = (l as any)?.actorEmail || (l as any)?.actorId || (l as any)?.actorName || ""
+            const actor = l.actorEmail || l.actorId || l.actorName || ""
             if (actor) uniqueActors.add(String(actor))
         }
+
         return { total, uniqueActors: uniqueActors.size }
-    }, [audit?.total, audits])
+    }, [auditTotal, audits])
 
     const auditsByDay = React.useMemo(() => {
         const map = new Map<string, number>()
+
         for (let i = 0; i < rangeDays; i++) {
             const d = new Date(range.from)
             d.setDate(range.from.getDate() + i)
@@ -290,7 +697,8 @@ export default function AdminDashboardPage() {
         }
 
         for (const l of audits) {
-            const dt = new Date((l as any)?.createdAt ?? Date.now())
+            const dateValue = pickDateString(l.createdAt)
+            const dt = new Date(dateValue ?? Date.now())
             const key = ymdKey(dt)
             if (!map.has(key)) continue
             map.set(key, (map.get(key) ?? 0) + 1)
@@ -303,10 +711,12 @@ export default function AdminDashboardPage() {
 
     const topActions = React.useMemo(() => {
         const map = new Map<string, number>()
+
         for (const l of audits) {
-            const action = String((l as any)?.action ?? "UNKNOWN")
+            const action = String(l.action || "UNKNOWN")
             map.set(action, (map.get(action) ?? 0) + 1)
         }
+
         return Array.from(map.entries())
             .map(([action, count]) => ({ action, count }))
             .sort((a, b) => b.count - a.count)
@@ -315,15 +725,21 @@ export default function AdminDashboardPage() {
 
     const recentAccounts = React.useMemo(() => {
         return [...accounts]
-            .sort((a, b) => (a.active === b.active ? (a.name ?? "").localeCompare(b.name ?? "") : a.active ? -1 : 1))
+            .sort((a, b) =>
+                a.active === b.active
+                    ? (a.name ?? "").localeCompare(b.name ?? "")
+                    : a.active
+                      ? -1
+                      : 1
+            )
             .slice(0, 10)
     }, [accounts])
 
     const recentAudits = React.useMemo(() => {
         return [...audits]
-            .sort((a: any, b: any) => {
-                const da = new Date(a?.createdAt ?? 0).getTime()
-                const db = new Date(b?.createdAt ?? 0).getTime()
+            .sort((a, b) => {
+                const da = new Date(a.createdAt ?? 0).getTime()
+                const db = new Date(b.createdAt ?? 0).getTime()
                 return db - da
             })
             .slice(0, 10)
@@ -346,22 +762,72 @@ export default function AdminDashboardPage() {
                 const ae = isEnabledFlag(a.enabled)
                 const be = isEnabledFlag(b.enabled)
                 if (ae !== be) return ae ? -1 : 1
-                const da = deptNameById.get(a.department) ?? ""
-                const db = deptNameById.get(b.department) ?? ""
+                const da = deptNameById.get(a.department ?? "") ?? a.departmentName ?? ""
+                const db = deptNameById.get(b.department ?? "") ?? b.departmentName ?? ""
                 if (da !== db) return da.localeCompare(db)
                 return Number(a.number ?? 0) - Number(b.number ?? 0)
             })
             .slice(0, 10)
     }, [windows, deptNameById])
 
-    // ✅ Reports overview derived values
-    const reportTotals = reportsSummary?.totals
-    const rptTotal = reportTotals?.total ?? 0
-    const rptServed = getStatusCount(reportTotals?.byStatus, "SERVED")
-    const rptWaiting = getStatusCount(reportTotals?.byStatus, "WAITING")
-    const rptCalled = getStatusCount(reportTotals?.byStatus, "CALLED")
-    const rptHold = getStatusCount(reportTotals?.byStatus, "HOLD")
-    const rptOut = getStatusCount(reportTotals?.byStatus, "OUT")
+    const ticketSummary = React.useMemo(() => {
+        const byStatus: Partial<Record<TicketStatus, number>> = {
+            WAITING: 0,
+            CALLED: 0,
+            HOLD: 0,
+            SERVED: 0,
+            OUT: 0,
+        }
+
+        let waitSum = 0
+        let waitCount = 0
+        let serviceSum = 0
+        let serviceCount = 0
+
+        for (const ticket of tickets) {
+            if (ticket.status) {
+                byStatus[ticket.status] = (byStatus[ticket.status] ?? 0) + 1
+            }
+
+            const joinedAt = getDateMs(ticket.joinedAt ?? ticket.createdAt)
+            const calledAt = getDateMs(ticket.calledAt)
+            const servedAt = getDateMs(ticket.servedAt)
+
+            if (
+                joinedAt !== null &&
+                calledAt !== null &&
+                calledAt >= joinedAt
+            ) {
+                waitSum += calledAt - joinedAt
+                waitCount += 1
+            }
+
+            if (
+                calledAt !== null &&
+                servedAt !== null &&
+                servedAt >= calledAt
+            ) {
+                serviceSum += servedAt - calledAt
+                serviceCount += 1
+            }
+        }
+
+        return {
+            total: tickets.length,
+            byStatus,
+            avgWaitMs: waitCount ? Math.round(waitSum / waitCount) : null,
+            avgServiceMs: serviceCount
+                ? Math.round(serviceSum / serviceCount)
+                : null,
+        }
+    }, [tickets])
+
+    const rptTotal = ticketSummary.total
+    const rptServed = getStatusCount(ticketSummary.byStatus, "SERVED")
+    const rptWaiting = getStatusCount(ticketSummary.byStatus, "WAITING")
+    const rptCalled = getStatusCount(ticketSummary.byStatus, "CALLED")
+    const rptHold = getStatusCount(ticketSummary.byStatus, "HOLD")
+    const rptOut = getStatusCount(ticketSummary.byStatus, "OUT")
 
     const ticketStatusPie = React.useMemo(
         () => [
@@ -371,19 +837,37 @@ export default function AdminDashboardPage() {
             { name: "HOLD", value: rptHold },
             { name: "OUT", value: rptOut },
         ],
-        [rptServed, rptWaiting, rptCalled, rptHold, rptOut],
+        [rptServed, rptWaiting, rptCalled, rptHold, rptOut]
     )
 
     const topServedDepts = React.useMemo(() => {
-        const rows = ((reportsSummary as any)?.departments ?? []) as any[]
-        return [...rows]
-            .map((r) => ({
-                name: String(r?.name ?? "Department"),
-                served: Number(r?.served ?? 0),
+        const map = new Map<string, { name: string; served: number }>()
+
+        for (const ticket of tickets) {
+            if (ticket.status !== "SERVED") continue
+
+            const deptId = ticket.departmentId ?? ticket.departmentName ?? "unassigned"
+            const name =
+                ticket.departmentName ??
+                (ticket.departmentId
+                    ? deptNameById.get(ticket.departmentId) ?? "Unknown"
+                    : "Unassigned")
+
+            const prev = map.get(deptId)
+            map.set(deptId, {
+                name,
+                served: (prev?.served ?? 0) + 1,
+            })
+        }
+
+        return Array.from(map.entries())
+            .map(([, value]) => ({
+                name: value.name,
+                served: value.served,
             }))
             .sort((a, b) => b.served - a.served)
             .slice(0, 8)
-    }, [reportsSummary])
+    }, [tickets, deptNameById])
 
     const accountColumns = React.useMemo<ColumnDef<AccountUser>[]>(
         () => [
@@ -393,7 +877,9 @@ export default function AdminDashboardPage() {
                 cell: ({ row }) => (
                     <div className="min-w-0">
                         <div className="truncate font-medium">{row.original.name}</div>
-                        <div className="truncate text-xs text-muted-foreground">{row.original.email}</div>
+                        <div className="truncate text-xs text-muted-foreground">
+                            {row.original.email}
+                        </div>
                     </div>
                 ),
             },
@@ -401,7 +887,13 @@ export default function AdminDashboardPage() {
                 accessorKey: "role",
                 header: "Role",
                 cell: ({ row }) => (
-                    <Badge variant={safeRole(row.original.role) === "ADMIN" ? "default" : "secondary"}>
+                    <Badge
+                        variant={
+                            safeRole(row.original.role) === "ADMIN"
+                                ? "default"
+                                : "secondary"
+                        }
+                    >
                         {safeRole(row.original.role)}
                     </Badge>
                 ),
@@ -425,7 +917,7 @@ export default function AdminDashboardPage() {
                 },
             },
         ],
-        [deptNameById],
+        [deptNameById]
     )
 
     const auditColumns = React.useMemo<ColumnDef<AuditLog>[]>(
@@ -434,11 +926,15 @@ export default function AdminDashboardPage() {
                 accessorKey: "createdAt",
                 header: "When",
                 cell: ({ row }) => {
-                    const v = (row.original as any)?.createdAt
+                    const v = row.original.createdAt
                     return (
                         <div className="whitespace-nowrap">
-                            <div className="font-medium">{v ? new Date(v).toLocaleString() : "—"}</div>
-                            <div className="text-xs text-muted-foreground">{(row.original as any)?.id ?? "—"}</div>
+                            <div className="font-medium">
+                                {v ? new Date(v).toLocaleString() : "—"}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                                {row.original.id ?? "—"}
+                            </div>
                         </div>
                     )
                 },
@@ -447,11 +943,15 @@ export default function AdminDashboardPage() {
                 id: "actor",
                 header: "Actor",
                 cell: ({ row }) => {
-                    const l: any = row.original
+                    const l = row.original
                     return (
                         <div className="min-w-0">
-                            <div className="truncate font-medium">{l.actorName || "—"}</div>
-                            <div className="truncate text-xs text-muted-foreground">{l.actorEmail || l.actorId || "—"}</div>
+                            <div className="truncate font-medium">
+                                {l.actorName || "—"}
+                            </div>
+                            <div className="truncate text-xs text-muted-foreground">
+                                {l.actorEmail || l.actorId || "—"}
+                            </div>
                         </div>
                     )
                 },
@@ -460,30 +960,40 @@ export default function AdminDashboardPage() {
                 accessorKey: "actorRole",
                 header: "Role",
                 cell: ({ row }) => {
-                    const role = String((row.original as any)?.actorRole ?? "—")
-                    return <Badge variant={role === "ADMIN" ? "default" : "secondary"}>{role}</Badge>
+                    const role = String(row.original.actorRole ?? "—")
+                    return (
+                        <Badge variant={role === "ADMIN" ? "default" : "secondary"}>
+                            {role}
+                        </Badge>
+                    )
                 },
             },
             {
                 accessorKey: "action",
                 header: "Action",
-                cell: ({ row }) => <span className="font-medium">{String((row.original as any)?.action ?? "—")}</span>,
+                cell: ({ row }) => (
+                    <span className="font-medium">
+                        {String(row.original.action ?? "—")}
+                    </span>
+                ),
             },
             {
                 id: "entity",
                 header: "Entity",
                 cell: ({ row }) => {
-                    const l: any = row.original
+                    const l = row.original
                     return (
                         <div className="min-w-0">
                             <div className="truncate">{l.entityType || "—"}</div>
-                            <div className="truncate text-xs text-muted-foreground">{l.entityId || "—"}</div>
+                            <div className="truncate text-xs text-muted-foreground">
+                                {l.entityId || "—"}
+                            </div>
                         </div>
                     )
                 },
             },
         ],
-        [],
+        []
     )
 
     const departmentColumns = React.useMemo<ColumnDef<Department>[]>(
@@ -493,8 +1003,12 @@ export default function AdminDashboardPage() {
                 header: "Department",
                 cell: ({ row }) => (
                     <div className="min-w-0">
-                        <div className="truncate font-medium">{row.original.name ?? "—"}</div>
-                        <div className="truncate text-xs text-muted-foreground">Code: {row.original.code || "—"}</div>
+                        <div className="truncate font-medium">
+                            {row.original.name ?? "—"}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                            Code: {row.original.code || "—"}
+                        </div>
                     </div>
                 ),
             },
@@ -502,13 +1016,19 @@ export default function AdminDashboardPage() {
                 accessorKey: "enabled",
                 header: "Status",
                 cell: ({ row }) => (
-                    <Badge variant={isEnabledFlag(row.original.enabled) ? "default" : "secondary"}>
+                    <Badge
+                        variant={
+                            isEnabledFlag(row.original.enabled)
+                                ? "default"
+                                : "secondary"
+                        }
+                    >
                         {isEnabledFlag(row.original.enabled) ? "Enabled" : "Disabled"}
                     </Badge>
                 ),
             },
         ],
-        [],
+        []
     )
 
     const windowColumns = React.useMemo<ColumnDef<ServiceWindow>[]>(
@@ -520,10 +1040,15 @@ export default function AdminDashboardPage() {
                     <div className="min-w-0">
                         <div className="truncate font-medium">
                             {row.original.name ?? "—"}{" "}
-                            <span className="text-muted-foreground">(#{row.original.number ?? "—"})</span>
+                            <span className="text-muted-foreground">
+                                (#{row.original.number ?? "—"})
+                            </span>
                         </div>
                         <div className="truncate text-xs text-muted-foreground">
-                            Dept: {deptNameById.get(row.original.department) ?? "—"}
+                            Dept:{" "}
+                            {deptNameById.get(row.original.department ?? "") ??
+                                row.original.departmentName ??
+                                "—"}
                         </div>
                     </div>
                 ),
@@ -532,13 +1057,19 @@ export default function AdminDashboardPage() {
                 accessorKey: "enabled",
                 header: "Status",
                 cell: ({ row }) => (
-                    <Badge variant={isEnabledFlag(row.original.enabled) ? "default" : "secondary"}>
+                    <Badge
+                        variant={
+                            isEnabledFlag(row.original.enabled)
+                                ? "default"
+                                : "secondary"
+                        }
+                    >
                         {isEnabledFlag(row.original.enabled) ? "Enabled" : "Disabled"}
                     </Badge>
                 ),
             },
         ],
-        [deptNameById],
+        [deptNameById]
     )
 
     const accountStatusPie = React.useMemo(
@@ -546,7 +1077,7 @@ export default function AdminDashboardPage() {
             { name: "Active", value: accountStats.active },
             { name: "Inactive", value: accountStats.inactive },
         ],
-        [accountStats.active, accountStats.inactive],
+        [accountStats.active, accountStats.inactive]
     )
 
     const rolePieData = React.useMemo(
@@ -554,7 +1085,7 @@ export default function AdminDashboardPage() {
             { name: "ADMIN", value: accountStats.admins },
             { name: "STAFF", value: accountStats.staff },
         ],
-        [accountStats.admins, accountStats.staff],
+        [accountStats.admins, accountStats.staff]
     )
 
     const deptStatusPie = React.useMemo(
@@ -562,7 +1093,7 @@ export default function AdminDashboardPage() {
             { name: "Enabled", value: deptStats.enabled },
             { name: "Disabled", value: deptStats.disabled },
         ],
-        [deptStats.enabled, deptStats.disabled],
+        [deptStats.enabled, deptStats.disabled]
     )
 
     const winStatusPie = React.useMemo(
@@ -570,11 +1101,16 @@ export default function AdminDashboardPage() {
             { name: "Enabled", value: windowStats.enabled },
             { name: "Disabled", value: windowStats.disabled },
         ],
-        [windowStats.enabled, windowStats.disabled],
+        [windowStats.enabled, windowStats.disabled]
     )
 
     return (
-        <DashboardLayout title="Admin dashboard" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+        <DashboardLayout
+            title="Admin dashboard"
+            navItems={ADMIN_NAV_ITEMS}
+            user={dashboardUser}
+            activePath={location.pathname}
+        >
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 <Card className="min-w-0">
                     <CardHeader className="gap-2">
@@ -584,10 +1120,12 @@ export default function AdminDashboardPage() {
                                     <BarChart3 className="h-5 w-5" />
                                     Overview
                                 </CardTitle>
-                                <CardDescription>Key snapshot across accounts, departments, windows, tickets, and audits.</CardDescription>
+                                <CardDescription>
+                                    Key snapshot across accounts, departments, windows,
+                                    tickets, and audits.
+                                </CardDescription>
                             </div>
 
-                            {/* ✅ Mobile: vertical controls; Desktop unchanged */}
                             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                                 <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                                     <Button
@@ -620,7 +1158,6 @@ export default function AdminDashboardPage() {
                                     Refresh
                                 </Button>
 
-                                {/* ✅ Match App.tsx routes (/admin/*) */}
                                 <Button asChild className="w-full sm:w-auto">
                                     <Link to="/admin/accounts" className="gap-2">
                                         <Users className="h-4 w-4" />
@@ -660,16 +1197,25 @@ export default function AdminDashboardPage() {
 
                         <Separator />
 
-                        {/* ✅ Mobile: vertical badges; Desktop unchanged */}
                         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                             <Badge variant="secondary">
-                                Audit range: {fromStr} → {toStr}
+                                Range: {fromStr} → {toStr}
                             </Badge>
-                            <Badge variant="secondary">Accounts: {formatNumber(accountStats.total)}</Badge>
-                            <Badge variant="secondary">Departments: {formatNumber(deptStats.total)}</Badge>
-                            <Badge variant="secondary">Windows: {formatNumber(windowStats.total)}</Badge>
-                            <Badge variant="secondary">Tickets: {reportsSummary ? formatNumber(rptTotal) : "—"}</Badge>
-                            <Badge variant="secondary">Audits (loaded): {formatNumber(audit?.logs?.length ?? 0)}</Badge>
+                            <Badge variant="secondary">
+                                Accounts: {formatNumber(accountStats.total)}
+                            </Badge>
+                            <Badge variant="secondary">
+                                Departments: {formatNumber(deptStats.total)}
+                            </Badge>
+                            <Badge variant="secondary">
+                                Windows: {formatNumber(windowStats.total)}
+                            </Badge>
+                            <Badge variant="secondary">
+                                Tickets: {formatNumber(rptTotal)}
+                            </Badge>
+                            <Badge variant="secondary">
+                                Audits (loaded): {formatNumber(audits.length)}
+                            </Badge>
                         </div>
                     </CardHeader>
 
@@ -682,98 +1228,151 @@ export default function AdminDashboardPage() {
                             </div>
                         ) : (
                             <>
-                                {/* KPI cards */}
                                 <div className="grid gap-4 md:grid-cols-4">
                                     <Card>
                                         <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm text-muted-foreground">Total accounts</CardTitle>
+                                            <CardTitle className="text-sm text-muted-foreground">
+                                                Total accounts
+                                            </CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">{formatNumber(accountStats.total)}</div>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(accountStats.total)}
+                                            </div>
                                             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                                                <Badge variant="default">Active: {formatNumber(accountStats.active)}</Badge>
-                                                <Badge variant="secondary">Inactive: {formatNumber(accountStats.inactive)}</Badge>
+                                                <Badge variant="default">
+                                                    Active: {formatNumber(accountStats.active)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    Inactive: {formatNumber(accountStats.inactive)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
 
                                     <Card>
                                         <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm text-muted-foreground">Roles</CardTitle>
+                                            <CardTitle className="text-sm text-muted-foreground">
+                                                Roles
+                                            </CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">{formatNumber(accountStats.admins + accountStats.staff)}</div>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(accountStats.admins + accountStats.staff)}
+                                            </div>
                                             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                                                <Badge variant="default">ADMIN: {formatNumber(accountStats.admins)}</Badge>
-                                                <Badge variant="secondary">STAFF: {formatNumber(accountStats.staff)}</Badge>
+                                                <Badge variant="default">
+                                                    ADMIN: {formatNumber(accountStats.admins)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    STAFF: {formatNumber(accountStats.staff)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
 
                                     <Card>
                                         <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm text-muted-foreground">Departments</CardTitle>
+                                            <CardTitle className="text-sm text-muted-foreground">
+                                                Departments
+                                            </CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">{formatNumber(deptStats.total)}</div>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(deptStats.total)}
+                                            </div>
                                             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                                                <Badge variant="default">Enabled: {formatNumber(deptStats.enabled)}</Badge>
-                                                <Badge variant="secondary">Disabled: {formatNumber(deptStats.disabled)}</Badge>
+                                                <Badge variant="default">
+                                                    Enabled: {formatNumber(deptStats.enabled)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    Disabled: {formatNumber(deptStats.disabled)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
 
                                     <Card>
                                         <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm text-muted-foreground">Windows</CardTitle>
+                                            <CardTitle className="text-sm text-muted-foreground">
+                                                Windows
+                                            </CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">{formatNumber(windowStats.total)}</div>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(windowStats.total)}
+                                            </div>
                                             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                                                <Badge variant="default">Enabled: {formatNumber(windowStats.enabled)}</Badge>
-                                                <Badge variant="secondary">Disabled: {formatNumber(windowStats.disabled)}</Badge>
+                                                <Badge variant="default">
+                                                    Enabled: {formatNumber(windowStats.enabled)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    Disabled: {formatNumber(windowStats.disabled)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
 
                                     <Card>
                                         <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm text-muted-foreground">Audit events</CardTitle>
+                                            <CardTitle className="text-sm text-muted-foreground">
+                                                Audit events
+                                            </CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">{formatNumber(auditStats.total)}</div>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(auditStats.total)}
+                                            </div>
                                             <div className="mt-1 text-sm text-muted-foreground">
-                                                Unique actors: <span className="font-medium">{formatNumber(auditStats.uniqueActors)}</span>
+                                                Unique actors:{" "}
+                                                <span className="font-medium">
+                                                    {formatNumber(auditStats.uniqueActors)}
+                                                </span>
                                             </div>
                                         </CardContent>
                                     </Card>
 
                                     <Card>
                                         <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm text-muted-foreground">Top action</CardTitle>
+                                            <CardTitle className="text-sm text-muted-foreground">
+                                                Top action
+                                            </CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-sm font-medium">{topActions[0]?.action ?? "—"}</div>
-                                            <div className="text-2xl font-semibold">{formatNumber(topActions[0]?.count ?? 0)}</div>
-                                            <div className="text-xs text-muted-foreground">Occurrences (within range)</div>
+                                            <div className="text-sm font-medium">
+                                                {topActions[0]?.action ?? "—"}
+                                            </div>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(topActions[0]?.count ?? 0)}
+                                            </div>
+                                            <div className="text-xs text-muted-foreground">
+                                                Occurrences (within range)
+                                            </div>
                                         </CardContent>
                                     </Card>
 
                                     <Card>
                                         <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm text-muted-foreground">Tickets (reports)</CardTitle>
+                                            <CardTitle className="text-sm text-muted-foreground">
+                                                Tickets
+                                            </CardTitle>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">{reportsSummary ? formatNumber(rptTotal) : "—"}</div>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(rptTotal)}
+                                            </div>
                                             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                                                <Badge variant="default">SERVED: {reportsSummary ? formatNumber(rptServed) : "—"}</Badge>
-                                                <Badge variant="secondary">WAITING: {reportsSummary ? formatNumber(rptWaiting) : "—"}</Badge>
+                                                <Badge variant="default">
+                                                    SERVED: {formatNumber(rptServed)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    WAITING: {formatNumber(rptWaiting)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
                                 </div>
 
-                                {/* Charts (Accounts + Staff/Audits) */}
                                 <div className="mt-6 grid gap-6 lg:grid-cols-12">
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
@@ -783,18 +1382,36 @@ export default function AdminDashboardPage() {
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
-                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Pie data={accountStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
+                                                    <Legend
+                                                        wrapperStyle={{
+                                                            color: "var(--muted-foreground)",
+                                                        }}
+                                                    />
+                                                    <Pie
+                                                        data={accountStatusPie}
+                                                        dataKey="value"
+                                                        nameKey="name"
+                                                        outerRadius={80}
+                                                        stroke="var(--background)"
+                                                    >
                                                         <Cell fill={CHART.c1} />
                                                         <Cell fill={CHART.c2} />
                                                     </Pie>
                                                 </PieChart>
                                             </ResponsiveContainer>
 
-                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
-                                                <Badge variant="default">Active: {formatNumber(accountStats.active)}</Badge>
-                                                <Badge variant="secondary">Inactive: {formatNumber(accountStats.inactive)}</Badge>
+                                            <div className="mt-2 flex gap-2 text-sm sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">
+                                                    Active: {formatNumber(accountStats.active)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    Inactive: {formatNumber(accountStats.inactive)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
@@ -807,18 +1424,36 @@ export default function AdminDashboardPage() {
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
-                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Pie data={rolePieData} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
+                                                    <Legend
+                                                        wrapperStyle={{
+                                                            color: "var(--muted-foreground)",
+                                                        }}
+                                                    />
+                                                    <Pie
+                                                        data={rolePieData}
+                                                        dataKey="value"
+                                                        nameKey="name"
+                                                        outerRadius={80}
+                                                        stroke="var(--background)"
+                                                    >
                                                         <Cell fill={CHART.c4} />
                                                         <Cell fill={CHART.c5} />
                                                     </Pie>
                                                 </PieChart>
                                             </ResponsiveContainer>
 
-                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
-                                                <Badge variant="default">ADMIN: {formatNumber(accountStats.admins)}</Badge>
-                                                <Badge variant="secondary">STAFF: {formatNumber(accountStats.staff)}</Badge>
+                                            <div className="mt-2 flex gap-2 text-sm sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">
+                                                    ADMIN: {formatNumber(accountStats.admins)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    STAFF: {formatNumber(accountStats.staff)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
@@ -826,16 +1461,24 @@ export default function AdminDashboardPage() {
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
                                             <CardTitle>Active staff by department</CardTitle>
-                                            <CardDescription>Top departments (active STAFF only)</CardDescription>
+                                            <CardDescription>
+                                                Top departments (active STAFF only)
+                                            </CardDescription>
                                         </CardHeader>
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <BarChart data={deptBreakdown}>
-                                                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                                                    <CartesianGrid
+                                                        stroke="var(--border)"
+                                                        strokeDasharray="3 3"
+                                                    />
                                                     <XAxis
                                                         dataKey="name"
                                                         interval={0}
-                                                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                                                        tick={{
+                                                            fontSize: 11,
+                                                            fill: "var(--muted-foreground)",
+                                                        }}
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
@@ -845,7 +1488,11 @@ export default function AdminDashboardPage() {
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
                                                     <Bar dataKey="count" fill={CHART.c1} />
                                                 </BarChart>
                                             </ResponsiveContainer>
@@ -853,7 +1500,6 @@ export default function AdminDashboardPage() {
                                     </Card>
                                 </div>
 
-                                {/* Charts (Departments + Windows) */}
                                 <div className="mt-6 grid gap-6 lg:grid-cols-12">
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
@@ -863,18 +1509,36 @@ export default function AdminDashboardPage() {
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
-                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Pie data={deptStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
+                                                    <Legend
+                                                        wrapperStyle={{
+                                                            color: "var(--muted-foreground)",
+                                                        }}
+                                                    />
+                                                    <Pie
+                                                        data={deptStatusPie}
+                                                        dataKey="value"
+                                                        nameKey="name"
+                                                        outerRadius={80}
+                                                        stroke="var(--background)"
+                                                    >
                                                         <Cell fill={CHART.c1} />
                                                         <Cell fill={CHART.c2} />
                                                     </Pie>
                                                 </PieChart>
                                             </ResponsiveContainer>
 
-                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
-                                                <Badge variant="default">Enabled: {formatNumber(deptStats.enabled)}</Badge>
-                                                <Badge variant="secondary">Disabled: {formatNumber(deptStats.disabled)}</Badge>
+                                            <div className="mt-2 flex gap-2 text-sm sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">
+                                                    Enabled: {formatNumber(deptStats.enabled)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    Disabled: {formatNumber(deptStats.disabled)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
@@ -887,18 +1551,36 @@ export default function AdminDashboardPage() {
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
-                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Pie data={winStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
+                                                    <Legend
+                                                        wrapperStyle={{
+                                                            color: "var(--muted-foreground)",
+                                                        }}
+                                                    />
+                                                    <Pie
+                                                        data={winStatusPie}
+                                                        dataKey="value"
+                                                        nameKey="name"
+                                                        outerRadius={80}
+                                                        stroke="var(--background)"
+                                                    >
                                                         <Cell fill={CHART.c4} />
                                                         <Cell fill={CHART.c5} />
                                                     </Pie>
                                                 </PieChart>
                                             </ResponsiveContainer>
 
-                                            <div className="mt-2 flex gap-2 sm:flex-row sm:flex-wrap text-sm">
-                                                <Badge variant="default">Enabled: {formatNumber(windowStats.enabled)}</Badge>
-                                                <Badge variant="secondary">Disabled: {formatNumber(windowStats.disabled)}</Badge>
+                                            <div className="mt-2 flex gap-2 text-sm sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">
+                                                    Enabled: {formatNumber(windowStats.enabled)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    Disabled: {formatNumber(windowStats.disabled)}
+                                                </Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
@@ -906,16 +1588,24 @@ export default function AdminDashboardPage() {
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
                                             <CardTitle>Windows by department</CardTitle>
-                                            <CardDescription>Top departments (by window count)</CardDescription>
+                                            <CardDescription>
+                                                Top departments (by window count)
+                                            </CardDescription>
                                         </CardHeader>
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <BarChart data={windowsByDept}>
-                                                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                                                    <CartesianGrid
+                                                        stroke="var(--border)"
+                                                        strokeDasharray="3 3"
+                                                    />
                                                     <XAxis
                                                         dataKey="name"
                                                         interval={0}
-                                                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                                                        tick={{
+                                                            fontSize: 11,
+                                                            fill: "var(--muted-foreground)",
+                                                        }}
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
@@ -925,7 +1615,11 @@ export default function AdminDashboardPage() {
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
                                                     <Bar dataKey="count" fill={CHART.c2} />
                                                 </BarChart>
                                             </ResponsiveContainer>
@@ -933,21 +1627,34 @@ export default function AdminDashboardPage() {
                                     </Card>
                                 </div>
 
-                                {/* ✅ Reports overview */}
                                 <div className="mt-6 grid gap-6 lg:grid-cols-12">
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
                                             <CardTitle>Ticket status</CardTitle>
                                             <CardDescription>
-                                                Reports snapshot ({fromStr} → {toStr})
+                                                Recent tickets snapshot ({fromStr} → {toStr})
                                             </CardDescription>
                                         </CardHeader>
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <PieChart>
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
-                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Pie data={ticketStatusPie} dataKey="value" nameKey="name" outerRadius={80} stroke="var(--background)">
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
+                                                    <Legend
+                                                        wrapperStyle={{
+                                                            color: "var(--muted-foreground)",
+                                                        }}
+                                                    />
+                                                    <Pie
+                                                        data={ticketStatusPie}
+                                                        dataKey="value"
+                                                        nameKey="name"
+                                                        outerRadius={80}
+                                                        stroke="var(--background)"
+                                                    >
                                                         <Cell fill={CHART.c1} />
                                                         <Cell fill={CHART.c2} />
                                                         <Cell fill={CHART.c3} />
@@ -962,40 +1669,66 @@ export default function AdminDashboardPage() {
                                     <Card className="lg:col-span-4">
                                         <CardHeader>
                                             <CardTitle>Tickets summary</CardTitle>
-                                            <CardDescription>Totals and averages</CardDescription>
+                                            <CardDescription>
+                                                Derived from recent ticket data
+                                            </CardDescription>
                                         </CardHeader>
                                         <CardContent>
-                                            <div className="text-2xl font-semibold">{reportsSummary ? formatNumber(rptTotal) : "—"}</div>
-                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap text-sm">
-                                                <Badge variant="default">SERVED: {reportsSummary ? formatNumber(rptServed) : "—"}</Badge>
-                                                <Badge variant="secondary">WAITING: {reportsSummary ? formatNumber(rptWaiting) : "—"}</Badge>
-                                                <Badge variant="secondary">CALLED: {reportsSummary ? formatNumber(rptCalled) : "—"}</Badge>
-                                                <Badge variant="secondary">HOLD: {reportsSummary ? formatNumber(rptHold) : "—"}</Badge>
-                                                <Badge variant="secondary">OUT: {reportsSummary ? formatNumber(rptOut) : "—"}</Badge>
+                                            <div className="text-2xl font-semibold">
+                                                {formatNumber(rptTotal)}
+                                            </div>
+                                            <div className="mt-2 flex flex-col gap-2 text-sm sm:flex-row sm:flex-wrap">
+                                                <Badge variant="default">
+                                                    SERVED: {formatNumber(rptServed)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    WAITING: {formatNumber(rptWaiting)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    CALLED: {formatNumber(rptCalled)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    HOLD: {formatNumber(rptHold)}
+                                                </Badge>
+                                                <Badge variant="secondary">
+                                                    OUT: {formatNumber(rptOut)}
+                                                </Badge>
                                             </div>
 
                                             <Separator className="my-4" />
 
                                             <div className="grid grid-cols-1 gap-3">
                                                 <div className="rounded-lg border p-3">
-                                                    <div className="text-xs text-muted-foreground">Avg wait time</div>
-                                                    <div className="mt-1 text-lg font-semibold">
-                                                        {reportsSummary ? formatDuration(reportTotals?.avgWaitMs) : "—"}
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Avg wait time
                                                     </div>
-                                                    <div className="text-xs text-muted-foreground">From join → called</div>
+                                                    <div className="mt-1 text-lg font-semibold">
+                                                        {formatDuration(ticketSummary.avgWaitMs)}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        From join → called
+                                                    </div>
                                                 </div>
 
                                                 <div className="rounded-lg border p-3">
-                                                    <div className="text-xs text-muted-foreground">Avg service time</div>
-                                                    <div className="mt-1 text-lg font-semibold">
-                                                        {reportsSummary ? formatDuration(reportTotals?.avgServiceMs) : "—"}
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Avg service time
                                                     </div>
-                                                    <div className="text-xs text-muted-foreground">From called → served</div>
+                                                    <div className="mt-1 text-lg font-semibold">
+                                                        {formatDuration(ticketSummary.avgServiceMs)}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        From called → served
+                                                    </div>
                                                 </div>
                                             </div>
 
                                             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                                <Button asChild variant="outline" className="w-full sm:w-auto">
+                                                <Button
+                                                    asChild
+                                                    variant="outline"
+                                                    className="w-full sm:w-auto"
+                                                >
                                                     <Link to="/admin/reports">Open full reports</Link>
                                                 </Button>
                                             </div>
@@ -1010,11 +1743,17 @@ export default function AdminDashboardPage() {
                                         <CardContent className="h-64">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <BarChart data={topServedDepts}>
-                                                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                                                    <CartesianGrid
+                                                        stroke="var(--border)"
+                                                        strokeDasharray="3 3"
+                                                    />
                                                     <XAxis
                                                         dataKey="name"
                                                         interval={0}
-                                                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                                                        tick={{
+                                                            fontSize: 11,
+                                                            fill: "var(--muted-foreground)",
+                                                        }}
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
@@ -1024,7 +1763,11 @@ export default function AdminDashboardPage() {
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
                                                     <Bar dataKey="served" fill={CHART.c3} />
                                                 </BarChart>
                                             </ResponsiveContainer>
@@ -1032,20 +1775,27 @@ export default function AdminDashboardPage() {
                                     </Card>
                                 </div>
 
-                                {/* Charts (Audits) */}
                                 <div className="mt-6 grid gap-6 lg:grid-cols-12">
                                     <Card className="lg:col-span-7">
                                         <CardHeader>
                                             <CardTitle>Audits over time</CardTitle>
-                                            <CardDescription>Daily count ({rangeDays} days)</CardDescription>
+                                            <CardDescription>
+                                                Daily count ({rangeDays} days)
+                                            </CardDescription>
                                         </CardHeader>
                                         <CardContent className="h-72">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <LineChart data={auditsByDay}>
-                                                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                                                    <CartesianGrid
+                                                        stroke="var(--border)"
+                                                        strokeDasharray="3 3"
+                                                    />
                                                     <XAxis
                                                         dataKey="day"
-                                                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                                                        tick={{
+                                                            fontSize: 11,
+                                                            fill: "var(--muted-foreground)",
+                                                        }}
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
@@ -1055,9 +1805,24 @@ export default function AdminDashboardPage() {
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
-                                                    <Legend wrapperStyle={{ color: "var(--muted-foreground)" }} />
-                                                    <Line type="monotone" dataKey="count" stroke={CHART.c3} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
+                                                    <Legend
+                                                        wrapperStyle={{
+                                                            color: "var(--muted-foreground)",
+                                                        }}
+                                                    />
+                                                    <Line
+                                                        type="monotone"
+                                                        dataKey="count"
+                                                        stroke={CHART.c3}
+                                                        strokeWidth={2}
+                                                        dot={false}
+                                                        activeDot={{ r: 4 }}
+                                                    />
                                                 </LineChart>
                                             </ResponsiveContainer>
                                         </CardContent>
@@ -1066,12 +1831,21 @@ export default function AdminDashboardPage() {
                                     <Card className="lg:col-span-5">
                                         <CardHeader>
                                             <CardTitle>Top actions</CardTitle>
-                                            <CardDescription>Most frequent actions (loaded logs)</CardDescription>
+                                            <CardDescription>
+                                                Most frequent actions (loaded logs)
+                                            </CardDescription>
                                         </CardHeader>
                                         <CardContent className="h-72">
                                             <ResponsiveContainer width="100%" height="100%">
-                                                <BarChart data={topActions} layout="vertical" margin={{ left: 24 }}>
-                                                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                                                <BarChart
+                                                    data={topActions}
+                                                    layout="vertical"
+                                                    margin={{ left: 24 }}
+                                                >
+                                                    <CartesianGrid
+                                                        stroke="var(--border)"
+                                                        strokeDasharray="3 3"
+                                                    />
                                                     <XAxis
                                                         type="number"
                                                         allowDecimals={false}
@@ -1083,11 +1857,18 @@ export default function AdminDashboardPage() {
                                                         type="category"
                                                         dataKey="action"
                                                         width={140}
-                                                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                                                        tick={{
+                                                            fontSize: 11,
+                                                            fill: "var(--muted-foreground)",
+                                                        }}
                                                         axisLine={{ stroke: "var(--border)" }}
                                                         tickLine={{ stroke: "var(--border)" }}
                                                     />
-                                                    <Tooltip contentStyle={tooltipContentStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
+                                                    <Tooltip
+                                                        contentStyle={tooltipContentStyle}
+                                                        labelStyle={tooltipLabelStyle}
+                                                        itemStyle={tooltipItemStyle}
+                                                    />
                                                     <Bar dataKey="count" fill={CHART.c2} />
                                                 </BarChart>
                                             </ResponsiveContainer>
@@ -1095,7 +1876,6 @@ export default function AdminDashboardPage() {
                                     </Card>
                                 </div>
 
-                                {/* Tables */}
                                 <div className="mt-6 grid gap-6 lg:grid-cols-12">
                                     <Card className="min-w-0 lg:col-span-6">
                                         <CardHeader>
@@ -1110,8 +1890,14 @@ export default function AdminDashboardPage() {
                                                 searchPlaceholder="Search name…"
                                             />
                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                                <Button asChild variant="outline" className="w-full sm:w-auto">
-                                                    <Link to="/admin/accounts">Open full accounts</Link>
+                                                <Button
+                                                    asChild
+                                                    variant="outline"
+                                                    className="w-full sm:w-auto"
+                                                >
+                                                    <Link to="/admin/accounts">
+                                                        Open full accounts
+                                                    </Link>
                                                 </Button>
                                             </div>
                                         </CardContent>
@@ -1130,8 +1916,14 @@ export default function AdminDashboardPage() {
                                                 searchPlaceholder="Search action…"
                                             />
                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                                <Button asChild variant="outline" className="w-full sm:w-auto">
-                                                    <Link to="/admin/audit-logs">Open full audit logs</Link>
+                                                <Button
+                                                    asChild
+                                                    variant="outline"
+                                                    className="w-full sm:w-auto"
+                                                >
+                                                    <Link to="/admin/audit-logs">
+                                                        Open full audit logs
+                                                    </Link>
                                                 </Button>
                                             </div>
                                         </CardContent>
@@ -1152,8 +1944,14 @@ export default function AdminDashboardPage() {
                                                 searchPlaceholder="Search department…"
                                             />
                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                                <Button asChild variant="outline" className="w-full sm:w-auto">
-                                                    <Link to="/admin/departments">Open full departments</Link>
+                                                <Button
+                                                    asChild
+                                                    variant="outline"
+                                                    className="w-full sm:w-auto"
+                                                >
+                                                    <Link to="/admin/departments">
+                                                        Open full departments
+                                                    </Link>
                                                 </Button>
                                             </div>
                                         </CardContent>
@@ -1172,8 +1970,14 @@ export default function AdminDashboardPage() {
                                                 searchPlaceholder="Search window…"
                                             />
                                             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                                <Button asChild variant="outline" className="w-full sm:w-auto">
-                                                    <Link to="/admin/windows">Open full windows</Link>
+                                                <Button
+                                                    asChild
+                                                    variant="outline"
+                                                    className="w-full sm:w-auto"
+                                                >
+                                                    <Link to="/admin/windows">
+                                                        Open full windows
+                                                    </Link>
                                                 </Button>
                                             </div>
                                         </CardContent>
