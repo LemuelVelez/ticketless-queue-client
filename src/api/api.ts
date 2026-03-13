@@ -6,6 +6,11 @@ export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
 
+const LEGACY_API_PATH_ALIASES: Record<string, string> = {
+    "/admin/staff": "/users/staff",
+    "/admin/participants": "/users/participants",
+}
+
 function stripTrailingSlash(value: string) {
     return String(value ?? "").replace(/\/+$/, "")
 }
@@ -20,6 +25,11 @@ function stripApiPrefix(value: string) {
     const normalized = ensureLeadingSlash(value)
     if (normalized === API_PREFIX) return ""
     return normalized.replace(/^\/api(?=\/|$)/i, "")
+}
+
+function resolveLegacyApiPath(value: string) {
+    const normalized = ensureLeadingSlash(value)
+    return LEGACY_API_PATH_ALIASES[normalized] || normalized
 }
 
 function encodeRouteParam(value: ApiRouteParam) {
@@ -123,7 +133,8 @@ export function toApiPath(path: string) {
     }
 
     const normalized = stripApiPrefix(raw)
-    return normalized ? ensureLeadingSlash(normalized) : ""
+    const resolved = normalized ? resolveLegacyApiPath(normalized) : ""
+    return resolved ? ensureLeadingSlash(resolved) : ""
 }
 
 export function toApiUrl(path: string) {
@@ -192,6 +203,10 @@ export const API_PATHS = {
         staff: "/users/staff",
         participants: "/users/participants",
     },
+    admin: {
+        staff: "/admin/staff",
+        participants: "/admin/participants",
+    },
 } as const
 
 export const API_ROUTES = {
@@ -244,5 +259,9 @@ export const API_ROUTES = {
             toApiUrl(API_PATHS.users.byStudentId(studentId)),
         staff: () => toApiUrl(API_PATHS.users.staff),
         participants: () => toApiUrl(API_PATHS.users.participants),
+    },
+    admin: {
+        staff: () => toApiUrl(API_PATHS.admin.staff),
+        participants: () => toApiUrl(API_PATHS.admin.participants),
     },
 } as const
