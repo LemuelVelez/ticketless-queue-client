@@ -10,26 +10,227 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
-import { adminApi, type AuditLogsResponse } from "@/api/admin"
+import { API_PATHS } from "@/api/api"
+import { api } from "@/lib/http"
 import { useSession } from "@/hooks/use-session"
 import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table"
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 
 import { Calendar } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover"
 
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+
+type AuditActorRole = "ADMIN" | "STAFF"
+
+type AuditLogRow = {
+    id: string
+    createdAt: string
+    actorName?: string | null
+    actorEmail?: string | null
+    actorId?: string | null
+    actorRole?: AuditActorRole | null
+    action: string
+    entityType?: string | null
+    entityId?: string | null
+    meta?: Record<string, unknown> | null
+}
+
+type AuditLogsResponse = {
+    logs: AuditLogRow[]
+    total: number
+    page: number
+    limit: number
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function toTrimmedString(value: unknown): string | undefined {
+    if (typeof value !== "string") return undefined
+    const clean = value.trim()
+    return clean || undefined
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+    const n =
+        typeof value === "number"
+            ? value
+            : typeof value === "string"
+              ? Number(value)
+              : NaN
+    return Number.isFinite(n) ? n : fallback
+}
+
+function normalizeActorRole(value: unknown): AuditActorRole | null {
+    const role = String(value ?? "")
+        .trim()
+        .toUpperCase()
+
+    if (role === "ADMIN" || role === "STAFF") return role
+    return null
+}
+
+function pickFirstString(...values: unknown[]): string | undefined {
+    for (const value of values) {
+        const clean = toTrimmedString(value)
+        if (clean) return clean
+    }
+    return undefined
+}
+
+function normalizeMeta(value: unknown): Record<string, unknown> | null {
+    if (isRecord(value)) return value
+    return null
+}
+
+function normalizeAuditLogRow(value: unknown, index: number): AuditLogRow {
+    const row = isRecord(value) ? value : {}
+
+    const actor = isRecord(row.actor) ? row.actor : null
+    const entity = isRecord(row.entity) ? row.entity : null
+
+    const id =
+        pickFirstString(row.id, row._id, row.auditId, row.logId) ??
+        `audit-log-${index}`
+
+    const createdAt =
+        pickFirstString(
+            row.createdAt,
+            row.timestamp,
+            row.date,
+            row.loggedAt,
+            row.updatedAt
+        ) ?? new Date().toISOString()
+
+    const action =
+        pickFirstString(row.action, row.type, row.event, row.activity) ?? "—"
+
+    const actorName = pickFirstString(
+        row.actorName,
+        actor?.name,
+        actor?.fullName,
+        actor?.displayName
+    )
+
+    const actorEmail = pickFirstString(row.actorEmail, actor?.email)
+
+    const actorId = pickFirstString(row.actorId, actor?.id, actor?._id)
+
+    const actorRole = normalizeActorRole(row.actorRole ?? actor?.role)
+
+    const entityType = pickFirstString(
+        row.entityType,
+        entity?.type,
+        row.targetType,
+        row.subjectType
+    )
+
+    const entityId = pickFirstString(
+        row.entityId,
+        entity?.id,
+        entity?._id,
+        row.targetId,
+        row.subjectId
+    )
+
+    const meta = normalizeMeta(row.meta ?? row.details ?? row.context)
+
+    return {
+        id,
+        createdAt,
+        actorName: actorName ?? null,
+        actorEmail: actorEmail ?? null,
+        actorId: actorId ?? null,
+        actorRole,
+        action,
+        entityType: entityType ?? null,
+        entityId: entityId ?? null,
+        meta,
+    }
+}
+
+function normalizeAuditLogsResponse(
+    payload: unknown,
+    fallbackPage: number,
+    fallbackLimit: number
+): AuditLogsResponse {
+    const data = isRecord(payload) ? payload : {}
+
+    const rawLogs =
+        (Array.isArray(data.logs) && data.logs) ||
+        (Array.isArray(data.items) && data.items) ||
+        (Array.isArray(data.rows) && data.rows) ||
+        (Array.isArray(data.results) && data.results) ||
+        (Array.isArray(data.auditLogs) && data.auditLogs) ||
+        []
+
+    const logs = rawLogs.map((item, index) => normalizeAuditLogRow(item, index))
+
+    const pagination = isRecord(data.pagination) ? data.pagination : null
+    const meta = isRecord(data.meta) ? data.meta : null
+
+    const total = toNumber(
+        data.total ??
+            data.count ??
+            data.totalCount ??
+            pagination?.total ??
+            meta?.total,
+        logs.length
+    )
+
+    const page = Math.max(
+        1,
+        toNumber(data.page ?? pagination?.page ?? meta?.page, fallbackPage)
+    )
+
+    const limit = Math.max(
+        1,
+        toNumber(data.limit ?? pagination?.limit ?? meta?.limit, fallbackLimit)
+    )
+
+    return { logs, total, page, limit }
+}
 
 function ymdLocal(d: Date) {
     const y = d.getFullYear()
@@ -61,7 +262,12 @@ function DateRangePicker({
 }) {
     const label = React.useMemo(() => {
         if (value?.from) {
-            if (value.to) return `${format(value.from, "LLL dd, y")} – ${format(value.to, "LLL dd, y")}`
+            if (value.to) {
+                return `${format(value.from, "LLL dd, y")} – ${format(
+                    value.to,
+                    "LLL dd, y"
+                )}`
+            }
             return format(value.from, "LLL dd, y")
         }
         return "Pick a date range"
@@ -73,14 +279,23 @@ function DateRangePicker({
                 <Button
                     variant="outline"
                     disabled={disabled}
-                    className={cn("w-full justify-start text-left font-normal", !value?.from && "text-muted-foreground")}
+                    className={cn(
+                        "w-full justify-start text-left font-normal",
+                        !value?.from && "text-muted-foreground"
+                    )}
                 >
                     <CalendarDays className="mr-2 h-4 w-4" />
                     {label}
                 </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="range" selected={value} onSelect={onChange} initialFocus numberOfMonths={1} />
+                <Calendar
+                    mode="range"
+                    selected={value}
+                    onSelect={onChange}
+                    initialFocus
+                    numberOfMonths={1}
+                />
             </PopoverContent>
         </Popover>
     )
@@ -98,33 +313,37 @@ export default function AdminAuditsPage() {
         }
     }, [sessionUser])
 
-    // Filters
-    const [range, setRange] = React.useState<DateRange | undefined>(() => lastNDaysRange(7))
-    const from = React.useMemo(() => (range?.from ? ymdLocal(range.from) : ""), [range?.from])
-    const to = React.useMemo(() => (range?.to ? ymdLocal(range.to) : ""), [range?.to])
+    const [range, setRange] = React.useState<DateRange | undefined>(() =>
+        lastNDaysRange(7)
+    )
+    const from = React.useMemo(
+        () => (range?.from ? ymdLocal(range.from) : ""),
+        [range?.from]
+    )
+    const to = React.useMemo(
+        () => (range?.to ? ymdLocal(range.to) : ""),
+        [range?.to]
+    )
 
     const [action, setAction] = React.useState("")
     const [entityType, setEntityType] = React.useState("")
-    const [actorRole, setActorRole] = React.useState<"ALL" | "ADMIN" | "STAFF">("ALL")
+    const [actorRole, setActorRole] = React.useState<"ALL" | "ADMIN" | "STAFF">(
+        "ALL"
+    )
 
-    // Pagination
     const [page, setPage] = React.useState(1)
     const [limit, setLimit] = React.useState(50)
 
-    // Data
     const [loading, setLoading] = React.useState(true)
     const [logs, setLogs] = React.useState<AuditLogsResponse | null>(null)
 
-    // Meta dialog
     const [metaOpen, setMetaOpen] = React.useState(false)
     const [metaTitle, setMetaTitle] = React.useState("Meta")
     const [metaJson, setMetaJson] = React.useState<string>("{}")
 
     const canApplyRange = React.useMemo(() => {
-        // allow empty range (meaning no date filter)
         if (!range?.from && !range?.to) return true
         if (range?.from && range?.to) return from <= to
-        // if only one side, backend will still accept (we send what exists)
         return true
     }, [range?.from, range?.to, from, to])
 
@@ -145,22 +364,27 @@ export default function AdminAuditsPage() {
 
     const fetchAuditLogs = React.useCallback(async () => {
         setLoading(true)
+
         try {
             const roleParam = actorRole === "ALL" ? undefined : actorRole
 
-            const res = await adminApi.listAuditLogs({
-                page,
-                limit,
-                action: action.trim() || undefined,
-                entityType: entityType.trim() || undefined,
-                actorRole: roleParam as any,
-                from: from || undefined,
-                to: to || undefined,
+            const response = await api.getData<unknown>(API_PATHS.auditLogs.recent, {
+                auth: "staff",
+                params: {
+                    page,
+                    limit,
+                    action: action.trim() || undefined,
+                    entityType: entityType.trim() || undefined,
+                    actorRole: roleParam,
+                    from: from || undefined,
+                    to: to || undefined,
+                },
             })
 
-            setLogs(res)
+            setLogs(normalizeAuditLogsResponse(response, page, limit))
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to load audit logs."
+            const msg =
+                e instanceof Error ? e.message : "Failed to load audit logs."
             toast.error(msg)
         } finally {
             setLoading(false)
@@ -172,7 +396,12 @@ export default function AdminAuditsPage() {
     }, [fetchAuditLogs])
 
     return (
-        <DashboardLayout title="Audit logs" navItems={ADMIN_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+        <DashboardLayout
+            title="Audit logs"
+            navItems={ADMIN_NAV_ITEMS}
+            user={dashboardUser}
+            activePath={location.pathname}
+        >
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
                 <Card className="min-w-0">
                     <CardHeader className="gap-2">
@@ -187,9 +416,14 @@ export default function AdminAuditsPage() {
                                 </CardDescription>
                             </div>
 
-                            {/* XS: stack; desktop unchanged */}
                             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                                <Select value={String(limit)} onValueChange={(v) => { setPage(1); setLimit(Number(v)) }}>
+                                <Select
+                                    value={String(limit)}
+                                    onValueChange={(v) => {
+                                        setPage(1)
+                                        setLimit(Number(v))
+                                    }}
+                                >
                                     <SelectTrigger className="w-full sm:w-36">
                                         <SelectValue placeholder="Rows" />
                                     </SelectTrigger>
@@ -214,7 +448,11 @@ export default function AdminAuditsPage() {
 
                                 <Button
                                     onClick={() => {
-                                        if (!canApplyRange) return toast.error("Pick a valid date range (start and end).")
+                                        if (!canApplyRange) {
+                                            return toast.error(
+                                                "Pick a valid date range (start and end)."
+                                            )
+                                        }
                                         setPage(1)
                                         void fetchAuditLogs()
                                     }}
@@ -232,7 +470,11 @@ export default function AdminAuditsPage() {
                         <div className="grid gap-4 md:grid-cols-12">
                             <div className="grid gap-2 md:col-span-4">
                                 <Label>Date range</Label>
-                                <DateRangePicker value={range} onChange={setRange} disabled={loading} />
+                                <DateRangePicker
+                                    value={range}
+                                    onChange={setRange}
+                                    disabled={loading}
+                                />
 
                                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                                     <Button
@@ -240,7 +482,13 @@ export default function AdminAuditsPage() {
                                         variant="secondary"
                                         size="sm"
                                         className="w-full sm:w-auto"
-                                        onClick={() => { setPage(1); setRange({ from: new Date(), to: new Date() }) }}
+                                        onClick={() => {
+                                            setPage(1)
+                                            setRange({
+                                                from: new Date(),
+                                                to: new Date(),
+                                            })
+                                        }}
                                     >
                                         Today
                                     </Button>
@@ -249,7 +497,10 @@ export default function AdminAuditsPage() {
                                         variant="secondary"
                                         size="sm"
                                         className="w-full sm:w-auto"
-                                        onClick={() => { setPage(1); setRange(lastNDaysRange(7)) }}
+                                        onClick={() => {
+                                            setPage(1)
+                                            setRange(lastNDaysRange(7))
+                                        }}
                                     >
                                         Last 7 days
                                     </Button>
@@ -258,7 +509,10 @@ export default function AdminAuditsPage() {
                                         variant="secondary"
                                         size="sm"
                                         className="w-full sm:w-auto"
-                                        onClick={() => { setPage(1); setRange(lastNDaysRange(30)) }}
+                                        onClick={() => {
+                                            setPage(1)
+                                            setRange(lastNDaysRange(30))
+                                        }}
                                     >
                                         Last 30 days
                                     </Button>
@@ -267,20 +521,31 @@ export default function AdminAuditsPage() {
                                         variant="ghost"
                                         size="sm"
                                         className="w-full sm:w-auto"
-                                        onClick={() => { setPage(1); setRange(undefined) }}
+                                        onClick={() => {
+                                            setPage(1)
+                                            setRange(undefined)
+                                        }}
                                     >
                                         Clear
                                     </Button>
                                 </div>
 
                                 <div className="text-xs text-muted-foreground">
-                                    API range: <span className="font-medium">{from || "—"}</span> →{" "}
-                                    <span className="font-medium">{to || "—"}</span>
+                                    API range:{" "}
+                                    <span className="font-medium">
+                                        {from || "—"}
+                                    </span>{" "}
+                                    →{" "}
+                                    <span className="font-medium">
+                                        {to || "—"}
+                                    </span>
                                 </div>
                             </div>
 
                             <div className="grid gap-2 md:col-span-3">
-                                <Label htmlFor="audit-action">Action (optional)</Label>
+                                <Label htmlFor="audit-action">
+                                    Action (optional)
+                                </Label>
                                 <Input
                                     id="audit-action"
                                     value={action}
@@ -289,16 +554,21 @@ export default function AdminAuditsPage() {
                                     className="w-full min-w-0"
                                 />
                                 <div className="text-xs text-muted-foreground">
-                                    Tip: backend matches action exactly (case-sensitive).
+                                    Tip: backend matches action exactly
+                                    (case-sensitive).
                                 </div>
                             </div>
 
                             <div className="grid gap-2 md:col-span-3">
-                                <Label htmlFor="audit-entity">Entity type (optional)</Label>
+                                <Label htmlFor="audit-entity">
+                                    Entity type (optional)
+                                </Label>
                                 <Input
                                     id="audit-entity"
                                     value={entityType}
-                                    onChange={(e) => setEntityType(e.target.value)}
+                                    onChange={(e) =>
+                                        setEntityType(e.target.value)
+                                    }
                                     placeholder="e.g., User, Department"
                                     className="w-full min-w-0"
                                 />
@@ -306,14 +576,24 @@ export default function AdminAuditsPage() {
 
                             <div className="grid gap-2 md:col-span-2">
                                 <Label>Actor role</Label>
-                                <Select value={actorRole} onValueChange={(v) => { setPage(1); setActorRole(v as any) }}>
+                                <Select
+                                    value={actorRole}
+                                    onValueChange={(v) => {
+                                        setPage(1)
+                                        setActorRole(v as "ALL" | "ADMIN" | "STAFF")
+                                    }}
+                                >
                                     <SelectTrigger className="w-full">
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="ALL">All</SelectItem>
-                                        <SelectItem value="ADMIN">ADMIN</SelectItem>
-                                        <SelectItem value="STAFF">STAFF</SelectItem>
+                                        <SelectItem value="ADMIN">
+                                            ADMIN
+                                        </SelectItem>
+                                        <SelectItem value="STAFF">
+                                            STAFF
+                                        </SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -332,22 +612,31 @@ export default function AdminAuditsPage() {
                             <>
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                     <div className="flex flex-wrap items-center gap-2 text-sm">
-                                        <Badge variant="secondary">Total: {formatNumber(logs?.total ?? 0)}</Badge>
+                                        <Badge variant="secondary">
+                                            Total: {formatNumber(logs?.total ?? 0)}
+                                        </Badge>
                                         <Badge variant="secondary">
                                             Page: {page} / {totalPages}
                                         </Badge>
-                                        <Badge variant="secondary" className="gap-2">
+                                        <Badge
+                                            variant="secondary"
+                                            className="gap-2"
+                                        >
                                             <Table2 className="h-4 w-4" />
-                                            {formatNumber(logs?.logs?.length ?? 0)} rows
+                                            {formatNumber(
+                                                logs?.logs?.length ?? 0
+                                            )}{" "}
+                                            rows
                                         </Badge>
                                     </div>
 
-                                    {/* XS: stack; desktop unchanged */}
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                         <Button
                                             variant="outline"
                                             className="w-full sm:w-auto"
-                                            onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                            onClick={() =>
+                                                setPage((p) => Math.max(1, p - 1))
+                                            }
                                             disabled={page <= 1}
                                         >
                                             Prev
@@ -355,7 +644,11 @@ export default function AdminAuditsPage() {
                                         <Button
                                             variant="outline"
                                             className="w-full sm:w-auto"
-                                            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                                            onClick={() =>
+                                                setPage((p) =>
+                                                    Math.min(totalPages, p + 1)
+                                                )
+                                            }
                                             disabled={page >= totalPages}
                                         >
                                             Next
@@ -371,16 +664,22 @@ export default function AdminAuditsPage() {
                                     </div>
                                 </div>
 
-                                <div className="mt-4 rounded-lg border overflow-x-auto">
+                                <div className="mt-4 overflow-x-auto rounded-lg border">
                                     <Table>
                                         <TableHeader>
                                             <TableRow>
                                                 <TableHead>When</TableHead>
                                                 <TableHead>Actor</TableHead>
-                                                <TableHead className="hidden sm:table-cell">Role</TableHead>
+                                                <TableHead className="hidden sm:table-cell">
+                                                    Role
+                                                </TableHead>
                                                 <TableHead>Action</TableHead>
-                                                <TableHead className="hidden lg:table-cell">Entity</TableHead>
-                                                <TableHead className="text-right">Meta</TableHead>
+                                                <TableHead className="hidden lg:table-cell">
+                                                    Entity
+                                                </TableHead>
+                                                <TableHead className="text-right">
+                                                    Meta
+                                                </TableHead>
                                             </TableRow>
                                         </TableHeader>
 
@@ -390,49 +689,85 @@ export default function AdminAuditsPage() {
                                                     <TableCell className="whitespace-nowrap">
                                                         <div className="flex flex-col">
                                                             <span className="font-medium">
-                                                                {new Date(l.createdAt).toLocaleString()}
+                                                                {new Date(
+                                                                    l.createdAt
+                                                                ).toLocaleString()}
                                                             </span>
-                                                            <span className="text-xs text-muted-foreground">{l.id}</span>
+                                                            <span className="text-xs text-muted-foreground">
+                                                                {l.id}
+                                                            </span>
                                                         </div>
                                                     </TableCell>
 
                                                     <TableCell className="min-w-48">
                                                         <div className="flex min-w-0 flex-col">
-                                                            <span className="truncate font-medium">{l.actorName || "—"}</span>
+                                                            <span className="truncate font-medium">
+                                                                {l.actorName ||
+                                                                    "—"}
+                                                            </span>
                                                             <span className="truncate text-xs text-muted-foreground">
-                                                                {l.actorEmail || l.actorId || "—"}
+                                                                {l.actorEmail ||
+                                                                    l.actorId ||
+                                                                    "—"}
                                                             </span>
                                                         </div>
                                                     </TableCell>
 
                                                     <TableCell className="hidden sm:table-cell">
-                                                        <Badge variant={l.actorRole === "ADMIN" ? "default" : "secondary"}>
+                                                        <Badge
+                                                            variant={
+                                                                l.actorRole ===
+                                                                "ADMIN"
+                                                                    ? "default"
+                                                                    : "secondary"
+                                                            }
+                                                        >
                                                             {l.actorRole ?? "—"}
                                                         </Badge>
                                                     </TableCell>
 
                                                     <TableCell className="font-medium">
-                                                        <span className="wrap-break-word">{l.action}</span>
+                                                        <span className="wrap-break-word">
+                                                            {l.action}
+                                                        </span>
                                                     </TableCell>
 
                                                     <TableCell className="hidden lg:table-cell">
                                                         <div className="flex min-w-0 flex-col">
-                                                            <span className="truncate">{l.entityType || "—"}</span>
-                                                            <span className="truncate text-xs text-muted-foreground">{l.entityId || "—"}</span>
+                                                            <span className="truncate">
+                                                                {l.entityType ||
+                                                                    "—"}
+                                                            </span>
+                                                            <span className="truncate text-xs text-muted-foreground">
+                                                                {l.entityId ||
+                                                                    "—"}
+                                                            </span>
                                                         </div>
                                                     </TableCell>
 
                                                     <TableCell className="text-right">
-                                                        {l.meta && Object.keys(l.meta).length ? (
+                                                        {l.meta &&
+                                                        Object.keys(l.meta)
+                                                            .length ? (
                                                             <Button
                                                                 variant="outline"
                                                                 size="sm"
-                                                                onClick={() => openMeta(`${l.action} • ${l.entityType ?? "Meta"}`, l.meta)}
+                                                                onClick={() =>
+                                                                    openMeta(
+                                                                        `${l.action} • ${
+                                                                            l.entityType ??
+                                                                            "Meta"
+                                                                        }`,
+                                                                        l.meta
+                                                                    )
+                                                                }
                                                             >
                                                                 View
                                                             </Button>
                                                         ) : (
-                                                            <span className="text-sm text-muted-foreground">—</span>
+                                                            <span className="text-sm text-muted-foreground">
+                                                                —
+                                                            </span>
                                                         )}
                                                     </TableCell>
                                                 </TableRow>
@@ -440,8 +775,12 @@ export default function AdminAuditsPage() {
 
                                             {(logs?.logs?.length ?? 0) === 0 ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
-                                                        No audit logs match your filters.
+                                                    <TableCell
+                                                        colSpan={6}
+                                                        className="py-10 text-center text-muted-foreground"
+                                                    >
+                                                        No audit logs match your
+                                                        filters.
                                                     </TableCell>
                                                 </TableRow>
                                             ) : null}
@@ -454,7 +793,6 @@ export default function AdminAuditsPage() {
                 </Card>
             </div>
 
-            {/* Meta viewer */}
             <Dialog open={metaOpen} onOpenChange={setMetaOpen}>
                 <DialogContent className="sm:max-w-2xl">
                     <DialogHeader>
@@ -462,7 +800,9 @@ export default function AdminAuditsPage() {
                     </DialogHeader>
 
                     <div className="rounded-lg border bg-muted/30 p-3">
-                        <pre className="max-h-[60vh] overflow-auto text-xs leading-relaxed">{metaJson}</pre>
+                        <pre className="max-h-[60vh] overflow-auto text-xs leading-relaxed">
+                            {metaJson}
+                        </pre>
                     </div>
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
@@ -481,7 +821,10 @@ export default function AdminAuditsPage() {
                             Copy
                         </Button>
 
-                        <Button className="w-full sm:w-auto" onClick={() => setMetaOpen(false)}>
+                        <Button
+                            className="w-full sm:w-auto"
+                            onClick={() => setMetaOpen(false)}
+                        >
                             Close
                         </Button>
                     </div>
