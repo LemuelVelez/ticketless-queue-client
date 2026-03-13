@@ -86,12 +86,12 @@ function normalizeExplicitLocalDevApiBase(value: string) {
     try {
         const url = new URL(raw)
         if (!isLikelyLocalDevHostname(url.hostname)) return raw
-        if (!isFrontendDevPort(url.port)) return raw
 
         const hostname = normalizeDevHostname(url.hostname)
-        if (!hostname) return raw
+        if (!hostname || hostname === url.hostname) return raw
 
-        return `${url.protocol}//${hostname}:5000${API_PREFIX}`
+        url.hostname = hostname
+        return stripTrailingSlash(url.toString())
     } catch {
         return raw
     }
@@ -100,14 +100,11 @@ function normalizeExplicitLocalDevApiBase(value: string) {
 function inferBrowserDevApiBaseUrl() {
     if (typeof window === "undefined") return ""
 
-    const { protocol, hostname, port } = window.location
+    const { hostname, port } = window.location
     if (!isFrontendDevPort(port)) return ""
     if (!isLikelyLocalDevHostname(hostname)) return ""
 
-    const targetHost = normalizeDevHostname(hostname)
-    if (!targetHost) return ""
-
-    return `${protocol}//${targetHost}:5000${API_PREFIX}`
+    return API_PREFIX
 }
 
 function inferServerDevApiBaseUrl() {

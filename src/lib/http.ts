@@ -220,7 +220,6 @@ type RequestOptions = {
     signal?: AbortSignal
 }
 
-const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
 
 function isAbsoluteUrl(input: string) {
     const s = String(input ?? "").trim()
@@ -264,9 +263,6 @@ function normalizeDevHostname(hostname: string) {
     return raw
 }
 
-function isFrontendDevPort(port: string) {
-    return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
-}
 
 function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = String(value ?? "").trim().replace(/\/+$/, "")
@@ -275,12 +271,12 @@ function normalizeExplicitLocalDevApiBase(value: string) {
     try {
         const url = new URL(raw)
         if (!isLikelyLocalDevHostname(url.hostname)) return raw
-        if (!isFrontendDevPort(url.port)) return raw
 
         const hostname = normalizeDevHostname(url.hostname)
-        if (!hostname) return raw
+        if (!hostname || hostname === url.hostname) return raw
 
-        return `${url.protocol}//${hostname}:5000${API_PREFIX}`
+        url.hostname = hostname
+        return String(url.toString()).replace(/\/+$/, "")
     } catch {
         return raw
     }
