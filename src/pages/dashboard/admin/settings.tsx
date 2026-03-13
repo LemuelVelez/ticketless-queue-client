@@ -78,6 +78,10 @@ type ProfileBaseline = {
     email: string
 }
 
+type SyncStoredAuthOptions = {
+    refreshSession?: boolean
+}
+
 const SETTINGS_CURRENT_PATH = API_PATHS.settings.current
 const SETTINGS_AVATAR_PATH = `${SETTINGS_CURRENT_PATH}/avatar`
 const SETTINGS_AVATAR_PRESIGN_PATH = `${SETTINGS_AVATAR_PATH}/presign`
@@ -225,6 +229,21 @@ export default function AdminSettingsPage() {
     const { user: sessionUser, refresh } = useSession()
 
     const stored = getAuthUser()
+
+    const sessionNameRef = React.useRef<string>(
+        normalizeString(sessionUser?.name) ?? "Admin"
+    )
+    const sessionEmailRef = React.useRef<string>(
+        normalizeString(sessionUser?.email) ?? ""
+    )
+
+    React.useEffect(() => {
+        sessionNameRef.current =
+            normalizeString(sessionUser?.name) ?? sessionNameRef.current
+        sessionEmailRef.current =
+            normalizeString(sessionUser?.email) ?? sessionEmailRef.current
+    }, [sessionUser?.email, sessionUser?.name])
+
     const baseName =
         normalizeString((stored?.name as string | undefined) ?? null) ??
         normalizeString(sessionUser?.name) ??
@@ -300,7 +319,12 @@ export default function AdminSettingsPage() {
     ])
 
     const syncStoredAuthFromPayload = React.useCallback(
-        async (payload: unknown) => {
+        async (
+            payload: unknown,
+            options: SyncStoredAuthOptions = {}
+        ) => {
+            const { refreshSession = true } = options
+
             const extractedUser = extractSettingsUser(payload)
             const avatarKey = extractAvatarKey(payload)
             const avatarUrlState = extractAvatarUrlState(payload)
@@ -310,10 +334,12 @@ export default function AdminSettingsPage() {
                 avatarKey === undefined &&
                 avatarUrlState === undefined
             ) {
-                try {
-                    await refresh()
-                } catch {
-                    // ignore refresh errors here; UI already has local state
+                if (refreshSession) {
+                    try {
+                        await refresh()
+                    } catch {
+                        // ignore refresh errors here; UI already has local state
+                    }
                 }
                 return
             }
@@ -335,10 +361,12 @@ export default function AdminSettingsPage() {
                 setAuthUser(mergedUser as any, rememberMe)
             }
 
-            try {
-                await refresh()
-            } catch {
-                // ignore refresh errors; stored auth is already updated
+            if (refreshSession) {
+                try {
+                    await refresh()
+                } catch {
+                    // ignore refresh errors; stored auth is already updated
+                }
             }
         },
         [rememberMe, refresh]
@@ -353,16 +381,16 @@ export default function AdminSettingsPage() {
             const resolvedName =
                 resolveName(currentUser) ??
                 normalizeString((getAuthUser()?.name as string | undefined) ?? null) ??
-                normalizeString(sessionUser?.name) ??
-                baseName
+                sessionNameRef.current ??
+                "Admin"
 
             const resolvedEmail =
                 normalizeString(currentUser?.email) ??
                 normalizeString(
                     (getAuthUser()?.email as string | undefined) ?? null
                 ) ??
-                normalizeString(sessionUser?.email) ??
-                baseEmail
+                sessionEmailRef.current ??
+                ""
 
             const nextAvatarUrlState = extractAvatarUrlState(res)
             const fallbackStoredAvatar =
@@ -382,7 +410,7 @@ export default function AdminSettingsPage() {
                     : fallbackStoredAvatar
             )
 
-            await syncStoredAuthFromPayload(res)
+            await syncStoredAuthFromPayload(res, { refreshSession: false })
         } catch {
             setAvatarUrl(
                 normalizeString(
@@ -392,21 +420,13 @@ export default function AdminSettingsPage() {
         } finally {
             setAvatarLoading(false)
         }
-    }, [
-        baseEmail,
-        baseName,
-        refresh,
-        sessionUser?.email,
-        sessionUser?.name,
-        syncStoredAuthFromPayload,
-    ])
+    }, [syncStoredAuthFromPayload])
 
     React.useEffect(() => {
         let active = true
 
         void (async () => {
             if (!active) return
-
             setLoading(true)
             try {
                 await refreshCurrentSettings()
@@ -452,7 +472,7 @@ export default function AdminSettingsPage() {
                     : undefined,
             })
 
-            await syncStoredAuthFromPayload(resp)
+            await syncStoredAuthFromPayload(resp, { refreshSession: true })
 
             const updatedUser = extractSettingsUser(resp)
             const savedName = resolveName(updatedUser) ?? nextName
@@ -496,7 +516,7 @@ export default function AdminSettingsPage() {
                 newPassword,
             })
 
-            await syncStoredAuthFromPayload(resp)
+            await syncStoredAuthFromPayload(resp, { refreshSession: true })
             setCurrentPassword("")
             setNewPassword("")
             setConfirmPassword("")
@@ -553,15 +573,18 @@ export default function AdminSettingsPage() {
                     avatarUrl: objectUrl,
                 })
 
-                await syncStoredAuthFromPayload({
-                    ...resp,
-                    avatarKey: key,
-                    avatarUrl: objectUrl,
-                })
+                await syncStoredAuthFromPayload(
+                    {
+                        ...resp,
+                        avatarKey: key,
+                        avatarUrl: objectUrl,
+                    },
+                    { refreshSession: true }
+                )
                 setAvatarUrl(objectUrl)
             } catch {
                 const resp = await settingsApi.uploadAvatar(file)
-                await syncStoredAuthFromPayload(resp)
+                await syncStoredAuthFromPayload(resp, { refreshSession: true })
 
                 const uploadedAvatarUrl = extractAvatarUrlState(resp)
                 if (uploadedAvatarUrl !== undefined) {
@@ -589,11 +612,14 @@ export default function AdminSettingsPage() {
                 avatarUrl: null,
             })
 
-            await syncStoredAuthFromPayload({
-                ...resp,
-                avatarKey: null,
-                avatarUrl: null,
-            })
+            await syncStoredAuthFromPayload(
+                {
+                    ...resp,
+                    avatarKey: null,
+                    avatarUrl: null,
+                },
+                { refreshSession: true }
+            )
             setAvatarUrl(null)
             toast.success("Avatar removed.")
         } catch (e: any) {
