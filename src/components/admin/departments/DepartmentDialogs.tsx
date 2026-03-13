@@ -1,5 +1,4 @@
-
-import type { Department } from "@/api/admin"
+import type { Department } from "@/components/admin/departments/types"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"

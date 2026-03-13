@@ -8,7 +8,10 @@ import {
     Trash2,
 } from "lucide-react"
 
-import type { Department, ServiceWindow } from "@/api/admin"
+import type {
+    Department,
+    ServiceWindow,
+} from "@/components/admin/departments/types"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"

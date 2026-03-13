@@ -1,6 +1,11 @@
 import * as React from "react"
 
-import type { Department, ServiceWindow, TransactionPurpose, TransactionScope } from "@/api/admin"
+import type {
+    Department,
+    ServiceWindow,
+    TransactionPurpose,
+    TransactionScope,
+} from "@/components/admin/departments/types"
 import { Badge } from "@/components/ui/badge"
 
 import { DEFAULT_MANAGER, type PurposeBulkDraft } from "@/components/admin/departments/constants"

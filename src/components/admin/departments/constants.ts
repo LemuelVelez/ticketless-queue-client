@@ -1,4 +1,4 @@
-import type { TransactionScope } from "@/api/admin"
+import type { TransactionScope } from "@/components/admin/departments/types"
 
 export const DEFAULT_MANAGER = "REGISTRAR"
 

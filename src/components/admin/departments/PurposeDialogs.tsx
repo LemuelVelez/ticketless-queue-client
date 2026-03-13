@@ -1,6 +1,10 @@
 import { Save } from "lucide-react"
 
-import type { Department, TransactionPurpose, TransactionScope } from "@/api/admin"
+import type {
+    Department,
+    TransactionPurpose,
+    TransactionScope,
+} from "@/components/admin/departments/types"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

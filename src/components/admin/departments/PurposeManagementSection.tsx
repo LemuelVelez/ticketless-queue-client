@@ -9,7 +9,10 @@ import {
     Trash2,
 } from "lucide-react"
 
-import type { Department, TransactionPurpose } from "@/api/admin"
+import type {
+    Department,
+    TransactionPurpose,
+} from "@/components/admin/departments/types"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
