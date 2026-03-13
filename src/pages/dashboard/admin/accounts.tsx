@@ -19,9 +19,9 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
-import { adminApi } from "@/api/admin"
+import { toApiPath } from "@/api/api"
 import { useSession } from "@/hooks/use-session"
-import { api } from "@/lib/http"
+import { api, ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -79,10 +79,90 @@ type AccountRow = AccountUser & {
   role: AccountRole
 }
 
+type AccountListResponse = {
+  staff?: AccountUser[]
+  users?: AccountUser[]
+}
+
 const ROLE_ORDER: AccountRole[] = ["ADMIN", "STAFF", "STUDENT", "ALUMNI_VISITOR", "GUEST"]
 
 function userId(u: AccountUser) {
   return u._id ?? u.id ?? ""
+}
+
+function encodeAccountId(value: string) {
+  return encodeURIComponent(String(value ?? "").trim())
+}
+
+const ACCOUNT_API_PATHS = {
+  list: toApiPath("/admin/staff"),
+  create: toApiPath("/admin/staff"),
+  byId: (id: string) => toApiPath(`/admin/staff/${encodeAccountId(id)}`),
+  resendLoginCredentialsCandidates: (id: string) => [
+    toApiPath(`/admin/staff/${encodeAccountId(id)}/resend-login-credentials`),
+    toApiPath(`/admin/staff/${encodeAccountId(id)}/resend-credentials`),
+    toApiPath(`/admin/staff/${encodeAccountId(id)}/resend-login`),
+  ],
+} as const
+
+const accountApi = {
+  listAccounts() {
+    return api.getData<AccountListResponse>(ACCOUNT_API_PATHS.list, {
+      auth: "staff",
+    })
+  },
+
+  createAccount(payload: Record<string, unknown>) {
+    return api.postData<Record<string, unknown>>(ACCOUNT_API_PATHS.create, payload, {
+      auth: "staff",
+    })
+  },
+
+  async updateAccount(id: string, payload: Record<string, unknown>) {
+    const path = ACCOUNT_API_PATHS.byId(id)
+
+    try {
+      return await api.patchData<Record<string, unknown>>(path, payload, {
+        auth: "staff",
+      })
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
+        return api.putData<Record<string, unknown>>(path, payload, {
+          auth: "staff",
+        })
+      }
+
+      throw e
+    }
+  },
+
+  async resendLoginCredentials(id: string) {
+    let lastError: unknown = null
+
+    for (const path of ACCOUNT_API_PATHS.resendLoginCredentialsCandidates(id)) {
+      try {
+        return await api.postData<Record<string, unknown>>(path, undefined, {
+          auth: "staff",
+        })
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
+          lastError = e
+          continue
+        }
+
+        throw e
+      }
+    }
+
+    if (lastError instanceof Error) throw lastError
+    throw new Error("Failed to resend login credentials.")
+  },
+
+  deleteAccount(id: string) {
+    return api.deleteData<Record<string, unknown>>(ACCOUNT_API_PATHS.byId(id), {
+      auth: "staff",
+    })
+  },
 }
 
 function normalizeRole(role: unknown): AccountRole {
@@ -174,7 +254,6 @@ function generateTempPassword(length = 12) {
     for (let i = 0; i < safeLen; i++) out += chars[buf[i] % chars.length]
     return out
   } catch {
-    // fallback
     let out = ""
     for (let i = 0; i < safeLen; i++) out += chars[Math.floor(Math.random() * chars.length)]
     return out
@@ -206,17 +285,14 @@ export default function AdminAccountsPage() {
   const [q, setQ] = React.useState("")
   const [tab, setTab] = React.useState<"all" | "active" | "inactive">("all")
 
-  // dialogs
   const [createOpen, setCreateOpen] = React.useState(false)
   const [editOpen, setEditOpen] = React.useState(false)
   const [resetOpen, setResetOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
   const [resendOpen, setResendOpen] = React.useState(false)
 
-  // selected user
   const [selected, setSelected] = React.useState<AccountUser | null>(null)
 
-  // create form
   const [cName, setCName] = React.useState("")
   const [cEmail, setCEmail] = React.useState("")
   const [cPassword, setCPassword] = React.useState("")
@@ -224,12 +300,10 @@ export default function AdminAccountsPage() {
   const [cRole, setCRole] = React.useState<StaffAccountRole>("STAFF")
   const [cSendCredentials, setCSendCredentials] = React.useState(true)
 
-  // edit form
   const [eName, setEName] = React.useState("")
   const [eRole, setERole] = React.useState<EditableRole>("STAFF")
   const [eActive, setEActive] = React.useState(true)
 
-  // reset credential form
   const [newPassword, setNewPassword] = React.useState("")
 
   const editRoleOptions = React.useMemo<EditableRole[]>(() => {
@@ -240,11 +314,8 @@ export default function AdminAccountsPage() {
   const fetchAll = React.useCallback(async () => {
     setLoading(true)
     try {
-      const res = await adminApi.listStaff()
+      const res = await accountApi.listAccounts()
 
-      // Backward + forward compatible payload handling:
-      // - { staff: [...] } (legacy)
-      // - { users: [...] } (optional newer shape)
       const listRaw = Array.isArray((res as any)?.staff)
         ? (res as any).staff
         : Array.isArray((res as any)?.users)
@@ -378,12 +449,11 @@ export default function AdminAccountsPage() {
       sendCredentials: cSendCredentials,
     }
 
-    // If password is blank AND sendCredentials is true, backend will auto-generate.
     if (password) payload.password = password
 
     setSaving(true)
     try {
-      const res = await adminApi.createStaff(payload)
+      const res = await accountApi.createAccount(payload)
 
       const creds = (res as any)?.credentials
       const attempted = Boolean(creds?.attempted)
@@ -434,7 +504,7 @@ export default function AdminAccountsPage() {
 
     setSaving(true)
     try {
-      await adminApi.resendLoginCredentials(id)
+      await accountApi.resendLoginCredentials(id)
       if (t) (toast as any).dismiss?.(t)
       toast.success("Login credentials resent.", { description: `A new temporary password was emailed to ${email}.` })
       setResendOpen(false)
@@ -464,7 +534,7 @@ export default function AdminAccountsPage() {
 
     setSaving(true)
     try {
-      await adminApi.updateStaff(id, payload as any)
+      await accountApi.updateAccount(id, payload)
       toast.success("Account updated.")
       setEditOpen(false)
       setSelected(null)
@@ -489,7 +559,7 @@ export default function AdminAccountsPage() {
 
     setSaving(true)
     try {
-      await adminApi.updateStaff(id, { password: newPassword })
+      await accountApi.updateAccount(id, { password: newPassword })
       toast.success("Credential updated.")
       setResetOpen(false)
       setSelected(null)
@@ -513,14 +583,14 @@ export default function AdminAccountsPage() {
 
     setSaving(true)
     try {
-      const apiAny = api as any
-
-      if (typeof apiAny.delete === "function") {
-        await apiAny.delete(`/admin/staff/${id}`)
-      } else if (typeof apiAny.del === "function") {
-        await apiAny.del(`/admin/staff/${id}`)
-      } else {
-        await adminApi.updateStaff(id, { active: false })
+      try {
+        await accountApi.deleteAccount(id)
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 404 || e.status === 405 || e.status === 501)) {
+          await accountApi.updateAccount(id, { active: false })
+        } else {
+          throw e
+        }
       }
 
       toast.success("Account removed.")
@@ -745,7 +815,6 @@ export default function AdminAccountsPage() {
         </Card>
       </div>
 
-      {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-lg flex max-h-screen flex-col overflow-hidden sm:max-h-none sm:overflow-visible">
           <DialogHeader>
@@ -873,7 +942,6 @@ export default function AdminAccountsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -937,7 +1005,6 @@ export default function AdminAccountsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Resend credentials confirm */}
       <AlertDialog open={resendOpen} onOpenChange={setResendOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -971,7 +1038,6 @@ export default function AdminAccountsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Reset credential dialog */}
       <Dialog open={resetOpen} onOpenChange={setResetOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -1012,13 +1078,12 @@ export default function AdminAccountsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirm */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete account?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will remove the user (or disable them if your client can’t send DELETE).
+              This will remove the user (or disable them if your backend does not support DELETE for this route).
             </AlertDialogDescription>
           </AlertDialogHeader>
 
