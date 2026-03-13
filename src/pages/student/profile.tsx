@@ -7,9 +7,14 @@ import { Lock, User } from "lucide-react"
 import Header from "@/components/Header"
 import Footer from "@/components/Footer"
 
-import { guestApi } from "@/api/guest"
-import { studentApi, type Department, participantAuthStorage } from "@/api/student"
-
+import { API_PATHS } from "@/api/api"
+import {
+    clearParticipantSession,
+    getParticipantStorage,
+    getParticipantToken,
+    getParticipantUser,
+    setParticipantUser,
+} from "@/lib/auth"
 import { api, ApiError } from "@/lib/http"
 
 import { Button } from "@/components/ui/button"
@@ -35,6 +40,41 @@ import {
 
 const DRAFT_KEY = "qp_student_profile_draft_v1"
 const LOCK_SENTINEL = "__LOCKED__"
+
+const PARTICIPANT_SESSION_GET_CANDIDATES = [
+    "/public/auth/session",
+    "/public/auth/me",
+] as const
+
+const PARTICIPANT_SESSION_PATCH_CANDIDATES = [
+    "/public/auth/session",
+    "/public/auth/me",
+    "/public/auth/profile",
+] as const
+
+const PARTICIPANT_LOGOUT_ATTEMPTS = [
+    { method: "POST" as const, path: "/public/auth/logout" },
+    { method: "POST" as const, path: "/public/auth/session/logout" },
+    { method: "DELETE" as const, path: "/public/auth/session" },
+] as const
+
+type Department = {
+    _id: string
+    id?: string
+    name: string
+    code?: string
+    [key: string]: unknown
+}
+
+type ProfileDraft = {
+    firstName: string
+    middleName: string
+    lastName: string
+    studentId: string
+    mobileNumber: string
+    departmentId: string
+    smsUpdates: boolean
+}
 
 function pickNonEmptyString(v: unknown) {
     return typeof v === "string" && v.trim() ? v.trim() : ""
@@ -78,22 +118,14 @@ function getErrorMessage(error: unknown, fallback: string) {
 
 function normalizeMobile(input: string) {
     const raw = input.trim()
-    const cleaned = raw.replace(/[^\d+]/g, "")
-    return cleaned
+    return raw.replace(/[^\d+]/g, "")
 }
 
 function buildDisplayName(firstName: string, middleName: string, lastName: string) {
-    return [firstName, middleName, lastName].map((s) => s.trim()).filter(Boolean).join(" ")
-}
-
-type ProfileDraft = {
-    firstName: string
-    middleName: string
-    lastName: string
-    studentId: string
-    mobileNumber: string
-    departmentId: string
-    smsUpdates: boolean
+    return [firstName, middleName, lastName]
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join(" ")
 }
 
 function readDraft(): ProfileDraft | null {
@@ -117,6 +149,131 @@ function clearDraftStorage() {
     localStorage.removeItem(DRAFT_KEY)
 }
 
+function getParticipantRememberMe() {
+    return getParticipantStorage() !== "session"
+}
+
+const participantSessionStorage = {
+    getToken() {
+        return getParticipantToken()
+    },
+    getDepartmentId() {
+        return pickNonEmptyString(getParticipantUser()?.departmentId)
+    },
+    setDepartmentId(value: string) {
+        const clean = pickNonEmptyString(value)
+        if (!clean && !getParticipantUser() && !getParticipantToken()) return
+        setParticipantUser({ departmentId: clean }, getParticipantRememberMe())
+    },
+    clearDepartmentId() {
+        if (!getParticipantUser()) return
+        setParticipantUser({ departmentId: "" }, getParticipantRememberMe())
+    },
+}
+
+function normalizeDepartment(value: unknown): Department | null {
+    if (!value || typeof value !== "object") return null
+
+    const dept = value as Record<string, unknown>
+    const id = pickNonEmptyString(dept._id) || pickNonEmptyString(dept.id)
+    const name = pickNonEmptyString(dept.name)
+    const code = pickNonEmptyString(dept.code)
+
+    if (!id || !name) return null
+
+    return {
+        ...dept,
+        _id: id,
+        id,
+        name,
+        ...(code ? { code } : {}),
+    }
+}
+
+function extractDepartments(payload: unknown): Department[] {
+    const source = Array.isArray(payload)
+        ? payload
+        : Array.isArray((payload as any)?.departments)
+          ? (payload as any).departments
+          : Array.isArray((payload as any)?.items)
+            ? (payload as any).items
+            : []
+
+    return source.map(normalizeDepartment).filter(Boolean) as Department[]
+}
+
+async function fetchEnabledDepartments() {
+    return api.getData<unknown>(API_PATHS.departments.enabled, {
+        auth: "participant",
+    })
+}
+
+async function fetchParticipantSession() {
+    let lastErr: unknown = null
+
+    for (const path of PARTICIPANT_SESSION_GET_CANDIDATES) {
+        try {
+            return await api.getData<Record<string, unknown>>(path, {
+                auth: "participant",
+            })
+        } catch (err) {
+            lastErr = err
+            if (err instanceof ApiError && err.status === 404) continue
+            throw err
+        }
+    }
+
+    const tried = PARTICIPANT_SESSION_GET_CANDIDATES.join(", ")
+
+    if (lastErr instanceof ApiError && lastErr.status === 404) {
+        throw new ApiError(
+            `All session endpoints returned 404. Tried: ${tried}. Make sure your participant public routes are mounted under /api/public/auth/*.`,
+            404,
+            { tried: PARTICIPANT_SESSION_GET_CANDIDATES, last: lastErr.data },
+            {
+                method: "GET",
+                path: PARTICIPANT_SESSION_GET_CANDIDATES[PARTICIPANT_SESSION_GET_CANDIDATES.length - 1],
+                url: lastErr.url,
+            }
+        )
+    }
+
+    throw lastErr ?? new Error(`Participant session endpoint not found. Tried: ${tried}`)
+}
+
+async function logoutParticipantSession() {
+    let lastErr: unknown = null
+
+    for (const attempt of PARTICIPANT_LOGOUT_ATTEMPTS) {
+        try {
+            if (attempt.method === "POST") {
+                await api.post<Record<string, unknown>>(attempt.path, undefined, {
+                    auth: "participant",
+                })
+            } else {
+                await api.delete<Record<string, unknown>>(attempt.path, {
+                    auth: "participant",
+                })
+            }
+            return
+        } catch (err) {
+            lastErr = err
+
+            if (err instanceof ApiError) {
+                if ([401, 403, 404, 405].includes(err.status)) continue
+            } else {
+                throw err
+            }
+        }
+    }
+
+    if (lastErr instanceof ApiError && [401, 403, 404, 405].includes(lastErr.status)) {
+        return
+    }
+
+    if (lastErr) throw lastErr
+}
+
 export default function StudentProfilePage() {
     const navigate = useNavigate()
 
@@ -125,7 +282,7 @@ export default function StudentProfilePage() {
         session404: false,
     })
 
-    const initialLockedDept = participantAuthStorage.getDepartmentId() || ""
+    const initialLockedDept = participantSessionStorage.getDepartmentId() || ""
     const [loadingDepts, setLoadingDepts] = React.useState(true)
     const [loadingSession, setLoadingSession] = React.useState(true)
     const [busyLogout, setBusyLogout] = React.useState(false)
@@ -136,7 +293,6 @@ export default function StudentProfilePage() {
     const [sessionExpiresAt, setSessionExpiresAt] = React.useState<string>("")
     const [hasSession, setHasSession] = React.useState(false)
 
-    // 🔒 lock immediately from storage to prevent a brief “editable” state before session loads
     const [lockedDepartmentId, setLockedDepartmentId] = React.useState<string>(initialLockedDept)
     const [firstName, setFirstName] = React.useState("")
     const [middleName, setMiddleName] = React.useState("")
@@ -169,8 +325,8 @@ export default function StudentProfilePage() {
     const loadDepartments = React.useCallback(async () => {
         setLoadingDepts(true)
         try {
-            const res = await studentApi.listDepartments()
-            setDepartments(res.departments ?? [])
+            const res = await fetchEnabledDepartments()
+            setDepartments(extractDepartments(res))
         } catch (e: any) {
             if (e instanceof ApiError && e.status === 404 && !diagnosticsShownRef.current.depts404) {
                 diagnosticsShownRef.current.depts404 = true
@@ -189,10 +345,13 @@ export default function StudentProfilePage() {
     const loadSession = React.useCallback(async () => {
         setLoadingSession(true)
         try {
-            const res = await guestApi.getSession()
+            const res = await fetchParticipantSession()
             const p = res?.participant as Record<string, unknown> | null | undefined
 
-            setSessionExpiresAt(pickNonEmptyString(res?.session?.expiresAt))
+            setSessionExpiresAt(
+                pickNonEmptyString((res as any)?.session?.expiresAt) ||
+                    pickNonEmptyString((res as any)?.expiresAt)
+            )
             setHasSession(Boolean(p))
 
             if (p) {
@@ -214,23 +373,26 @@ export default function StudentProfilePage() {
                     if (composed.lastName) setLastName(composed.lastName)
                 }
 
-                const sid = pickNonEmptyString((p as any).tcNumber) || pickNonEmptyString((p as any).studentId)
+                const sid =
+                    pickNonEmptyString((p as any).tcNumber) ||
+                    pickNonEmptyString((p as any).studentId)
                 if (sid) setStudentId(sid)
 
-                const mobile = pickNonEmptyString((p as any).mobileNumber) || pickNonEmptyString((p as any).phone)
+                const mobile =
+                    pickNonEmptyString((p as any).mobileNumber) ||
+                    pickNonEmptyString((p as any).phone)
                 if (mobile) setMobileNumber(mobile)
 
                 const deptIdFromProfile = pickDepartmentIdFromParticipant(p)
                 const deptLockedFlag = Boolean((res as any)?.departmentLocked)
 
-                // 🔒 Department is locked after registration:
-                // lock if backend says so OR if we can read department from profile OR if we already have a stored lock
-                const storedLock = participantAuthStorage.getDepartmentId() || ""
-                const shouldLock = deptLockedFlag || Boolean(deptIdFromProfile) || Boolean(storedLock)
+                const storedLock = participantSessionStorage.getDepartmentId() || ""
+                const shouldLock =
+                    deptLockedFlag || Boolean(deptIdFromProfile) || Boolean(storedLock)
 
                 if (deptIdFromProfile) {
                     setDepartmentId(deptIdFromProfile)
-                    participantAuthStorage.setDepartmentId(deptIdFromProfile)
+                    participantSessionStorage.setDepartmentId(deptIdFromProfile)
                 }
 
                 if (shouldLock) {
@@ -239,7 +401,7 @@ export default function StudentProfilePage() {
                     if (effective) setDepartmentId(effective)
                 } else {
                     setLockedDepartmentId("")
-                    participantAuthStorage.clearDepartmentId()
+                    participantSessionStorage.clearDepartmentId()
                 }
 
                 if (typeof (p as any).smsUpdates === "boolean") {
@@ -247,7 +409,7 @@ export default function StudentProfilePage() {
                 }
             } else {
                 setLockedDepartmentId("")
-                participantAuthStorage.clearDepartmentId()
+                participantSessionStorage.clearDepartmentId()
             }
         } catch (err) {
             if (err instanceof ApiError && err.status === 404 && !diagnosticsShownRef.current.session404) {
@@ -259,7 +421,7 @@ export default function StudentProfilePage() {
 
             setHasSession(false)
             setLockedDepartmentId("")
-            participantAuthStorage.clearDepartmentId()
+            participantSessionStorage.clearDepartmentId()
         } finally {
             setLoadingSession(false)
         }
@@ -288,7 +450,9 @@ export default function StudentProfilePage() {
 
     function onSaveDraft() {
         const effectiveLocked =
-            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL
+                ? lockedDepartmentId
+                : participantSessionStorage.getDepartmentId() || ""
 
         const payload: ProfileDraft = {
             firstName: firstName.trim(),
@@ -299,6 +463,7 @@ export default function StudentProfilePage() {
             departmentId: isDepartmentLocked ? effectiveLocked : departmentId,
             smsUpdates,
         }
+
         writeDraft(payload)
         toast.success("Profile draft saved locally.")
     }
@@ -311,7 +476,7 @@ export default function StudentProfilePage() {
         setLastName("")
         setStudentId("")
         setMobileNumber("")
-        setDepartmentId(isDepartmentLocked ? (participantAuthStorage.getDepartmentId() || "") : "")
+        setDepartmentId(isDepartmentLocked ? participantSessionStorage.getDepartmentId() || "" : "")
         setSmsUpdates(true)
 
         if (hasSession) {
@@ -323,48 +488,37 @@ export default function StudentProfilePage() {
         toast.success("Profile draft cleared.")
     }
 
-    const getParticipantAuthHeaders = React.useCallback(() => {
-        const token = participantAuthStorage.getToken()
-        if (!token) return null
-        return { Authorization: `Bearer ${token}` }
-    }, [])
+    const updateProfileOnline = React.useCallback(async (payload: Record<string, unknown>) => {
+        let lastErr: unknown = null
 
-    const updateProfileOnline = React.useCallback(
-        async (payload: Record<string, unknown>) => {
-            const headers = getParticipantAuthHeaders()
-            if (!headers) throw new Error("Not logged in. Please login again.")
+        for (const url of PARTICIPANT_SESSION_PATCH_CANDIDATES) {
+            try {
+                return await api.patch<Record<string, unknown>>(url, payload, {
+                    auth: "participant",
+                })
+            } catch (err) {
+                lastErr = err
+                if (err instanceof ApiError && err.status === 404) continue
+                throw err
+            }
+        }
 
-            const candidates = ["/public/auth/session", "/public/auth/me", "/public/auth/profile"]
-
-            let lastErr: unknown = null
-
-            for (const url of candidates) {
-                try {
-                    return await api.patch<Record<string, unknown>>(url, payload, {
-                        auth: false,
-                        headers,
-                    })
-                } catch (err) {
-                    lastErr = err
-                    if (err instanceof ApiError && err.status === 404) continue
-                    throw err
+        const tried = PARTICIPANT_SESSION_PATCH_CANDIDATES.join(", ")
+        if (lastErr instanceof ApiError && lastErr.status === 404) {
+            throw new ApiError(
+                `All profile update endpoints returned 404. Tried: ${tried}. Most likely your backend publicRoutes router is mounted differently than your frontend API base. Make sure Express exposes PATCH on /api/public/auth/session (or add route aliases). Last: ${lastErr.message}`,
+                404,
+                { tried: PARTICIPANT_SESSION_PATCH_CANDIDATES, last: lastErr.data },
+                {
+                    method: "PATCH",
+                    path: PARTICIPANT_SESSION_PATCH_CANDIDATES[PARTICIPANT_SESSION_PATCH_CANDIDATES.length - 1],
+                    url: lastErr.url,
                 }
-            }
+            )
+        }
 
-            const tried = candidates.join(", ")
-            if (lastErr instanceof ApiError && lastErr.status === 404) {
-                throw new ApiError(
-                    `All profile update endpoints returned 404. Tried: ${tried}. Most likely your backend publicRoutes router is mounted differently than your frontend API base. Make sure Express exposes PATCH on /api/public/auth/session (or add route aliases). Last: ${lastErr.message}`,
-                    404,
-                    { tried: candidates, last: lastErr.data },
-                    { method: "PATCH", path: candidates[candidates.length - 1], url: lastErr.url }
-                )
-            }
-
-            throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
-        },
-        [getParticipantAuthHeaders]
-    )
+        throw lastErr ?? new Error(`Profile update endpoint not found. Tried: ${tried}`)
+    }, [])
 
     async function onSaveOnline() {
         const f = firstName.trim()
@@ -373,7 +527,9 @@ export default function StudentProfilePage() {
         const sid = studentId.trim()
 
         const effectiveLocked =
-            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL ? lockedDepartmentId : participantAuthStorage.getDepartmentId() || ""
+            lockedDepartmentId && lockedDepartmentId !== LOCK_SENTINEL
+                ? lockedDepartmentId
+                : participantSessionStorage.getDepartmentId() || ""
 
         const dept = (isDepartmentLocked ? effectiveLocked : departmentId).trim()
         const mobile = normalizeMobile(mobileNumber)
@@ -406,16 +562,16 @@ export default function StudentProfilePage() {
 
             const result = await updateProfileOnline(payload)
 
-            // 🔒 If backend reports locked, persist lock immediately
             if (Boolean((result as any)?.departmentLocked) && dept) {
-                participantAuthStorage.setDepartmentId(dept)
+                participantSessionStorage.setDepartmentId(dept)
                 setLockedDepartmentId(dept)
                 setDepartmentId(dept)
             }
 
-            // Optional: show a friendly message if an attempted department change was ignored by backend
             if (Boolean((result as any)?.departmentChangeIgnored)) {
-                toast.message("Department change ignored (locked after registration).", { id: toastId })
+                toast.message("Department change ignored (locked after registration).", {
+                    id: toastId,
+                })
             }
 
             clearDraftStorage()
@@ -429,7 +585,9 @@ export default function StudentProfilePage() {
                     description: error.message,
                 })
             } else {
-                toast.error(getErrorMessage(error, "Failed to save profile online."), { id: toastId })
+                toast.error(getErrorMessage(error, "Failed to save profile online."), {
+                    id: toastId,
+                })
             }
         } finally {
             setBusySaveOnline(false)
@@ -444,19 +602,20 @@ export default function StudentProfilePage() {
     async function onLogout() {
         setBusyLogout(true)
         try {
-            await guestApi.logout()
+            await logoutParticipantSession()
             toast.success("Logged out.")
         } catch (e: any) {
-            toast.error(e?.message ?? "Failed to logout.")
+            toast.message("Local session cleared, but server logout could not be confirmed.", {
+                description: e?.message ?? "Failed to reach logout endpoint.",
+            })
         } finally {
+            clearParticipantSession()
             setHasSession(false)
             setSessionExpiresAt("")
             setBusyLogout(false)
             setLockedDepartmentId("")
             setDepartmentId("")
-            if (!participantAuthStorage.getToken()) {
-                navigate("/login", { replace: true })
-            }
+            navigate("/login", { replace: true })
         }
     }
 
@@ -464,7 +623,7 @@ export default function StudentProfilePage() {
         <div className="min-h-screen bg-background text-foreground">
             <Header variant="student" />
 
-            <main className="mx-auto w-full  px-4 py-10">
+            <main className="mx-auto w-full px-4 py-10">
                 <div className="mb-6">
                     <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary" className="gap-2">
@@ -495,7 +654,9 @@ export default function StudentProfilePage() {
                     <Card>
                         <CardHeader>
                             <CardTitle>Profile Details</CardTitle>
-                            <CardDescription>Edit fields and save online (recommended) or keep a local draft.</CardDescription>
+                            <CardDescription>
+                                Edit fields and save online (recommended) or keep a local draft.
+                            </CardDescription>
                         </CardHeader>
 
                         <CardContent className="space-y-5">
@@ -577,7 +738,9 @@ export default function StudentProfilePage() {
                                         disabled={loadingSession || isDepartmentLocked || busySaveOnline}
                                     >
                                         <SelectTrigger className="w-full">
-                                            <SelectValue placeholder={loadingSession ? "Loading session..." : "Select department"} />
+                                            <SelectValue
+                                                placeholder={loadingSession ? "Loading session..." : "Select department"}
+                                            />
                                         </SelectTrigger>
                                         <SelectContent>
                                             {departments.map((d) => (
@@ -591,10 +754,13 @@ export default function StudentProfilePage() {
                                 )}
 
                                 {loadingSession ? (
-                                    <div className="text-xs text-muted-foreground">Checking your registered department…</div>
+                                    <div className="text-xs text-muted-foreground">
+                                        Checking your registered department…
+                                    </div>
                                 ) : isDepartmentLocked ? (
                                     <div className="text-xs text-muted-foreground">
-                                        Your department is locked after registration. Contact staff if it needs correction.
+                                        Your department is locked after registration. Contact staff if it needs
+                                        correction.
                                     </div>
                                 ) : (
                                     <div className="text-xs text-muted-foreground">
@@ -604,20 +770,38 @@ export default function StudentProfilePage() {
                             </div>
 
                             <div className="flex items-center gap-2">
-                                <Switch id="smsUpdates" checked={smsUpdates} onCheckedChange={(v) => setSmsUpdates(Boolean(v))} />
+                                <Switch
+                                    id="smsUpdates"
+                                    checked={smsUpdates}
+                                    onCheckedChange={(v) => setSmsUpdates(Boolean(v))}
+                                />
                                 <Label htmlFor="smsUpdates">Receive SMS updates</Label>
                             </div>
 
                             <Separator />
 
                             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                                <Button type="button" variant="outline" onClick={onClearDraft} disabled={busySaveOnline}>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={onClearDraft}
+                                    disabled={busySaveOnline}
+                                >
                                     Clear Draft
                                 </Button>
-                                <Button type="button" variant="secondary" onClick={onSaveDraft} disabled={busySaveOnline}>
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={onSaveDraft}
+                                    disabled={busySaveOnline}
+                                >
                                     Save Draft
                                 </Button>
-                                <Button type="button" onClick={() => void onSaveOnline()} disabled={busySaveOnline}>
+                                <Button
+                                    type="button"
+                                    onClick={() => void onSaveOnline()}
+                                    disabled={busySaveOnline}
+                                >
                                     {busySaveOnline ? "Saving…" : "Save Online"}
                                 </Button>
                             </div>
@@ -661,12 +845,16 @@ export default function StudentProfilePage() {
                                         <AlertDialogHeader>
                                             <AlertDialogTitle>Logout from this session?</AlertDialogTitle>
                                             <AlertDialogDescription>
-                                                You will be signed out from your current participant session on this device.
+                                                You will be signed out from your current participant session on this
+                                                device.
                                             </AlertDialogDescription>
                                         </AlertDialogHeader>
                                         <AlertDialogFooter>
                                             <AlertDialogCancel disabled={busyLogout}>Cancel</AlertDialogCancel>
-                                            <AlertDialogAction onClick={() => void onLogout()} disabled={busyLogout}>
+                                            <AlertDialogAction
+                                                onClick={() => void onLogout()}
+                                                disabled={busyLogout}
+                                            >
                                                 {busyLogout ? "Logging out…" : "Confirm Logout"}
                                             </AlertDialogAction>
                                         </AlertDialogFooter>
