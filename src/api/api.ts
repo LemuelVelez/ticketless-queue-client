@@ -189,6 +189,7 @@ export const API_PATHS = {
         current: "/settings/current",
     },
     auditLogs: {
+        list: "/audit-logs",
         recent: "/audit-logs/recent",
         byActor: (actorId: ApiRouteParam) =>
             `/audit-logs/actor/${encodeRouteParam(actorId)}`,
@@ -234,6 +235,7 @@ export const API_PATHS = {
         participants: "/users/participants",
     },
     admin: {
+        auditLogs: "/admin/audit-logs",
         staff: "/admin/staff",
         staffSendLogin: (id: ApiRouteParam) =>
             `/admin/staff/${encodeRouteParam(id)}/send-login`,
@@ -255,6 +257,7 @@ export const API_ROUTES = {
         current: () => toApiUrl(API_PATHS.settings.current),
     },
     auditLogs: {
+        list: () => toApiUrl(API_PATHS.auditLogs.list),
         recent: () => toApiUrl(API_PATHS.auditLogs.recent),
         byActor: (actorId: ApiRouteParam) =>
             toApiUrl(API_PATHS.auditLogs.byActor(actorId)),
@@ -299,6 +302,7 @@ export const API_ROUTES = {
         participants: () => toApiUrl(API_PATHS.users.participants),
     },
     admin: {
+        auditLogs: () => toApiUrl(API_PATHS.admin.auditLogs),
         staff: () => toApiUrl(API_PATHS.admin.staff),
         staffSendLogin: (id: ApiRouteParam) =>
             toApiUrl(API_PATHS.admin.staffSendLogin(id)),

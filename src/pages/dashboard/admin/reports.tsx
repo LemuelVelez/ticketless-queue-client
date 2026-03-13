@@ -162,7 +162,11 @@ type AuditLogsQueryParams = {
 const REPORTS_API_PATHS = {
     summary: ["/admin/reports/summary", "/reports/summary"],
     timeseries: ["/admin/reports/timeseries", "/reports/timeseries"],
-    auditLogs: ["/admin/audit-logs", "/audit-logs"],
+    auditLogs: [
+        API_PATHS.admin.auditLogs,
+        API_PATHS.auditLogs.list,
+        API_PATHS.auditLogs.recent,
+    ],
 } as const
 
 function asRecord(value: unknown): Record<string, unknown> | null {
