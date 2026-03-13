@@ -6,40 +6,115 @@ import { BarChart3, CalendarDays, RefreshCw, Table2 } from "lucide-react"
 import type { DateRange } from "react-day-picker"
 import { format } from "date-fns"
 
+import { API_PATHS } from "@/api/api"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { STAFF_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
 import { useSession } from "@/hooks/use-session"
-import {
-    staffApi,
-    type ReportsSummaryResponse,
-    type ReportsTimeseriesResponse,
-    type TicketStatus,
-} from "@/api/staff"
 import { api } from "@/lib/http"
 import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Label } from "@/components/ui/label"
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    Tabs,
+    TabsContent,
+    TabsList,
+    TabsTrigger,
+} from "@/components/ui/tabs"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table"
 
 import { Calendar } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover"
 
-type DepartmentDisplayResponse = {
-    department: { id: string; name: string }
-    nowServing: any
-    upNext: any[]
+type TicketStatus = "WAITING" | "CALLED" | "SERVED" | "HOLD" | "OUT"
+
+type ReportsSummaryTotals = {
+    total?: number
+    byStatus?: Partial<Record<TicketStatus, number>>
+    avgWaitMs?: number | null
+    avgServiceMs?: number | null
 }
+
+type ReportsSummaryDepartmentRow = {
+    departmentId: string
+    name?: string | null
+    code?: string | null
+    total?: number
+    waiting?: number
+    called?: number
+    hold?: number
+    out?: number
+    served?: number
+    avgWaitMs?: number | null
+    avgServiceMs?: number | null
+}
+
+type ReportsSummaryResponse = {
+    totals?: ReportsSummaryTotals
+    departments?: ReportsSummaryDepartmentRow[]
+}
+
+type ReportsTimeseriesPoint = {
+    dateKey: string
+    total?: number
+    waiting?: number
+    called?: number
+    hold?: number
+    out?: number
+    served?: number
+}
+
+type ReportsTimeseriesResponse = {
+    series?: ReportsTimeseriesPoint[]
+}
+
+type DepartmentLike = {
+    id?: string
+    _id?: string
+    name?: string
+    code?: string
+    departmentName?: string
+    departmentCode?: string
+    department?: DepartmentLike
+    data?: DepartmentLike
+}
+
+const REPORT_API_PATHS = {
+    summary: "/staff/reports/summary",
+    timeseries: "/staff/reports/timeseries",
+} as const
 
 function ymdLocal(d: Date) {
     const y = d.getFullYear()
@@ -70,9 +145,60 @@ function formatDuration(ms: number | null | undefined) {
     return sec ? `${min}m ${sec}s` : `${min}m`
 }
 
-function getStatusCount(byStatus: Partial<Record<TicketStatus, number>> | undefined, s: TicketStatus) {
+function getStatusCount(
+    byStatus: Partial<Record<TicketStatus, number>> | undefined,
+    s: TicketStatus
+) {
     const v = byStatus?.[s]
     return typeof v === "number" ? v : 0
+}
+
+function normalizeString(value: unknown): string | null {
+    if (typeof value !== "string") return null
+    const clean = value.trim()
+    return clean ? clean : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function normalizeDepartmentPayload(value: unknown): {
+    id: string | null
+    name: string | null
+    code: string | null
+} | null {
+    const sources: DepartmentLike[] = []
+
+    if (isRecord(value)) {
+        sources.push(value as DepartmentLike)
+
+        if (isRecord((value as DepartmentLike).department)) {
+            sources.unshift((value as DepartmentLike).department as DepartmentLike)
+        }
+
+        if (isRecord((value as DepartmentLike).data)) {
+            sources.push((value as DepartmentLike).data as DepartmentLike)
+        }
+    }
+
+    for (const item of sources) {
+        const id = normalizeString(item.id) ?? normalizeString(item._id)
+        const name =
+            normalizeString(item.name) ?? normalizeString(item.departmentName)
+        const code =
+            normalizeString(item.code) ?? normalizeString(item.departmentCode)
+
+        if (id || name || code) {
+            return {
+                id: id ?? null,
+                name: name ?? null,
+                code: code ?? null,
+            }
+        }
+    }
+
+    return null
 }
 
 function DateRangePicker({
@@ -86,7 +212,12 @@ function DateRangePicker({
 }) {
     const labelLong = React.useMemo(() => {
         if (value?.from) {
-            if (value.to) return `${format(value.from, "LLL dd, y")} – ${format(value.to, "LLL dd, y")}`
+            if (value.to) {
+                return `${format(value.from, "LLL dd, y")} – ${format(
+                    value.to,
+                    "LLL dd, y"
+                )}`
+            }
             return format(value.from, "LLL dd, y")
         }
         return "Pick a date range"
@@ -102,9 +233,16 @@ function DateRangePicker({
         const sameYear = fromD.getFullYear() === toD.getFullYear()
         const sameMonth = sameYear && fromD.getMonth() === toD.getMonth()
 
-        if (sameMonth) return `${format(fromD, "MMM d")}–${format(toD, "d, yyyy")}`
-        if (sameYear) return `${format(fromD, "MMM d")}–${format(toD, "MMM d, yyyy")}`
-        return `${format(fromD, "MMM d, yyyy")}–${format(toD, "MMM d, yyyy")}`
+        if (sameMonth) {
+            return `${format(fromD, "MMM d")}–${format(toD, "d, yyyy")}`
+        }
+        if (sameYear) {
+            return `${format(fromD, "MMM d")}–${format(toD, "MMM d, yyyy")}`
+        }
+        return `${format(fromD, "MMM d, yyyy")}–${format(
+            toD,
+            "MMM d, yyyy"
+        )}`
     }, [value])
 
     return (
@@ -114,8 +252,8 @@ function DateRangePicker({
                     variant="outline"
                     disabled={disabled}
                     className={cn(
-                        "w-full min-w-0 justify-start text-left font-normal overflow-hidden",
-                        !value?.from && "text-muted-foreground",
+                        "w-full min-w-0 justify-start overflow-hidden text-left font-normal",
+                        !value?.from && "text-muted-foreground"
                     )}
                 >
                     <CalendarDays className="mr-2 h-4 w-4 shrink-0" />
@@ -126,7 +264,13 @@ function DateRangePicker({
                 </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="range" selected={value} onSelect={onChange} initialFocus numberOfMonths={1} />
+                <Calendar
+                    mode="range"
+                    selected={value}
+                    onSelect={onChange}
+                    initialFocus
+                    numberOfMonths={1}
+                />
             </PopoverContent>
         </Popover>
     )
@@ -134,7 +278,11 @@ function DateRangePicker({
 
 export default function StaffReportsPage() {
     const location = useLocation()
-    const { user: sessionUser } = useSession()
+    const {
+        user: sessionUser,
+        loading: sessionLoading,
+        refresh: refreshSession,
+    } = useSession()
 
     const dashboardUser: DashboardUser | undefined = React.useMemo(() => {
         if (!sessionUser) return undefined
@@ -145,96 +293,194 @@ export default function StaffReportsPage() {
         }
     }, [sessionUser])
 
-    const [range, setRange] = React.useState<DateRange | undefined>(() => lastNDaysRange(7))
+    const [range, setRange] = React.useState<DateRange | undefined>(() =>
+        lastNDaysRange(7)
+    )
 
-    const from = React.useMemo(() => (range?.from ? ymdLocal(range.from) : ""), [range?.from])
-    const to = React.useMemo(() => (range?.to ? ymdLocal(range.to) : ""), [range?.to])
+    const from = React.useMemo(
+        () => (range?.from ? ymdLocal(range.from) : ""),
+        [range?.from]
+    )
+    const to = React.useMemo(
+        () => (range?.to ? ymdLocal(range.to) : ""),
+        [range?.to]
+    )
 
     const [departmentId, setDepartmentId] = React.useState<string | null>(null)
     const [departmentName, setDepartmentName] = React.useState<string>("—")
+    const [loadingDepartment, setLoadingDepartment] = React.useState(true)
 
-    const [summary, setSummary] = React.useState<ReportsSummaryResponse | null>(null)
-    const [series, setSeries] = React.useState<ReportsTimeseriesResponse | null>(null)
+    const [summary, setSummary] = React.useState<ReportsSummaryResponse | null>(
+        null
+    )
+    const [series, setSeries] =
+        React.useState<ReportsTimeseriesResponse | null>(null)
 
-    const [loading, setLoading] = React.useState(true)
     const [loadingReports, setLoadingReports] = React.useState(true)
 
-    const [activeTab, setActiveTab] = React.useState<"summary" | "timeseries">("summary")
+    const [activeTab, setActiveTab] = React.useState<"summary" | "timeseries">(
+        "summary"
+    )
 
     const assignedOk = Boolean(departmentId)
+    const loading = sessionLoading || loadingDepartment
 
     const canApply = React.useMemo(() => {
         if (!range?.from || !range?.to) return false
         return from <= to
     }, [range?.from, range?.to, from, to])
 
-    const fetchAssignmentAndDeptName = React.useCallback(async () => {
-        const a = await staffApi.myAssignment()
-        const deptId = a.departmentId ?? null
-        setDepartmentId(deptId)
+    const resolveDepartmentName = React.useCallback(async (deptId: string) => {
+        const normalizedId = normalizeString(deptId)
+        if (!normalizedId) return "—"
 
-        if (!deptId) {
-            setDepartmentName("—")
-            return
-        }
-
-        // Best-effort: use public display endpoint to resolve dept name
         try {
-            const res = await api.get<DepartmentDisplayResponse>(`/display/${deptId}`, { auth: false })
-            setDepartmentName(res.department?.name ?? "—")
+            const res = await api.getData<DepartmentLike>(
+                API_PATHS.departments.byId(normalizedId),
+                { auth: "staff" }
+            )
+            const parsed = normalizeDepartmentPayload(res)
+            if (parsed?.name) return parsed.name
         } catch {
-            setDepartmentName("—")
+            // fall through to public display endpoint
         }
+
+        try {
+            const res = await api.get<DepartmentLike>(`/display/${normalizedId}`, {
+                auth: false,
+            })
+            const parsed = normalizeDepartmentPayload(res)
+            if (parsed?.name) return parsed.name
+        } catch {
+            // ignore fallback failure
+        }
+
+        return "—"
     }, [])
 
     const fetchReports = React.useCallback(async () => {
-        if (!departmentId) {
+        if (!assignedOk || !canApply) {
             setSummary(null)
             setSeries(null)
-            return
-        }
-
-        if (!canApply) {
-            setSummary(null)
-            setSeries(null)
+            setLoadingReports(false)
             return
         }
 
         setLoadingReports(true)
+
         try {
-            const [s1, s2] = await Promise.all([
-                staffApi.getReportsSummary({ from, to }),
-                staffApi.getReportsTimeseries({ from, to }),
+            const [summaryRes, seriesRes] = await Promise.all([
+                api.getData<ReportsSummaryResponse>(REPORT_API_PATHS.summary, {
+                    auth: "staff",
+                    params: { from, to },
+                }),
+                api.getData<ReportsTimeseriesResponse>(
+                    REPORT_API_PATHS.timeseries,
+                    {
+                        auth: "staff",
+                        params: { from, to },
+                    }
+                ),
             ])
-            setSummary(s1)
-            setSeries(s2)
+
+            setSummary(summaryRes ?? null)
+            setSeries(seriesRes ?? null)
         } catch (e: any) {
             toast.error(e?.message ?? "Failed to load reports.")
         } finally {
             setLoadingReports(false)
         }
-    }, [departmentId, canApply, from, to])
+    }, [assignedOk, canApply, from, to])
 
     React.useEffect(() => {
-        ; (async () => {
-            setLoading(true)
+        if (sessionLoading) return
+
+        const nextDepartmentId = normalizeString(sessionUser?.assignedDepartment)
+        setDepartmentId(nextDepartmentId ?? null)
+
+        if (!nextDepartmentId) {
+            setDepartmentName("—")
+            setLoadingDepartment(false)
+            return
+        }
+
+        let alive = true
+        setLoadingDepartment(true)
+
+        ;(async () => {
             try {
-                await fetchAssignmentAndDeptName()
+                const nextDepartmentName =
+                    await resolveDepartmentName(nextDepartmentId)
+                if (!alive) return
+                setDepartmentName(nextDepartmentName || "—")
             } catch (e: any) {
-                toast.error(e?.message ?? "Failed to load assignment.")
+                if (!alive) return
+                toast.error(e?.message ?? "Failed to load department details.")
+                setDepartmentName("—")
             } finally {
-                setLoading(false)
+                if (alive) setLoadingDepartment(false)
             }
         })()
-    }, [fetchAssignmentAndDeptName])
 
-    // Initial load once we have departmentId + default range
+        return () => {
+            alive = false
+        }
+    }, [sessionLoading, sessionUser?.assignedDepartment, resolveDepartmentName])
+
     React.useEffect(() => {
-        if (!departmentId) return
-        if (!canApply) return
+        if (loading) return
+        if (!assignedOk) {
+            setSummary(null)
+            setSeries(null)
+            setLoadingReports(false)
+            return
+        }
+        if (!canApply) {
+            setSummary(null)
+            setSeries(null)
+            setLoadingReports(false)
+            return
+        }
+
         void fetchReports()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [departmentId])
+    }, [loading, assignedOk, canApply, fetchReports])
+
+    const handleRefresh = React.useCallback(async () => {
+        setLoadingDepartment(true)
+
+        try {
+            const refreshedUser = await refreshSession()
+            const nextDepartmentId = normalizeString(
+                refreshedUser?.assignedDepartment
+            )
+
+            setDepartmentId(nextDepartmentId ?? null)
+
+            if (!nextDepartmentId) {
+                setDepartmentName("—")
+                setSummary(null)
+                setSeries(null)
+                setLoadingReports(false)
+                return
+            }
+
+            const nextDepartmentName =
+                await resolveDepartmentName(nextDepartmentId)
+            setDepartmentName(nextDepartmentName || "—")
+
+            if (canApply) {
+                await fetchReports()
+            } else {
+                setSummary(null)
+                setSeries(null)
+                setLoadingReports(false)
+            }
+        } catch (e: any) {
+            toast.error(e?.message ?? "Failed to refresh reports.")
+        } finally {
+            setLoadingDepartment(false)
+        }
+    }, [refreshSession, resolveDepartmentName, canApply, fetchReports])
 
     const totals = summary?.totals
     const totalAll = totals?.total ?? 0
@@ -245,9 +491,13 @@ export default function StaffReportsPage() {
     const outAll = getStatusCount(totals?.byStatus, "OUT")
 
     return (
-        <DashboardLayout title="Reports" navItems={STAFF_NAV_ITEMS} user={dashboardUser} activePath={location.pathname}>
+        <DashboardLayout
+            title="Reports"
+            navItems={STAFF_NAV_ITEMS}
+            user={dashboardUser}
+            activePath={location.pathname}
+        >
             <div className="grid w-full min-w-0 grid-cols-1 gap-6">
-                {/* Filters */}
                 <Card className="min-w-0">
                     <CardHeader className="gap-2">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -257,7 +507,8 @@ export default function StaffReportsPage() {
                                     Staff Reports
                                 </CardTitle>
                                 <CardDescription>
-                                    Reports are scoped to your assigned department.
+                                    Reports are scoped to your assigned
+                                    department.
                                 </CardDescription>
                             </div>
 
@@ -265,8 +516,7 @@ export default function StaffReportsPage() {
                                 <Button
                                     variant="outline"
                                     onClick={() => {
-                                        void fetchAssignmentAndDeptName()
-                                        void fetchReports()
+                                        void handleRefresh()
                                     }}
                                     className="w-full gap-2 sm:w-auto"
                                     disabled={loading || loadingReports}
@@ -277,10 +527,19 @@ export default function StaffReportsPage() {
 
                                 <Button
                                     onClick={() => {
-                                        if (!canApply) return toast.error("Pick a valid date range (start and end).")
+                                        if (!canApply) {
+                                            return toast.error(
+                                                "Pick a valid date range (start and end)."
+                                            )
+                                        }
                                         void fetchReports()
                                     }}
-                                    disabled={!canApply || loading || loadingReports || !assignedOk}
+                                    disabled={
+                                        !canApply ||
+                                        loading ||
+                                        loadingReports ||
+                                        !assignedOk
+                                    }
                                     className="w-full gap-2 sm:w-auto"
                                 >
                                     <CalendarDays className="h-4 w-4" />
@@ -294,7 +553,11 @@ export default function StaffReportsPage() {
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
                             <div className="grid min-w-0 grid-cols-1 gap-2 sm:col-span-2">
                                 <Label>Date range</Label>
-                                <DateRangePicker value={range} onChange={setRange} disabled={loading} />
+                                <DateRangePicker
+                                    value={range}
+                                    onChange={setRange}
+                                    disabled={loading}
+                                />
 
                                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                                     <Button
@@ -302,7 +565,12 @@ export default function StaffReportsPage() {
                                         variant="secondary"
                                         size="sm"
                                         className="w-full sm:w-auto"
-                                        onClick={() => setRange({ from: new Date(), to: new Date() })}
+                                        onClick={() =>
+                                            setRange({
+                                                from: new Date(),
+                                                to: new Date(),
+                                            })
+                                        }
                                         disabled={loading}
                                     >
                                         Today
@@ -322,7 +590,9 @@ export default function StaffReportsPage() {
                                         variant="secondary"
                                         size="sm"
                                         className="w-full sm:w-auto"
-                                        onClick={() => setRange(lastNDaysRange(30))}
+                                        onClick={() =>
+                                            setRange(lastNDaysRange(30))
+                                        }
                                         disabled={loading}
                                     >
                                         Last 30 days
@@ -340,8 +610,14 @@ export default function StaffReportsPage() {
                                 </div>
 
                                 <div className="text-xs text-muted-foreground">
-                                    API range: <span className="font-medium">{from || "—"}</span> →{" "}
-                                    <span className="font-medium">{to || "—"}</span>
+                                    API range:{" "}
+                                    <span className="font-medium">
+                                        {from || "—"}
+                                    </span>{" "}
+                                    →{" "}
+                                    <span className="font-medium">
+                                        {to || "—"}
+                                    </span>
                                 </div>
                             </div>
 
@@ -351,23 +627,31 @@ export default function StaffReportsPage() {
                                     <Skeleton className="h-10 w-full" />
                                 ) : (
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <Badge variant="secondary">Name: {departmentName}</Badge>
-                                        <Badge variant="secondary">ID: {departmentId ?? "—"}</Badge>
-                                        {!assignedOk ? <Badge variant="destructive">Not assigned</Badge> : null}
+                                        <Badge variant="secondary">
+                                            Name: {departmentName}
+                                        </Badge>
+                                        <Badge variant="secondary">
+                                            ID: {departmentId ?? "—"}
+                                        </Badge>
+                                        {!assignedOk ? (
+                                            <Badge variant="destructive">
+                                                Not assigned
+                                            </Badge>
+                                        ) : null}
                                     </div>
                                 )}
                                 <div className="text-xs text-muted-foreground">
-                                    If you are not assigned, ask an admin to assign your department.
+                                    If you are not assigned, ask an admin to
+                                    assign your department.
                                 </div>
                             </div>
                         </div>
                     </CardHeader>
                 </Card>
 
-                {/* Content */}
                 {loading ? (
                     <Card className="min-w-0">
-                        <CardContent className="p-6 space-y-3">
+                        <CardContent className="space-y-3 p-6">
                             <Skeleton className="h-10 w-full" />
                             <Skeleton className="h-32 w-full" />
                             <Skeleton className="h-48 w-full" />
@@ -376,37 +660,54 @@ export default function StaffReportsPage() {
                 ) : !assignedOk ? (
                     <Card className="min-w-0">
                         <CardContent className="p-6 text-sm text-muted-foreground">
-                            You are not assigned to a department. Please ask an admin to assign your department.
+                            You are not assigned to a department. Please ask an
+                            admin to assign your department.
                         </CardContent>
                     </Card>
                 ) : (
-                    <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
-                        {/* Mobile tab UI */}
+                    <Tabs
+                        value={activeTab}
+                        onValueChange={(v) =>
+                            setActiveTab(v as "summary" | "timeseries")
+                        }
+                    >
                         <div className="sm:hidden">
-                            <Select value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+                            <Select
+                                value={activeTab}
+                                onValueChange={(v) =>
+                                    setActiveTab(
+                                        v as "summary" | "timeseries"
+                                    )
+                                }
+                            >
                                 <SelectTrigger className="w-full min-w-0">
                                     <SelectValue placeholder="Select view" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="summary">Summary</SelectItem>
-                                    <SelectItem value="timeseries">Daily breakdown</SelectItem>
+                                    <SelectItem value="summary">
+                                        Summary
+                                    </SelectItem>
+                                    <SelectItem value="timeseries">
+                                        Daily breakdown
+                                    </SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
 
-                        {/* Desktop tab UI */}
                         <TabsList className="hidden w-full grid-cols-2 sm:grid">
                             <TabsTrigger value="summary">Summary</TabsTrigger>
-                            <TabsTrigger value="timeseries">Daily breakdown</TabsTrigger>
+                            <TabsTrigger value="timeseries">
+                                Daily breakdown
+                            </TabsTrigger>
                         </TabsList>
 
-                        {/* SUMMARY */}
                         <TabsContent value="summary" className="mt-4">
                             <Card className="min-w-0">
                                 <CardHeader>
                                     <CardTitle>Summary</CardTitle>
                                     <CardDescription>
-                                        Totals across the selected range ({from || "—"} → {to || "—"}).
+                                        Totals across the selected range (
+                                        {from || "—"} → {to || "—"}).
                                     </CardDescription>
                                 </CardHeader>
 
@@ -423,62 +724,112 @@ export default function StaffReportsPage() {
                                         <>
                                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
                                                 <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Total tickets</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatNumber(totalAll)}</div>
-                                                </div>
-
-                                                <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Served</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatNumber(servedAll)}</div>
-                                                    <div className="mt-2">
-                                                        <Badge variant="secondary">SERVED</Badge>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Total tickets
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatNumber(totalAll)}
                                                     </div>
                                                 </div>
 
                                                 <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Waiting</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatNumber(waitingAll)}</div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Served
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatNumber(servedAll)}
+                                                    </div>
                                                     <div className="mt-2">
-                                                        <Badge variant="outline">WAITING</Badge>
+                                                        <Badge variant="secondary">
+                                                            SERVED
+                                                        </Badge>
                                                     </div>
                                                 </div>
 
                                                 <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Hold</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatNumber(holdAll)}</div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Waiting
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatNumber(waitingAll)}
+                                                    </div>
                                                     <div className="mt-2">
-                                                        <Badge variant="outline">HOLD</Badge>
+                                                        <Badge variant="outline">
+                                                            WAITING
+                                                        </Badge>
                                                     </div>
                                                 </div>
 
                                                 <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Out</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatNumber(outAll)}</div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Hold
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatNumber(holdAll)}
+                                                    </div>
                                                     <div className="mt-2">
-                                                        <Badge variant="secondary">OUT</Badge>
+                                                        <Badge variant="outline">
+                                                            HOLD
+                                                        </Badge>
+                                                    </div>
+                                                </div>
+
+                                                <div className="rounded-lg border p-4">
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Out
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatNumber(outAll)}
+                                                    </div>
+                                                    <div className="mt-2">
+                                                        <Badge variant="secondary">
+                                                            OUT
+                                                        </Badge>
                                                     </div>
                                                 </div>
                                             </div>
 
                                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                                                 <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Called</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatNumber(calledAll)}</div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Called
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatNumber(calledAll)}
+                                                    </div>
                                                     <div className="mt-2">
-                                                        <Badge variant="outline">CALLED</Badge>
+                                                        <Badge variant="outline">
+                                                            CALLED
+                                                        </Badge>
                                                     </div>
                                                 </div>
 
                                                 <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Avg wait time</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatDuration(totals?.avgWaitMs)}</div>
-                                                    <div className="mt-2 text-xs text-muted-foreground">From join → called</div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Avg wait time
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatDuration(
+                                                            totals?.avgWaitMs
+                                                        )}
+                                                    </div>
+                                                    <div className="mt-2 text-xs text-muted-foreground">
+                                                        From join → called
+                                                    </div>
                                                 </div>
 
                                                 <div className="rounded-lg border p-4">
-                                                    <div className="text-xs text-muted-foreground">Avg service time</div>
-                                                    <div className="mt-1 text-2xl font-semibold">{formatDuration(totals?.avgServiceMs)}</div>
-                                                    <div className="mt-2 text-xs text-muted-foreground">From called → served</div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        Avg service time
+                                                    </div>
+                                                    <div className="mt-1 text-2xl font-semibold">
+                                                        {formatDuration(
+                                                            totals?.avgServiceMs
+                                                        )}
+                                                    </div>
+                                                    <div className="mt-2 text-xs text-muted-foreground">
+                                                        From called → served
+                                                    </div>
                                                 </div>
                                             </div>
 
@@ -487,63 +838,138 @@ export default function StaffReportsPage() {
                                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                                 <div className="flex items-center gap-2">
                                                     <Table2 className="h-4 w-4 text-muted-foreground" />
-                                                    <p className="text-sm font-medium">Department breakdown</p>
+                                                    <p className="text-sm font-medium">
+                                                        Department breakdown
+                                                    </p>
                                                 </div>
-                                                <Badge variant="secondary">{formatNumber(summary?.departments?.length ?? 0)} rows</Badge>
+                                                <Badge variant="secondary">
+                                                    {formatNumber(
+                                                        summary?.departments
+                                                            ?.length ?? 0
+                                                    )}{" "}
+                                                    rows
+                                                </Badge>
                                             </div>
 
-                                            <div className="rounded-lg border overflow-x-auto">
+                                            <div className="overflow-x-auto rounded-lg border">
                                                 <Table>
                                                     <TableHeader>
                                                         <TableRow>
-                                                            <TableHead>Department</TableHead>
-                                                            <TableHead className="hidden sm:table-cell">Total</TableHead>
-                                                            <TableHead className="hidden lg:table-cell">WAIT</TableHead>
-                                                            <TableHead className="hidden lg:table-cell">CALLED</TableHead>
-                                                            <TableHead className="hidden lg:table-cell">HOLD</TableHead>
-                                                            <TableHead className="hidden lg:table-cell">OUT</TableHead>
-                                                            <TableHead className="text-right">SERVED</TableHead>
-                                                            <TableHead className="hidden xl:table-cell text-right">Avg wait</TableHead>
-                                                            <TableHead className="hidden xl:table-cell text-right">Avg service</TableHead>
+                                                            <TableHead>
+                                                                Department
+                                                            </TableHead>
+                                                            <TableHead className="hidden sm:table-cell">
+                                                                Total
+                                                            </TableHead>
+                                                            <TableHead className="hidden lg:table-cell">
+                                                                WAIT
+                                                            </TableHead>
+                                                            <TableHead className="hidden lg:table-cell">
+                                                                CALLED
+                                                            </TableHead>
+                                                            <TableHead className="hidden lg:table-cell">
+                                                                HOLD
+                                                            </TableHead>
+                                                            <TableHead className="hidden lg:table-cell">
+                                                                OUT
+                                                            </TableHead>
+                                                            <TableHead className="text-right">
+                                                                SERVED
+                                                            </TableHead>
+                                                            <TableHead className="hidden text-right xl:table-cell">
+                                                                Avg wait
+                                                            </TableHead>
+                                                            <TableHead className="hidden text-right xl:table-cell">
+                                                                Avg service
+                                                            </TableHead>
                                                         </TableRow>
                                                     </TableHeader>
 
                                                     <TableBody>
-                                                        {(summary?.departments ?? []).map((r) => (
-                                                            <TableRow key={r.departmentId}>
+                                                        {(summary?.departments ??
+                                                            []).map((r) => (
+                                                            <TableRow
+                                                                key={
+                                                                    r.departmentId
+                                                                }
+                                                            >
                                                                 <TableCell className="font-medium">
-                                                                    <div className="flex flex-col min-w-0">
-                                                                        <span className="truncate">{r.name ?? departmentName ?? "Department"}</span>
+                                                                    <div className="flex min-w-0 flex-col">
+                                                                        <span className="truncate">
+                                                                            {r.name ??
+                                                                                departmentName ??
+                                                                                "Department"}
+                                                                        </span>
                                                                         <span className="truncate text-xs text-muted-foreground">
-                                                                            {r.code ? `Code: ${r.code}` : `ID: ${r.departmentId}`}
+                                                                            {r.code
+                                                                                ? `Code: ${r.code}`
+                                                                                : `ID: ${r.departmentId}`}
                                                                         </span>
                                                                     </div>
                                                                 </TableCell>
 
-                                                                <TableCell className="hidden sm:table-cell">{formatNumber(r.total)}</TableCell>
-                                                                <TableCell className="hidden lg:table-cell">{formatNumber(r.waiting)}</TableCell>
-                                                                <TableCell className="hidden lg:table-cell">{formatNumber(r.called)}</TableCell>
-                                                                <TableCell className="hidden lg:table-cell">{formatNumber(r.hold)}</TableCell>
-                                                                <TableCell className="hidden lg:table-cell">{formatNumber(r.out)}</TableCell>
+                                                                <TableCell className="hidden sm:table-cell">
+                                                                    {formatNumber(
+                                                                        r.total
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden lg:table-cell">
+                                                                    {formatNumber(
+                                                                        r.waiting
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden lg:table-cell">
+                                                                    {formatNumber(
+                                                                        r.called
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden lg:table-cell">
+                                                                    {formatNumber(
+                                                                        r.hold
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden lg:table-cell">
+                                                                    {formatNumber(
+                                                                        r.out
+                                                                    )}
+                                                                </TableCell>
 
                                                                 <TableCell className="text-right">
-                                                                    <Badge>{formatNumber(r.served)}</Badge>
+                                                                    <Badge>
+                                                                        {formatNumber(
+                                                                            r.served
+                                                                        )}
+                                                                    </Badge>
                                                                 </TableCell>
 
-                                                                <TableCell className="hidden xl:table-cell text-right">
-                                                                    {formatDuration(r.avgWaitMs)}
+                                                                <TableCell className="hidden text-right xl:table-cell">
+                                                                    {formatDuration(
+                                                                        r.avgWaitMs
+                                                                    )}
                                                                 </TableCell>
 
-                                                                <TableCell className="hidden xl:table-cell text-right">
-                                                                    {formatDuration(r.avgServiceMs)}
+                                                                <TableCell className="hidden text-right xl:table-cell">
+                                                                    {formatDuration(
+                                                                        r.avgServiceMs
+                                                                    )}
                                                                 </TableCell>
                                                             </TableRow>
                                                         ))}
 
-                                                        {(summary?.departments?.length ?? 0) === 0 ? (
+                                                        {(summary?.departments
+                                                            ?.length ?? 0) ===
+                                                        0 ? (
                                                             <TableRow>
-                                                                <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
-                                                                    No department rows returned for this range.
+                                                                <TableCell
+                                                                    colSpan={9}
+                                                                    className="py-10 text-center text-muted-foreground"
+                                                                >
+                                                                    No
+                                                                    department
+                                                                    rows
+                                                                    returned
+                                                                    for this
+                                                                    range.
                                                                 </TableCell>
                                                             </TableRow>
                                                         ) : null}
@@ -556,13 +982,13 @@ export default function StaffReportsPage() {
                             </Card>
                         </TabsContent>
 
-                        {/* TIMESERIES */}
                         <TabsContent value="timeseries" className="mt-4">
                             <Card className="min-w-0">
                                 <CardHeader>
                                     <CardTitle>Daily breakdown</CardTitle>
                                     <CardDescription>
-                                        Totals per day across the selected range ({from || "—"} → {to || "—"}).
+                                        Totals per day across the selected range
+                                        ({from || "—"} → {to || "—"}).
                                     </CardDescription>
                                 </CardHeader>
 
@@ -575,39 +1001,89 @@ export default function StaffReportsPage() {
                                             <Skeleton className="h-10 w-full" />
                                         </div>
                                     ) : (
-                                        <div className="rounded-lg border overflow-x-auto">
+                                        <div className="overflow-x-auto rounded-lg border">
                                             <Table>
                                                 <TableHeader>
                                                     <TableRow>
-                                                        <TableHead>Date</TableHead>
-                                                        <TableHead>Total</TableHead>
-                                                        <TableHead className="hidden sm:table-cell">WAIT</TableHead>
-                                                        <TableHead className="hidden sm:table-cell">CALLED</TableHead>
-                                                        <TableHead className="hidden sm:table-cell">HOLD</TableHead>
-                                                        <TableHead className="hidden sm:table-cell">OUT</TableHead>
-                                                        <TableHead className="text-right">SERVED</TableHead>
+                                                        <TableHead>
+                                                            Date
+                                                        </TableHead>
+                                                        <TableHead>
+                                                            Total
+                                                        </TableHead>
+                                                        <TableHead className="hidden sm:table-cell">
+                                                            WAIT
+                                                        </TableHead>
+                                                        <TableHead className="hidden sm:table-cell">
+                                                            CALLED
+                                                        </TableHead>
+                                                        <TableHead className="hidden sm:table-cell">
+                                                            HOLD
+                                                        </TableHead>
+                                                        <TableHead className="hidden sm:table-cell">
+                                                            OUT
+                                                        </TableHead>
+                                                        <TableHead className="text-right">
+                                                            SERVED
+                                                        </TableHead>
                                                     </TableRow>
                                                 </TableHeader>
 
                                                 <TableBody>
-                                                    {(series?.series ?? []).map((p) => (
-                                                        <TableRow key={p.dateKey}>
-                                                            <TableCell className="font-medium">{p.dateKey}</TableCell>
-                                                            <TableCell>{formatNumber(p.total)}</TableCell>
-                                                            <TableCell className="hidden sm:table-cell">{formatNumber(p.waiting)}</TableCell>
-                                                            <TableCell className="hidden sm:table-cell">{formatNumber(p.called)}</TableCell>
-                                                            <TableCell className="hidden sm:table-cell">{formatNumber(p.hold)}</TableCell>
-                                                            <TableCell className="hidden sm:table-cell">{formatNumber(p.out)}</TableCell>
-                                                            <TableCell className="text-right">
-                                                                <Badge>{formatNumber(p.served)}</Badge>
-                                                            </TableCell>
-                                                        </TableRow>
-                                                    ))}
+                                                    {(series?.series ?? []).map(
+                                                        (p) => (
+                                                            <TableRow
+                                                                key={p.dateKey}
+                                                            >
+                                                                <TableCell className="font-medium">
+                                                                    {p.dateKey}
+                                                                </TableCell>
+                                                                <TableCell>
+                                                                    {formatNumber(
+                                                                        p.total
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden sm:table-cell">
+                                                                    {formatNumber(
+                                                                        p.waiting
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden sm:table-cell">
+                                                                    {formatNumber(
+                                                                        p.called
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden sm:table-cell">
+                                                                    {formatNumber(
+                                                                        p.hold
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="hidden sm:table-cell">
+                                                                    {formatNumber(
+                                                                        p.out
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="text-right">
+                                                                    <Badge>
+                                                                        {formatNumber(
+                                                                            p.served
+                                                                        )}
+                                                                    </Badge>
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        )
+                                                    )}
 
-                                                    {(series?.series?.length ?? 0) === 0 ? (
+                                                    {(series?.series?.length ??
+                                                        0) === 0 ? (
                                                         <TableRow>
-                                                            <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
-                                                                No data points returned for this range.
+                                                            <TableCell
+                                                                colSpan={7}
+                                                                className="py-10 text-center text-muted-foreground"
+                                                            >
+                                                                No data points
+                                                                returned for
+                                                                this range.
                                                             </TableCell>
                                                         </TableRow>
                                                     ) : null}
