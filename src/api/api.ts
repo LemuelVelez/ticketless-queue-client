@@ -188,6 +188,8 @@ export const API_PATHS = {
     },
     settings: {
         current: "/settings/current",
+        avatar: "/settings/current/avatar",
+        avatarPresign: "/settings/current/avatar/presign",
     },
     auditLogs: {
         list: "/audit-logs",
@@ -264,6 +266,8 @@ export const API_ROUTES = {
     },
     settings: {
         current: () => toApiUrl(API_PATHS.settings.current),
+        avatar: () => toApiUrl(API_PATHS.settings.avatar),
+        avatarPresign: () => toApiUrl(API_PATHS.settings.avatarPresign),
     },
     auditLogs: {
         list: () => toApiUrl(API_PATHS.auditLogs.list),

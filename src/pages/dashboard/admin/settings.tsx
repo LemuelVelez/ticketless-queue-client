@@ -82,9 +82,11 @@ type SyncStoredAuthOptions = {
     refreshSession?: boolean
 }
 
+type AvatarUploadStrategy = "unknown" | "presign" | "direct"
+
 const SETTINGS_CURRENT_PATH = API_PATHS.settings.current
-const SETTINGS_AVATAR_PATH = `${SETTINGS_CURRENT_PATH}/avatar`
-const SETTINGS_AVATAR_PRESIGN_PATH = `${SETTINGS_AVATAR_PATH}/presign`
+const SETTINGS_AVATAR_PATH = API_PATHS.settings.avatar
+const SETTINGS_AVATAR_PRESIGN_PATH = API_PATHS.settings.avatarPresign
 
 function initials(name?: string) {
     const s = String(name ?? "").trim()
@@ -111,6 +113,18 @@ function normalizeString(value: unknown): string | null {
 
 function normalizeEmailValue(value: unknown): string {
     return String(value ?? "").trim().toLowerCase()
+}
+
+function getErrorStatus(error: unknown): number | null {
+    if (isRecord(error) && typeof error.status === "number") {
+        return error.status
+    }
+    return null
+}
+
+function isAvatarEndpointUnavailableError(error: unknown) {
+    const status = getErrorStatus(error)
+    return status === 404 || status === 405 || status === 501
 }
 
 function resolveName(user?: SettingsUser | null): string | null {
@@ -266,6 +280,8 @@ export default function AdminSettingsPage() {
     )
     const [avatarLoading, setAvatarLoading] = React.useState(false)
     const [avatarUploading, setAvatarUploading] = React.useState(false)
+    const [avatarUploadStrategy, setAvatarUploadStrategy] =
+        React.useState<AvatarUploadStrategy>("unknown")
 
     const fileRef = React.useRef<HTMLInputElement | null>(null)
 
@@ -540,55 +556,94 @@ export default function AdminSettingsPage() {
             return
         }
 
-        setAvatarUploading(true)
-        try {
-            try {
-                const presign = await settingsApi.presignAvatarUpload({
-                    contentType: file.type,
-                    fileName: file.name,
-                })
+        async function uploadWithPresign(selectedFile: File) {
+            const presign = await settingsApi.presignAvatarUpload({
+                contentType: selectedFile.type,
+                fileName: selectedFile.name,
+            })
 
-                const uploadUrl = normalizeString(presign.uploadUrl)
-                const objectUrl =
-                    normalizeString(presign.objectUrl) ??
-                    normalizeString(presign.url)
-                const key = normalizeString(presign.key)
+            const uploadUrl = normalizeString(presign.uploadUrl)
+            const objectUrl =
+                normalizeString(presign.objectUrl) ??
+                normalizeString(presign.url)
+            const key = normalizeString(presign.key)
 
-                if (!uploadUrl || !objectUrl || !key) {
-                    throw new Error("Avatar presign response is incomplete.")
-                }
+            if (!uploadUrl || !objectUrl || !key) {
+                throw new Error("Avatar presign response is incomplete.")
+            }
 
-                const putRes = await fetch(uploadUrl, {
-                    method: "PUT",
-                    headers: { "Content-Type": file.type },
-                    body: file,
-                })
+            const putRes = await fetch(uploadUrl, {
+                method: "PUT",
+                headers: { "Content-Type": selectedFile.type },
+                body: selectedFile,
+            })
 
-                if (!putRes.ok) {
-                    throw new Error(`Upload failed (${putRes.status})`)
-                }
+            if (!putRes.ok) {
+                throw new Error(`Upload failed (${putRes.status})`)
+            }
 
-                const resp = await settingsApi.update({
+            const resp = await settingsApi.update({
+                avatarKey: key,
+                avatarUrl: objectUrl,
+            })
+
+            await syncStoredAuthFromPayload(
+                {
+                    ...resp,
                     avatarKey: key,
                     avatarUrl: objectUrl,
-                })
+                },
+                { refreshSession: true }
+            )
+            setAvatarUrl(objectUrl)
+        }
 
-                await syncStoredAuthFromPayload(
-                    {
-                        ...resp,
-                        avatarKey: key,
-                        avatarUrl: objectUrl,
-                    },
-                    { refreshSession: true }
-                )
-                setAvatarUrl(objectUrl)
-            } catch {
-                const resp = await settingsApi.uploadAvatar(file)
-                await syncStoredAuthFromPayload(resp, { refreshSession: true })
+        async function uploadDirectly(selectedFile: File) {
+            const resp = await settingsApi.uploadAvatar(selectedFile)
+            await syncStoredAuthFromPayload(resp, { refreshSession: true })
 
-                const uploadedAvatarUrl = extractAvatarUrlState(resp)
-                if (uploadedAvatarUrl !== undefined) {
-                    setAvatarUrl(uploadedAvatarUrl)
+            const uploadedAvatarUrl = extractAvatarUrlState(resp)
+            if (uploadedAvatarUrl !== undefined) {
+                setAvatarUrl(uploadedAvatarUrl)
+            }
+        }
+
+        setAvatarUploading(true)
+        try {
+            let uploaded = false
+            let lastRouteError: unknown = null
+
+            if (avatarUploadStrategy !== "direct") {
+                try {
+                    await uploadWithPresign(file)
+                    setAvatarUploadStrategy("presign")
+                    uploaded = true
+                } catch (error) {
+                    if (!isAvatarEndpointUnavailableError(error)) {
+                        throw error
+                    }
+                    lastRouteError = error
+                    setAvatarUploadStrategy("direct")
+                }
+            }
+
+            if (!uploaded) {
+                try {
+                    await uploadDirectly(file)
+                    setAvatarUploadStrategy("direct")
+                    uploaded = true
+                } catch (error) {
+                    if (!isAvatarEndpointUnavailableError(error)) {
+                        throw error
+                    }
+
+                    if (lastRouteError) {
+                        throw new Error(
+                            "Avatar upload endpoints are not available on the server."
+                        )
+                    }
+
+                    throw error
                 }
             }
 
