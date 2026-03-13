@@ -93,6 +93,50 @@ function toSortOrderValue(value: unknown): number {
     return Number.isFinite(num) ? num : 1000
 }
 
+function normalizePurposeKeyValue(value: unknown): string {
+    return normalizeText(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+}
+
+function normalizePurposeScopes(item: Record<string, unknown>): TransactionScope[] {
+    const rawValues: unknown[] = []
+
+    if (Array.isArray(item.scopes)) rawValues.push(...item.scopes)
+    if (Array.isArray(item.audiences)) rawValues.push(...item.audiences)
+    if (item.scope != null) rawValues.push(item.scope)
+    if (item.audience != null) rawValues.push(item.audience)
+
+    return uniqueScopes(
+        rawValues
+            .map(normalizeScope)
+            .filter((value): value is TransactionScope => Boolean(value))
+    )
+}
+
+function normalizePurposeDepartmentIds(item: Record<string, unknown>): string[] {
+    const ids: string[] = []
+
+    if (Array.isArray(item.departmentIds)) {
+        ids.push(...item.departmentIds.map((value) => resolveEntityId(value)))
+    }
+
+    if (Array.isArray(item.departments)) {
+        ids.push(...item.departments.map((value) => resolveEntityId(value)))
+    }
+
+    if (item.departmentId != null) {
+        ids.push(resolveEntityId(item.departmentId))
+    }
+
+    if (item.department != null) {
+        ids.push(resolveEntityId(item.department))
+    }
+
+    return uniqueStringIds(ids)
+}
+
 function normalizeDepartment(item: unknown): Department | null {
     if (!isRecord(item)) return null
 
@@ -171,30 +215,45 @@ function normalizeScope(scope: unknown): TransactionScope | null {
 function normalizePurpose(item: unknown): TransactionPurpose | null {
     if (!isRecord(item)) return null
 
-    const id = resolveEntityId(item)
+    const category =
+        normalizeNullableText(
+            item.category ?? item.transactionCategory ?? item.transactionManager
+        ) ?? DEFAULT_MANAGER
+
+    const label =
+        normalizeText(
+            item.label ?? item.name ?? item.purpose ?? item.transactionPurpose
+        ) || ""
+
+    const key =
+        normalizeText(item.key) ||
+        normalizeText(item.transactionKey) ||
+        normalizePurposeKeyValue(label)
+
+    const fallbackId =
+        `${normalizeManagerKey(category || DEFAULT_MANAGER, DEFAULT_MANAGER)}:${key || normalizePurposeKeyValue(label)}`
+
+    const id = resolveEntityId(item) || fallbackId
     if (!id) return null
 
-    const scopes = Array.isArray(item.scopes)
-        ? item.scopes
-              .map(normalizeScope)
-              .filter((value): value is TransactionScope => Boolean(value))
-        : []
+    const scopes = normalizePurposeScopes(item)
+    const departmentIds = normalizePurposeDepartmentIds(item)
+    const resolvedLabel = label || key
 
-    const departmentIds = Array.isArray(item.departmentIds)
-        ? uniqueStringIds(item.departmentIds.map((value) => resolveEntityId(value)))
-        : []
+    if (!resolvedLabel && !key) return null
 
     const normalized = {
         ...(item as Record<string, unknown>),
         id,
         _id: normalizeText(item._id) || id,
-        key: normalizeText(item.key),
-        label: normalizeText(item.label),
-        category: normalizeNullableText(item.category),
+        key: key || normalizePurposeKeyValue(resolvedLabel),
+        label: resolvedLabel,
+        category,
         scopes,
         departmentIds,
-        enabled: item.enabled,
-        sortOrder: toSortOrderValue(item.sortOrder),
+        enabled:
+            typeof item.enabled === "boolean" ? item.enabled : true,
+        sortOrder: toSortOrderValue(item.sortOrder ?? item.order),
     } as TransactionPurpose
 
     return normalized
