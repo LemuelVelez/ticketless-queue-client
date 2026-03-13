@@ -18,9 +18,9 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
-import { adminApi, type Department, type ServiceWindow, type StaffUser } from "@/api/admin"
+import { API_PATHS } from "@/api/api"
 import { useSession } from "@/hooks/use-session"
-
+import { api } from "@/lib/http"
 import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
@@ -65,40 +65,102 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 const DEFAULT_MANAGER = "REGISTRAR"
 
-function isEnabledFlag(value: boolean | undefined) {
-    return value !== false
+const ADMIN_RESOURCE_PATHS = {
+    departments: "/departments",
+    serviceWindows: "/service-windows",
+} as const
+
+type Department = {
+    _id: string
+    id?: string
+    name: string
+    code?: string
+    enabled?: boolean
+    transactionManager?: string | null
+    [key: string]: unknown
 }
 
-function statusBadge(enabled: boolean | undefined) {
-    const on = isEnabledFlag(enabled)
-    return <Badge variant={on ? "default" : "secondary"}>{on ? "Enabled" : "Disabled"}</Badge>
+type ServiceWindow = {
+    _id: string
+    id?: string
+    name: string
+    number?: number
+    enabled?: boolean
+    department?: string | null
+    departmentId?: string | null
+    departmentIds?: string[]
+    [key: string]: unknown
 }
 
-function safeInt(v: string) {
-    const n = Number.parseInt(v, 10)
-    return Number.isFinite(n) ? n : 0
+type StaffUser = {
+    _id?: string
+    id?: string
+    role?: string | null
+    active?: boolean
+    enabled?: boolean
+    name?: string | null
+    email?: string | null
+    assignedWindow?: string | null
+    assignedDepartment?: string | null
+    assignedDepartments?: string[] | null
+    departmentIds?: string[] | null
+    transactionManager?: string | null
+    [key: string]: unknown
 }
 
-function normalizeManagerKey(value: unknown, fallback = DEFAULT_MANAGER) {
-    const v = String(value || "")
-        .trim()
-        .toUpperCase()
-        .replace(/\s+/g, "_")
-    return v || fallback
+type CreateWindowInput = {
+    departmentIds: string[]
+    name: string
+    number: number
 }
 
-function prettyManager(value?: string) {
-    const v = String(value || "").trim()
-    if (!v) return DEFAULT_MANAGER
-    return v
-        .toLowerCase()
-        .split("_")
-        .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s))
-        .join(" ")
+type UpdateWindowInput = CreateWindowInput & {
+    enabled: boolean
 }
 
-function getStaffId(s: StaffUser) {
-    return s._id || s.id || ""
+type CreateDepartmentInput = {
+    name: string
+    code?: string
+    transactionManager: string
+}
+
+type UpdateDepartmentInput = CreateDepartmentInput & {
+    enabled: boolean
+}
+
+type UpdateStaffInput = {
+    departmentIds: string[]
+    windowId: string | null
+    transactionManager?: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function normalizeString(value: unknown) {
+    return String(value ?? "").trim()
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+    const clean = normalizeString(value)
+    return clean || null
+}
+
+function normalizeBoolean(value: unknown, fallback?: boolean) {
+    if (typeof value === "boolean") return value
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase()
+        if (normalized === "true") return true
+        if (normalized === "false") return false
+    }
+    return fallback
+}
+
+function normalizeNumber(value: unknown, fallback = 0) {
+    if (typeof value === "number" && Number.isFinite(value)) return value
+    const parsed = Number.parseInt(String(value ?? "").trim(), 10)
+    return Number.isFinite(parsed) ? parsed : fallback
 }
 
 function uniqueStringIds(values: Array<string | null | undefined>) {
@@ -116,10 +178,292 @@ function uniqueStringIds(values: Array<string | null | undefined>) {
     return out
 }
 
+function toIdArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+
+    const ids: string[] = []
+
+    for (const item of value) {
+        if (typeof item === "string" || typeof item === "number") {
+            const id = normalizeString(item)
+            if (id) ids.push(id)
+            continue
+        }
+
+        if (isRecord(item)) {
+            const id =
+                normalizeString(item._id ?? item.id ?? item.departmentId ?? item.value)
+            if (id) ids.push(id)
+        }
+    }
+
+    return uniqueStringIds(ids)
+}
+
+function extractCollection<T>(
+    value: unknown,
+    keys: string[],
+    mapItem: (item: unknown) => T
+): T[] {
+    if (Array.isArray(value)) return value.map(mapItem)
+
+    if (isRecord(value)) {
+        for (const key of keys) {
+            const candidate = value[key]
+            if (Array.isArray(candidate)) return candidate.map(mapItem)
+        }
+    }
+
+    return []
+}
+
+function normalizeDepartment(rawValue: unknown): Department {
+    const raw = isRecord(rawValue) ? rawValue : {}
+    const _id = normalizeString(raw._id ?? raw.id)
+    const code = normalizeOptionalString(raw.code)
+    const name =
+        normalizeString(raw.name ?? raw.departmentName) ||
+        code ||
+        _id ||
+        "Unnamed Department"
+
+    return {
+        ...raw,
+        _id,
+        ...(normalizeOptionalString(raw.id) ? { id: normalizeString(raw.id) } : {}),
+        name,
+        ...(code ? { code } : {}),
+        enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
+        transactionManager:
+            normalizeOptionalString(
+                raw.transactionManager ?? raw.managerKey ?? raw.transaction_manager
+            ) ?? DEFAULT_MANAGER,
+    }
+}
+
+function normalizeWindow(rawValue: unknown): ServiceWindow {
+    const raw = isRecord(rawValue) ? rawValue : {}
+    const _id = normalizeString(raw._id ?? raw.id)
+
+    const departmentIds = uniqueStringIds([
+        ...toIdArray(raw.departmentIds),
+        ...toIdArray(raw.departments),
+        normalizeOptionalString(raw.departmentId),
+        normalizeOptionalString(raw.department),
+    ])
+
+    const firstDepartmentId = departmentIds[0] ?? null
+
+    return {
+        ...raw,
+        _id,
+        ...(normalizeOptionalString(raw.id) ? { id: normalizeString(raw.id) } : {}),
+        name:
+            normalizeString(raw.name ?? raw.windowName) ||
+            `Window ${normalizeNumber(raw.number ?? raw.windowNumber, 1)}`,
+        number: normalizeNumber(raw.number ?? raw.windowNumber, 1),
+        enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
+        departmentIds,
+        departmentId: firstDepartmentId,
+        department: firstDepartmentId,
+    }
+}
+
+function normalizeStaff(rawValue: unknown): StaffUser {
+    const raw = isRecord(rawValue) ? rawValue : {}
+
+    const assignedDepartments = uniqueStringIds([
+        ...toIdArray(raw.assignedDepartments),
+        ...toIdArray(raw.departmentIds),
+        normalizeOptionalString(raw.assignedDepartment),
+    ])
+
+    const fallbackName =
+        [
+            normalizeOptionalString(raw.firstName),
+            normalizeOptionalString(raw.middleName),
+            normalizeOptionalString(raw.lastName),
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .trim() || null
+
+    return {
+        ...raw,
+        _id: normalizeOptionalString(raw._id ?? raw.id) ?? undefined,
+        id: normalizeOptionalString(raw.id) ?? undefined,
+        role: normalizeOptionalString(raw.role),
+        active: normalizeBoolean(raw.active, normalizeBoolean(raw.enabled, true)),
+        enabled: normalizeBoolean(raw.enabled, true),
+        name: normalizeOptionalString(raw.name) ?? fallbackName,
+        email: normalizeOptionalString(raw.email),
+        assignedWindow: normalizeOptionalString(
+            raw.assignedWindow ?? raw.windowId ?? raw.serviceWindowId
+        ),
+        assignedDepartment: assignedDepartments[0] ?? null,
+        assignedDepartments,
+        departmentIds: assignedDepartments,
+        transactionManager: normalizeOptionalString(raw.transactionManager),
+    }
+}
+
+function buildWindowPayload(input: CreateWindowInput | UpdateWindowInput) {
+    const departmentIds = uniqueStringIds(input.departmentIds)
+    const firstDepartmentId = departmentIds[0] ?? null
+
+    return {
+        name: input.name.trim(),
+        number: Number(input.number),
+        departmentIds,
+        departmentId: firstDepartmentId,
+        department: firstDepartmentId,
+        ...("enabled" in input ? { enabled: input.enabled } : {}),
+    }
+}
+
+function normalizeManagerKey(value: unknown, fallback = DEFAULT_MANAGER) {
+    const v = String(value || "")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "_")
+    return v || fallback
+}
+
+function buildDepartmentPayload(input: CreateDepartmentInput | UpdateDepartmentInput) {
+    return {
+        name: input.name.trim(),
+        ...(input.code ? { code: input.code.trim() } : {}),
+        transactionManager: normalizeManagerKey(input.transactionManager, DEFAULT_MANAGER),
+        ...("enabled" in input ? { enabled: input.enabled } : {}),
+    }
+}
+
+function buildStaffUpdatePayload(input: UpdateStaffInput) {
+    const departmentIds = uniqueStringIds(input.departmentIds)
+    const firstDepartmentId = departmentIds[0] ?? null
+    const normalizedManager = input.transactionManager
+        ? normalizeManagerKey(input.transactionManager, DEFAULT_MANAGER)
+        : undefined
+
+    return {
+        departmentIds,
+        assignedDepartments: departmentIds,
+        assignedDepartment: firstDepartmentId,
+        departmentId: firstDepartmentId,
+        windowId: input.windowId,
+        assignedWindow: input.windowId,
+        serviceWindowId: input.windowId,
+        ...(normalizedManager ? { transactionManager: normalizedManager } : {}),
+    }
+}
+
+const adminApi = {
+    async listDepartments() {
+        const res = await api.getData<unknown>(ADMIN_RESOURCE_PATHS.departments)
+        return {
+            departments: extractCollection(
+                res,
+                ["departments", "items", "results"],
+                normalizeDepartment
+            ),
+        }
+    },
+
+    async createDepartment(payload: CreateDepartmentInput) {
+        return api.postData<unknown>(
+            ADMIN_RESOURCE_PATHS.departments,
+            buildDepartmentPayload(payload)
+        )
+    },
+
+    async updateDepartment(id: string, payload: UpdateDepartmentInput) {
+        return api.patchData<unknown>(
+            API_PATHS.departments.byId(id),
+            buildDepartmentPayload(payload)
+        )
+    },
+
+    async deleteDepartment(id: string) {
+        return api.deleteData<unknown>(API_PATHS.departments.byId(id))
+    },
+
+    async listWindows() {
+        const res = await api.getData<unknown>(ADMIN_RESOURCE_PATHS.serviceWindows)
+        return {
+            windows: extractCollection(
+                res,
+                ["windows", "serviceWindows", "items", "results"],
+                normalizeWindow
+            ),
+        }
+    },
+
+    async createWindow(payload: CreateWindowInput) {
+        return api.postData<unknown>(
+            ADMIN_RESOURCE_PATHS.serviceWindows,
+            buildWindowPayload(payload)
+        )
+    },
+
+    async updateWindow(id: string, payload: UpdateWindowInput) {
+        return api.patchData<unknown>(
+            API_PATHS.serviceWindows.byId(id),
+            buildWindowPayload(payload)
+        )
+    },
+
+    async deleteWindow(id: string) {
+        return api.deleteData<unknown>(API_PATHS.serviceWindows.byId(id))
+    },
+
+    async listStaff() {
+        const res = await api.getData<unknown>(API_PATHS.users.staff)
+        return {
+            staff: extractCollection(res, ["staff", "users", "items", "results"], normalizeStaff),
+        }
+    },
+
+    async updateStaff(id: string, payload: UpdateStaffInput) {
+        return api.patchData<unknown>(
+            API_PATHS.users.byId(id),
+            buildStaffUpdatePayload(payload)
+        )
+    },
+}
+
+function isEnabledFlag(value: boolean | undefined) {
+    return value !== false
+}
+
+function statusBadge(enabled: boolean | undefined) {
+    const on = isEnabledFlag(enabled)
+    return <Badge variant={on ? "default" : "secondary"}>{on ? "Enabled" : "Disabled"}</Badge>
+}
+
+function safeInt(v: string) {
+    const n = Number.parseInt(v, 10)
+    return Number.isFinite(n) ? n : 0
+}
+
+function prettyManager(value?: string) {
+    const v = String(value || "").trim()
+    if (!v) return DEFAULT_MANAGER
+    return v
+        .toLowerCase()
+        .split("_")
+        .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s))
+        .join(" ")
+}
+
+function getStaffId(s: StaffUser) {
+    return s._id || s.id || ""
+}
+
 function getStaffDepartmentIds(staff: StaffUser): string[] {
     return uniqueStringIds([
         ...(Array.isArray(staff.assignedDepartments) ? staff.assignedDepartments : []),
         staff.assignedDepartment ?? "",
+        ...(Array.isArray(staff.departmentIds) ? staff.departmentIds : []),
     ])
 }
 
@@ -128,6 +472,7 @@ function getWindowDepartmentIds(win?: ServiceWindow | null): string[] {
     return uniqueStringIds([
         ...(Array.isArray(win.departmentIds) ? win.departmentIds : []),
         win.department ?? "",
+        win.departmentId ?? "",
     ])
 }
 
@@ -235,52 +580,42 @@ export default function AdminWindowsPage() {
     const [windows, setWindows] = React.useState<ServiceWindow[]>([])
     const [staffUsers, setStaffUsers] = React.useState<StaffUser[]>([])
 
-    // window filters
     const [winQ, setWinQ] = React.useState("")
     const [winStatusTab, setWinStatusTab] = React.useState<"all" | "enabled" | "disabled">("all")
     const [winDeptFilter, setWinDeptFilter] = React.useState<string>("all")
 
-    // department filters
     const [deptQ, setDeptQ] = React.useState("")
     const [deptStatusTab, setDeptStatusTab] = React.useState<"all" | "enabled" | "disabled">("all")
     const [deptManagerFilter, setDeptManagerFilter] = React.useState<string>("all")
 
-    // window dialogs
     const [createWinOpen, setCreateWinOpen] = React.useState(false)
     const [editWinOpen, setEditWinOpen] = React.useState(false)
     const [deleteWinOpen, setDeleteWinOpen] = React.useState(false)
     const [assignStaffOpen, setAssignStaffOpen] = React.useState(false)
 
-    // department dialogs
     const [createDeptOpen, setCreateDeptOpen] = React.useState(false)
     const [editDeptOpen, setEditDeptOpen] = React.useState(false)
     const [deleteDeptOpen, setDeleteDeptOpen] = React.useState(false)
 
-    // selected
     const [selectedWin, setSelectedWin] = React.useState<ServiceWindow | null>(null)
     const [assignTargetWin, setAssignTargetWin] = React.useState<ServiceWindow | null>(null)
     const [selectedDept, setSelectedDept] = React.useState<Department | null>(null)
 
-    // create window form
     const [cWinDepartmentIds, setCWinDepartmentIds] = React.useState<string[]>([])
     const [cWinName, setCWinName] = React.useState("")
     const [cWinNumber, setCWinNumber] = React.useState<number>(1)
 
-    // edit window form
     const [eWinDepartmentIds, setEWinDepartmentIds] = React.useState<string[]>([])
     const [eWinName, setEWinName] = React.useState("")
     const [eWinNumber, setEWinNumber] = React.useState<number>(1)
     const [eWinEnabled, setEWinEnabled] = React.useState(true)
 
-    // assign staff form
     const [aStaffId, setAStaffId] = React.useState<string>("none")
 
-    // create department form
     const [cDeptName, setCDeptName] = React.useState("")
     const [cDeptCode, setCDeptCode] = React.useState("")
     const [cDeptManager, setCDeptManager] = React.useState(DEFAULT_MANAGER)
 
-    // edit department form
     const [eDeptName, setEDeptName] = React.useState("")
     const [eDeptCode, setEDeptCode] = React.useState("")
     const [eDeptManager, setEDeptManager] = React.useState(DEFAULT_MANAGER)
@@ -576,17 +911,10 @@ export default function AdminWindowsPage() {
         const windowDepartmentIds = getWindowDepartmentIds(assignTargetWin)
         if (windowDepartmentIds.length === 0) return toast.error("Window must have at least one department.")
 
-        /**
-         * IMPORTANT FIX:
-         * Do NOT manually unassign all currently attached staff before assigning.
-         * Backend already enforces one STAFF per window and clears previous assignments.
-         * Manual loop was causing assignment failures in some data states.
-         */
         const currentlyAssignedHere = (staffAssignedByWindow.get(assignTargetWin._id) ?? []).filter(
             (s) => getStaffId(s) && getStaffId(s) !== aStaffId
         )
 
-        // Keep picked staff departments only if they match target window manager, then merge with window departments.
         const windowManagers = uniqueStringIds(
             windowDepartmentIds
                 .map((depId) => getDepartmentManagerById(depId, deptById))
@@ -1254,7 +1582,6 @@ export default function AdminWindowsPage() {
                 </Tabs>
             </div>
 
-            {/* Create Window */}
             <Dialog open={createWinOpen} onOpenChange={setCreateWinOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
@@ -1317,7 +1644,6 @@ export default function AdminWindowsPage() {
                 </DialogContent>
             </Dialog>
 
-            {/* Edit Window */}
             <Dialog open={editWinOpen} onOpenChange={setEditWinOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
@@ -1388,7 +1714,6 @@ export default function AdminWindowsPage() {
                 </DialogContent>
             </Dialog>
 
-            {/* Assign Staff */}
             <Dialog
                 open={assignStaffOpen}
                 onOpenChange={(open) => {
@@ -1518,7 +1843,6 @@ export default function AdminWindowsPage() {
                 </DialogContent>
             </Dialog>
 
-            {/* Delete Window */}
             <AlertDialog open={deleteWinOpen} onOpenChange={setDeleteWinOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
@@ -1558,7 +1882,6 @@ export default function AdminWindowsPage() {
                 </AlertDialogContent>
             </AlertDialog>
 
-            {/* Create Department */}
             <Dialog open={createDeptOpen} onOpenChange={setCreateDeptOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
@@ -1631,7 +1954,6 @@ export default function AdminWindowsPage() {
                 </DialogContent>
             </Dialog>
 
-            {/* Edit Department */}
             <Dialog open={editDeptOpen} onOpenChange={setEditDeptOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
@@ -1709,7 +2031,6 @@ export default function AdminWindowsPage() {
                 </DialogContent>
             </Dialog>
 
-            {/* Delete Department */}
             <AlertDialog open={deleteDeptOpen} onOpenChange={setDeleteDeptOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
