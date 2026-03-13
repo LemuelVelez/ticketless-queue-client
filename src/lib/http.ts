@@ -30,6 +30,9 @@ export class ApiError extends Error {
 
 type QueryParamValue = string | number | boolean | null | undefined
 
+const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
+const DEFAULT_LOCAL_API_PORT = "5000"
+
 /**
  * ✅ Public-display friendly participant name picker (frontend mirror of displayController behavior).
  * Tries in order:
@@ -207,7 +210,8 @@ type RequestOptions = {
      * Fetch credentials behavior.
      * Default is smart:
      * - same-origin API -> "include" (keeps cookie-based flows working)
-     * - cross-origin API -> "omit" (prevents CORS failures when backend uses wildcard origins)
+     * - trusted local-dev cross-origin API -> "include"
+     * - cross-origin API -> "omit" (prevents common CORS failures)
      */
     credentials?: RequestCredentials
     /**
@@ -262,6 +266,10 @@ function normalizeDevHostname(hostname: string) {
     return raw
 }
 
+function isFrontendDevPort(port: string) {
+    return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
+}
+
 function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = String(value ?? "").trim().replace(/\/+$/, "")
     if (!raw || raw === API_PREFIX) return raw
@@ -271,9 +279,23 @@ function normalizeExplicitLocalDevApiBase(value: string) {
         if (!isLikelyLocalDevHostname(url.hostname)) return raw
 
         const hostname = normalizeDevHostname(url.hostname)
-        if (!hostname || hostname === url.hostname) return raw
+        const port = isFrontendDevPort(url.port)
+            ? DEFAULT_LOCAL_API_PORT
+            : url.port
 
-        url.hostname = hostname
+        const changedHostname = Boolean(hostname) && hostname !== url.hostname
+        const changedPort = port !== url.port
+
+        if (!changedHostname && !changedPort) return raw
+
+        if (changedHostname) {
+            url.hostname = hostname
+        }
+
+        if (changedPort) {
+            url.port = port
+        }
+
         return String(url.toString()).replace(/\/+$/, "")
     } catch {
         return raw
@@ -298,6 +320,29 @@ const PUBLIC_AUTH_PATHS = new Set(
         .filter(Boolean)
 )
 
+const STAFF_ONLY_AUTH_PATH_PREFIXES = [
+    API_PATHS.settings.current,
+    API_PATHS.settings.avatar,
+    API_PATHS.settings.avatarPresign,
+    API_PATHS.auditLogs.list,
+    API_PATHS.auditLogs.recent,
+    "/audit-logs/actor/",
+    API_PATHS.reports.summary,
+    API_PATHS.reports.timeseries,
+    API_PATHS.users.staff,
+    "/users/staff/",
+    API_PATHS.users.participants,
+    "/users/student/",
+    "/users/",
+    API_PATHS.admin.auditLogs,
+    API_PATHS.admin.staff,
+    "/admin/staff/",
+    API_PATHS.admin.participants,
+    "/admin/reports/",
+]
+    .map((path) => toApiPath(path))
+    .filter(Boolean)
+
 function getComparableApiPath(path: string) {
     const raw = String(path ?? "").trim()
     if (!raw) return ""
@@ -320,6 +365,31 @@ function getComparableApiPath(path: string) {
     return toApiPath(stripQueryAndHash(raw))
 }
 
+function pathMatchesPrefix(path: string, prefix: string) {
+    const normalizedPath = String(path ?? "").trim()
+    const normalizedPrefix = String(prefix ?? "").trim()
+
+    if (!normalizedPath || !normalizedPrefix) return false
+
+    if (normalizedPrefix.endsWith("/")) {
+        return normalizedPath.startsWith(normalizedPrefix)
+    }
+
+    return (
+        normalizedPath === normalizedPrefix ||
+        normalizedPath.startsWith(`${normalizedPrefix}/`)
+    )
+}
+
+function isStaffOnlyApiPath(path: string) {
+    const comparablePath = getComparableApiPath(path)
+    if (!comparablePath) return false
+
+    return STAFF_ONLY_AUTH_PATH_PREFIXES.some((prefix) =>
+        pathMatchesPrefix(comparablePath, prefix)
+    )
+}
+
 function resolveRequestAuthMode(
     path: string,
     auth: RequestAuthMode | undefined
@@ -329,6 +399,10 @@ function resolveRequestAuthMode(
     const comparablePath = getComparableApiPath(path)
     if (PUBLIC_AUTH_PATHS.has(comparablePath)) {
         return false
+    }
+
+    if (isStaffOnlyApiPath(comparablePath)) {
+        return "staff"
     }
 
     return "auto"
@@ -356,7 +430,7 @@ function absolutizeRelativeApiUrlForServer(url: string) {
     const nodeEnv = getRuntimeEnv("NODE_ENV").toLowerCase()
     if (nodeEnv !== "development") return raw
 
-    const fallbackBase = `http://127.0.0.1:5000${API_PREFIX}`
+    const fallbackBase = `http://127.0.0.1:${DEFAULT_LOCAL_API_PORT}${API_PREFIX}`
     return apiPath ? `${fallbackBase}${apiPath}` : fallbackBase
 }
 
@@ -399,6 +473,25 @@ function hasAnyTokenAuthHeader(headers: Record<string, string>) {
         hasHeader(headers, "X-Session-Token") ||
         hasHeader(headers, "X-SessionToken")
     )
+}
+
+function stripTokenAuthHeaders(headers: Record<string, string>) {
+    const next: Record<string, string> = {}
+
+    for (const [key, value] of Object.entries(headers)) {
+        const normalized = key.toLowerCase()
+        if (
+            normalized === "authorization" ||
+            normalized === "x-session-token" ||
+            normalized === "x-sessiontoken"
+        ) {
+            continue
+        }
+
+        next[key] = value
+    }
+
+    return next
 }
 
 function resolveAuthToken(auth: RequestAuthMode | undefined): string | null {
@@ -516,6 +609,21 @@ function snippet(val: unknown, max = 220) {
     return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
+function isBrowserTrustedLocalDevApiUrl(url: string) {
+    if (typeof window === "undefined") return false
+
+    try {
+        const resolved = new URL(url, window.location.origin)
+
+        return (
+            isLikelyLocalDevHostname(window.location.hostname) &&
+            isLikelyLocalDevHostname(resolved.hostname)
+        )
+    } catch {
+        return false
+    }
+}
+
 function resolveCredentials(
     url: string,
     explicit?: RequestCredentials,
@@ -532,11 +640,21 @@ function resolveCredentials(
         return "omit"
     }
 
-    // If API is same-origin, keep include (supports cookie-based admin/staff sessions if any).
-    // If cross-origin, omit to avoid common CORS failures (wildcard origins + credentials is blocked by browsers).
+    // ✅ Keep cookie-based auth working for:
+    // - same-origin API calls
+    // - trusted local dev API calls (e.g. localhost:3000 -> localhost:5000)
     try {
         const u = new URL(url, window.location.origin)
-        return u.origin === window.location.origin ? "include" : "omit"
+
+        if (u.origin === window.location.origin) {
+            return "include"
+        }
+
+        if (isBrowserTrustedLocalDevApiUrl(u.toString())) {
+            return "include"
+        }
+
+        return "omit"
     } catch {
         // Safe fallback
         return "omit"
@@ -557,16 +675,15 @@ function isBrowserSameOriginUrl(url: string) {
 function canRetryUnauthorizedWithIncludedCredentials(
     method: HttpMethod,
     url: string,
-    explicit?: RequestCredentials,
-    headers?: Record<string, string>
+    explicit?: RequestCredentials
 ) {
     if (typeof window === "undefined") return false
     if (explicit) return false
     if (method !== "GET") return false
-    if (!headers || !hasAnyTokenAuthHeader(headers)) return false
-    if (!isBrowserSameOriginUrl(url)) return false
 
-    return true
+    return (
+        isBrowserSameOriginUrl(url) || isBrowserTrustedLocalDevApiUrl(url)
+    )
 }
 
 function formatServerReason(reason: unknown): string {
@@ -768,17 +885,14 @@ export async function apiRequest<T>(
     if (
         res.status === 401 &&
         resolvedCredentials !== "include" &&
-        canRetryUnauthorizedWithIncludedCredentials(
-            method,
-            url,
-            credentials,
-            finalHeaders
-        )
+        canRetryUnauthorizedWithIncludedCredentials(method, url, credentials)
     ) {
         try {
+            const retryHeaders = stripTokenAuthHeaders(finalHeaders)
+
             res = await fetch(url, {
                 method,
-                headers: finalHeaders,
+                headers: retryHeaders,
                 body: finalBody,
                 signal,
                 credentials: "include",

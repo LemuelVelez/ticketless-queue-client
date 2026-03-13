@@ -90,9 +90,23 @@ function normalizeExplicitLocalDevApiBase(value: string) {
         if (!isLikelyLocalDevHostname(url.hostname)) return raw
 
         const hostname = normalizeDevHostname(url.hostname)
-        if (!hostname || hostname === url.hostname) return raw
+        const port = isFrontendDevPort(url.port)
+            ? DEFAULT_LOCAL_API_PORT
+            : url.port
 
-        url.hostname = hostname
+        const changedHostname = Boolean(hostname) && hostname !== url.hostname
+        const changedPort = port !== url.port
+
+        if (!changedHostname && !changedPort) return raw
+
+        if (changedHostname) {
+            url.hostname = hostname
+        }
+
+        if (changedPort) {
+            url.port = port
+        }
+
         return stripTrailingSlash(url.toString())
     } catch {
         return raw
