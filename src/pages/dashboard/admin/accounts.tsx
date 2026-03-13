@@ -63,6 +63,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 type AccountRole = "STAFF" | "ADMIN" | "STUDENT" | "ALUMNI_VISITOR" | "GUEST"
 type StaffAccountRole = "STAFF" | "ADMIN"
 type EditableRole = AccountRole
+type AccountSource = "staff" | "participant"
 
 type AccountUser = {
   id?: string
@@ -73,6 +74,7 @@ type AccountUser = {
   type?: string
   active: boolean
   readOnly?: boolean
+  source?: AccountSource
 }
 
 type AccountRow = AccountUser & {
@@ -80,8 +82,9 @@ type AccountRow = AccountUser & {
 }
 
 type AccountListResponse = {
-  staff?: AccountUser[]
-  users?: AccountUser[]
+  staff: AccountUser[]
+  participants: AccountUser[]
+  errors: string[]
 }
 
 const ROLE_ORDER: AccountRole[] = ["ADMIN", "STAFF", "STUDENT", "ALUMNI_VISITOR", "GUEST"]
@@ -96,6 +99,7 @@ function encodeAccountId(value: string) {
 
 const ACCOUNT_API_PATHS = {
   list: toApiPath("/admin/staff"),
+  participants: toApiPath("/admin/participants"),
   create: toApiPath("/admin/staff"),
   byId: (id: string) => toApiPath(`/admin/staff/${encodeAccountId(id)}`),
   resendLoginCredentialsCandidates: (id: string) => [
@@ -106,10 +110,47 @@ const ACCOUNT_API_PATHS = {
 } as const
 
 const accountApi = {
-  listAccounts() {
-    return api.getData<AccountListResponse>(ACCOUNT_API_PATHS.list, {
-      auth: "staff",
-    })
+  async listAccounts(): Promise<AccountListResponse> {
+    const [staffResult, participantResult] = await Promise.allSettled([
+      api.getData<AccountUser[]>(ACCOUNT_API_PATHS.list, {
+        auth: "staff",
+        params: { includeInactive: true },
+      }),
+      api.getData<AccountUser[]>(ACCOUNT_API_PATHS.participants, {
+        auth: "staff",
+        params: { includeInactive: true },
+      }),
+    ])
+
+    const errors: string[] = []
+
+    const staff =
+      staffResult.status === "fulfilled"
+        ? Array.isArray(staffResult.value)
+          ? staffResult.value
+          : []
+        : []
+
+    const participants =
+      participantResult.status === "fulfilled"
+        ? Array.isArray(participantResult.value)
+          ? participantResult.value
+          : []
+        : []
+
+    if (staffResult.status === "rejected") {
+      errors.push(
+        staffResult.reason instanceof Error ? staffResult.reason.message : "Failed to load staff accounts."
+      )
+    }
+
+    if (participantResult.status === "rejected") {
+      errors.push(
+        participantResult.reason instanceof Error ? participantResult.reason.message : "Failed to load participant accounts."
+      )
+    }
+
+    return { staff, participants, errors }
   },
 
   createAccount(payload: Record<string, unknown>) {
@@ -316,25 +357,63 @@ export default function AdminAccountsPage() {
     try {
       const res = await accountApi.listAccounts()
 
-      const listRaw = Array.isArray((res as any)?.staff)
-        ? (res as any).staff
-        : Array.isArray((res as any)?.users)
-          ? (res as any).users
-          : []
-
-      const normalized = (listRaw as any[]).map((u) => ({
+      const normalizedStaff = (res.staff ?? []).map((u) => ({
         ...u,
         name: typeof u?.name === "string" && u.name.trim() ? u.name : "—",
         email: typeof u?.email === "string" ? u.email : "",
-        active: Boolean(u?.active),
+        active: typeof u?.active === "boolean" ? u.active : true,
         role: normalizeRole(u?.role ?? u?.type),
         readOnly: Boolean(u?.readOnly),
+        source: "staff" as const,
       }))
 
-      setUsers(normalized as AccountUser[])
+      const normalizedParticipants = (res.participants ?? []).map((u) => ({
+        ...u,
+        name: typeof u?.name === "string" && u.name.trim() ? u.name : "—",
+        email: typeof u?.email === "string" ? u.email : "",
+        active: typeof u?.active === "boolean" ? u.active : true,
+        role: normalizeRole(u?.role ?? u?.type),
+        readOnly: true,
+        source: "participant" as const,
+      }))
+
+      const merged = [...normalizedStaff, ...normalizedParticipants]
+      const deduped = new Map<string, AccountUser>()
+
+      for (const entry of merged) {
+        const idKey = userId(entry)
+        const emailKey = String(entry.email ?? "").trim().toLowerCase()
+        const nameKey = String(entry.name ?? "").trim().toLowerCase()
+        const key = idKey || emailKey || `${entry.role}:${nameKey}`
+
+        if (!key) continue
+
+        const existing = deduped.get(key)
+        if (!existing) {
+          deduped.set(key, entry)
+          continue
+        }
+
+        if (entry.source === "staff" && existing.source !== "staff") {
+          deduped.set(key, entry)
+        }
+      }
+
+      setUsers(Array.from(deduped.values()))
+
+      if (res.errors.length > 0) {
+        if (deduped.size > 0) {
+          toast.error("Some accounts could not be loaded.", {
+            description: res.errors.join(" "),
+          })
+        } else {
+          throw new Error(res.errors.join(" "))
+        }
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to load accounts."
       toast.error(msg)
+      setUsers([])
     } finally {
       setLoading(false)
     }
@@ -370,6 +449,11 @@ export default function AdminAccountsPage() {
   }, [rows, q, tab])
 
   function openEdit(u: AccountRow) {
+    if (isReadOnlyAccount(u)) {
+      toast.message("Editing is not available for this account type from this page.")
+      return
+    }
+
     setSelected(u)
     setEName(u.name ?? "")
     setEActive(!!u.active)
@@ -520,6 +604,10 @@ export default function AdminAccountsPage() {
 
   async function handleSaveEdit() {
     if (!selected) return
+    if (isReadOnlyAccount(selected)) {
+      return toast.message("Editing is not available for this account type from this page.")
+    }
+
     const id = userId(selected)
     if (!id) return toast.error("Invalid user id.")
 
@@ -726,6 +814,7 @@ export default function AdminAccountsPage() {
                           const role = normalizeRole(u.role)
                           const emailDisplay = u.email?.trim() ? u.email : "—"
                           const readOnly = isReadOnlyAccount(u)
+                          const canEdit = !readOnly
                           const canResend = !readOnly && isStaffAccountRole(role) && looksLikeEmail(emailDisplay)
 
                           return (
@@ -759,9 +848,13 @@ export default function AdminAccountsPage() {
                                     <DropdownMenuLabel>Actions</DropdownMenuLabel>
                                     <DropdownMenuSeparator />
 
-                                    <DropdownMenuItem onClick={() => openEdit(u)} className="cursor-pointer">
-                                      Edit role/account
-                                    </DropdownMenuItem>
+                                    {canEdit ? (
+                                      <DropdownMenuItem onClick={() => openEdit(u)} className="cursor-pointer">
+                                        Edit role/account
+                                      </DropdownMenuItem>
+                                    ) : (
+                                      <DropdownMenuItem disabled>Edit unavailable</DropdownMenuItem>
+                                    )}
 
                                     {canResend ? (
                                       <DropdownMenuItem onClick={() => openResend(u)} className="cursor-pointer">
