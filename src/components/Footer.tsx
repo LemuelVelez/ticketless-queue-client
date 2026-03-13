@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
-import { guestApi, participantAuthStorage } from "@/api/guest"
+import {
+    AUTH_STORAGE_KEYS,
+    clearParticipantSession,
+    getParticipantToken,
+    getParticipantUser,
+} from "@/lib/auth"
 import { useSession } from "@/hooks/use-session"
 
 import { Separator } from "@/components/ui/separator"
@@ -34,12 +39,37 @@ const sectionIds = exploreItems
     .filter((href) => href.startsWith("#"))
     .map((href) => href.slice(1))
 
+const participantStorageKeys = new Set<string>([
+    AUTH_STORAGE_KEYS.participant.token.local,
+    AUTH_STORAGE_KEYS.participant.token.session,
+    AUTH_STORAGE_KEYS.participant.user.local,
+    AUTH_STORAGE_KEYS.participant.user.session,
+])
+
 function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
     const value = String(raw ?? "").trim().toUpperCase()
     if (value === "STUDENT") return "STUDENT"
-    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") {
+        return "ALUMNI_VISITOR"
+    }
+    if (value === "ALUMNI") return "ALUMNI_VISITOR"
     if (value === "GUEST" || value === "VISITOR") return "GUEST"
     return null
+}
+
+function resolveParticipantRoleFromStorage(): ParticipantRole | null {
+    const token = getParticipantToken()
+    if (!token) return null
+
+    const participant = getParticipantUser()
+    const role = normalizeParticipantRole(participant?.type)
+
+    if (!role) {
+        clearParticipantSession()
+        return null
+    }
+
+    return role
 }
 
 function getHomePath(role: string | undefined) {
@@ -94,55 +124,28 @@ export default function Footer({ variant = "landing" }: FooterProps) {
     const { user, loading } = useSession()
     const location = useLocation()
 
-    const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
-    const [participantLoading, setParticipantLoading] = useState(true)
+    const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(
+        () => resolveParticipantRoleFromStorage()
+    )
+    const [participantLoading, setParticipantLoading] = useState(false)
 
     useEffect(() => {
-        let alive = true
-
-        const resolveParticipant = async () => {
-            const token = participantAuthStorage.getToken()
-            if (!token) {
-                if (!alive) return
-                setParticipantRole(null)
-                setParticipantLoading(false)
-                return
-            }
-
-            try {
-                const res = await guestApi.getSession()
-                if (!alive) return
-
-                const role = normalizeParticipantRole(res?.participant?.type)
-                if (!role) {
-                    participantAuthStorage.clearToken()
-                    setParticipantRole(null)
-                } else {
-                    setParticipantRole(role)
-                }
-            } catch {
-                if (!alive) return
-                participantAuthStorage.clearToken()
-                setParticipantRole(null)
-            } finally {
-                if (alive) setParticipantLoading(false)
-            }
+        const syncParticipantSession = () => {
+            setParticipantLoading(true)
+            setParticipantRole(resolveParticipantRoleFromStorage())
+            setParticipantLoading(false)
         }
 
-        void resolveParticipant()
+        syncParticipantSession()
 
         const onStorage = (e: StorageEvent) => {
-            if (e.key === "qp_participant_token") {
-                setParticipantLoading(true)
-                void resolveParticipant()
+            if (!e.key || participantStorageKeys.has(e.key)) {
+                syncParticipantSession()
             }
         }
 
         window.addEventListener("storage", onStorage)
-        return () => {
-            alive = false
-            window.removeEventListener("storage", onStorage)
-        }
+        return () => window.removeEventListener("storage", onStorage)
     }, [])
 
     const staffRole = user?.role
@@ -161,24 +164,28 @@ export default function Footer({ variant = "landing" }: FooterProps) {
         return "/login"
     }, [isStaffAuthenticated, staffRole, isParticipantAuthenticated, participantRole])
 
-    const participantLabel = useMemo(() => getParticipantLabel(participantRole), [participantRole])
+    const participantLabel = useMemo(
+        () => getParticipantLabel(participantRole),
+        [participantRole]
+    )
 
     const authLabel = isStaffAuthenticated
         ? staffRole === "ADMIN" || staffRole === "STAFF"
             ? "Dashboard"
             : "My Home"
         : isParticipantAuthenticated
-            ? "My Home"
-            : "Login"
+          ? "My Home"
+          : "Login"
 
     const authTo = dashboardPath
 
-    const currentParticipantPage = useMemo(() => getParticipantPageLabel(location.pathname), [location.pathname])
+    const currentParticipantPage = useMemo(
+        () => getParticipantPageLabel(location.pathname),
+        [location.pathname]
+    )
 
-    // ✅ Hooks must not be conditional
     const [activeHref, setActiveHref] = useState<string>("")
 
-    // Landing-only: hash sync
     useEffect(() => {
         if (variant !== "landing") return
 
@@ -189,11 +196,12 @@ export default function Footer({ variant = "landing" }: FooterProps) {
         return () => window.removeEventListener("hashchange", syncFromHash)
     }, [variant])
 
-    // Landing-only: scroll-spy using IntersectionObserver
     useEffect(() => {
         if (variant !== "landing") return
 
-        const sections = sectionIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[]
+        const sections = sectionIds
+            .map((id) => document.getElementById(id))
+            .filter(Boolean) as HTMLElement[]
 
         if (!sections.length) return
 
@@ -201,7 +209,10 @@ export default function Footer({ variant = "landing" }: FooterProps) {
             (entries) => {
                 const visible = entries
                     .filter((e) => e.isIntersecting)
-                    .sort((a, b) => (b.intersectionRatio ?? 0) - (a.intersectionRatio ?? 0))[0]
+                    .sort(
+                        (a, b) =>
+                            (b.intersectionRatio ?? 0) - (a.intersectionRatio ?? 0)
+                    )[0]
 
                 if (visible?.target?.id) setActiveHref(`#${visible.target.id}`)
             },
@@ -209,14 +220,13 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                 root: null,
                 threshold: [0.2, 0.35, 0.5, 0.65],
                 rootMargin: "-20% 0px -60% 0px",
-            },
+            }
         )
 
         sections.forEach((el) => observer.observe(el))
         return () => observer.disconnect()
     }, [variant])
 
-    // ✅ Student/Guest authenticated footer (no navigation buttons)
     if (variant === "student") {
         return (
             <footer className="mt-14 border-t bg-background">
@@ -230,7 +240,9 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                                 <div className="flex items-center gap-2">
                                     <span className="text-sm font-semibold">QueuePass</span>
                                     <Badge variant="secondary">{participantLabel}</Badge>
-                                    <Badge variant="outline">{currentParticipantPage}</Badge>
+                                    <Badge variant="outline">
+                                        {currentParticipantPage}
+                                    </Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
                                     Navigation is available in the header menu.
@@ -242,8 +254,8 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                             {participantLoading
                                 ? "Checking session…"
                                 : isParticipantAuthenticated
-                                    ? "Session active"
-                                    : "Not signed in"}
+                                  ? "Session active"
+                                  : "Not signed in"}
                         </Badge>
                     </div>
 
@@ -258,7 +270,6 @@ export default function Footer({ variant = "landing" }: FooterProps) {
         )
     }
 
-    // ✅ Landing footer (role-aware + participant-aware routes)
     return (
         <footer className="mx-0 mt-14 border-t bg-background">
             <div className="mx-4 px-4 py-10">
@@ -274,7 +285,8 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                                     <Badge variant="secondary">Ticketless</Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    QR-based student ID queueing with SMS notification, voice announcement, and public display.
+                                    QR-based student ID queueing with SMS notification, voice
+                                    announcement, and public display.
                                 </p>
                             </div>
                         </div>
@@ -302,7 +314,10 @@ export default function Footer({ variant = "landing" }: FooterProps) {
                                 <Button
                                     key={item.href}
                                     variant="link"
-                                    className={cn("h-auto justify-start p-0", isActive && "font-semibold underline")}
+                                    className={cn(
+                                        "h-auto justify-start p-0",
+                                        isActive && "font-semibold underline"
+                                    )}
                                     asChild
                                 >
                                     <a
@@ -322,7 +337,10 @@ export default function Footer({ variant = "landing" }: FooterProps) {
 
                 <div className="flex flex-col gap-2 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
                     <span>© {new Date().getFullYear()} QueuePass. All rights reserved.</span>
-                    <span>Built for school offices: Registrar, Cashier, Library, Clinic, NSTP/ROTC, and more.</span>
+                    <span>
+                        Built for school offices: Registrar, Cashier, Library, Clinic,
+                        NSTP/ROTC, and more.
+                    </span>
                 </div>
             </div>
         </footer>

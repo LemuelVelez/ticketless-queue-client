@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
-import { guestApi, participantAuthStorage } from "@/api/guest"
+import {
+    AUTH_STORAGE_KEYS,
+    clearParticipantSession,
+    getParticipantToken,
+    getParticipantUser,
+} from "@/lib/auth"
 import { useSession } from "@/hooks/use-session"
 
 import { Button } from "@/components/ui/button"
@@ -13,7 +18,13 @@ import {
     NavigationMenuList,
     navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu"
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
+import {
+    Sheet,
+    SheetContent,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import { Menu } from "lucide-react"
 
@@ -43,12 +54,37 @@ const sectionIds = navItems
     .filter((href) => href.startsWith("#"))
     .map((href) => href.slice(1))
 
+const participantStorageKeys = new Set<string>([
+    AUTH_STORAGE_KEYS.participant.token.local,
+    AUTH_STORAGE_KEYS.participant.token.session,
+    AUTH_STORAGE_KEYS.participant.user.local,
+    AUTH_STORAGE_KEYS.participant.user.session,
+])
+
 function normalizeParticipantRole(raw: unknown): ParticipantRole | null {
     const value = String(raw ?? "").trim().toUpperCase()
     if (value === "STUDENT") return "STUDENT"
-    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") return "ALUMNI_VISITOR"
+    if (value === "ALUMNI_VISITOR" || value === "ALUMNI-VISITOR") {
+        return "ALUMNI_VISITOR"
+    }
+    if (value === "ALUMNI") return "ALUMNI_VISITOR"
     if (value === "GUEST" || value === "VISITOR") return "GUEST"
     return null
+}
+
+function resolveParticipantRoleFromStorage(): ParticipantRole | null {
+    const token = getParticipantToken()
+    if (!token) return null
+
+    const participant = getParticipantUser()
+    const role = normalizeParticipantRole(participant?.type)
+
+    if (!role) {
+        clearParticipantSession()
+        return null
+    }
+
+    return role
 }
 
 function getHomePath(role: string | undefined) {
@@ -104,8 +140,10 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     const { user, loading } = useSession()
     const location = useLocation()
 
-    const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(null)
-    const [participantLoading, setParticipantLoading] = useState(true)
+    const [participantRole, setParticipantRole] = useState<ParticipantRole | null>(
+        () => resolveParticipantRoleFromStorage()
+    )
+    const [participantLoading, setParticipantLoading] = useState(false)
 
     // ✅ Hooks must not be conditional
     const [activeHref, setActiveHref] = useState<string>("")
@@ -113,51 +151,22 @@ export default function Header({ variant = "landing" }: HeaderProps) {
     const headerRef = useRef<HTMLElement | null>(null)
 
     useEffect(() => {
-        let alive = true
-
-        const resolveParticipant = async () => {
-            const token = participantAuthStorage.getToken()
-            if (!token) {
-                if (!alive) return
-                setParticipantRole(null)
-                setParticipantLoading(false)
-                return
-            }
-
-            try {
-                const res = await guestApi.getSession()
-                if (!alive) return
-
-                const role = normalizeParticipantRole(res?.participant?.type)
-                if (!role) {
-                    participantAuthStorage.clearToken()
-                    setParticipantRole(null)
-                } else {
-                    setParticipantRole(role)
-                }
-            } catch {
-                if (!alive) return
-                participantAuthStorage.clearToken()
-                setParticipantRole(null)
-            } finally {
-                if (alive) setParticipantLoading(false)
-            }
+        const syncParticipantSession = () => {
+            setParticipantLoading(true)
+            setParticipantRole(resolveParticipantRoleFromStorage())
+            setParticipantLoading(false)
         }
 
-        void resolveParticipant()
+        syncParticipantSession()
 
         const onStorage = (e: StorageEvent) => {
-            if (e.key === "qp_participant_token") {
-                setParticipantLoading(true)
-                void resolveParticipant()
+            if (!e.key || participantStorageKeys.has(e.key)) {
+                syncParticipantSession()
             }
         }
 
         window.addEventListener("storage", onStorage)
-        return () => {
-            alive = false
-            window.removeEventListener("storage", onStorage)
-        }
+        return () => window.removeEventListener("storage", onStorage)
     }, [])
 
     const staffRole = user?.role
@@ -175,8 +184,8 @@ export default function Header({ variant = "landing" }: HeaderProps) {
             ? "Dashboard"
             : "My Home"
         : isParticipantAuthenticated
-            ? "My Home"
-            : "Login"
+          ? "My Home"
+          : "Login"
 
     const landingJoinTo = useMemo(() => {
         if (isStaffAuthenticated) return getJoinPath(staffRole)
@@ -184,9 +193,17 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         return "/login"
     }, [isStaffAuthenticated, staffRole, isParticipantAuthenticated, participantRole])
 
-    const participantBase = useMemo(() => getParticipantBase(participantRole), [participantRole])
-    const participantLabel = useMemo(() => getParticipantLabel(participantRole), [participantRole])
-    const participantBrandTo = isParticipantAuthenticated ? `${participantBase}/home` : "/login"
+    const participantBase = useMemo(
+        () => getParticipantBase(participantRole),
+        [participantRole]
+    )
+    const participantLabel = useMemo(
+        () => getParticipantLabel(participantRole),
+        [participantRole]
+    )
+    const participantBrandTo = isParticipantAuthenticated
+        ? `${participantBase}/home`
+        : "/login"
 
     const participantMenuItems = useMemo(
         () => [
@@ -195,10 +212,9 @@ export default function Header({ variant = "landing" }: HeaderProps) {
             { label: "My Tickets", to: `${participantBase}/my-tickets` },
             { label: "Profile", to: `${participantBase}/profile` },
         ],
-        [participantBase],
+        [participantBase]
     )
 
-    // ✅ Landing-only: keep active state in sync with URL hash
     useEffect(() => {
         if (variant !== "landing") return
 
@@ -209,11 +225,12 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         return () => window.removeEventListener("hashchange", syncFromHash)
     }, [variant])
 
-    // ✅ Landing-only: scroll-spy
     useEffect(() => {
         if (variant !== "landing") return
 
-        const sections = sectionIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[]
+        const sections = sectionIds
+            .map((id) => document.getElementById(id))
+            .filter(Boolean) as HTMLElement[]
 
         if (!sections.length) return
 
@@ -264,7 +281,6 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         setSheetOpen(false)
     }
 
-    // ✅ Student/Guest authenticated header
     if (variant === "student") {
         return (
             <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
@@ -286,7 +302,6 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                         </div>
                     </Link>
 
-                    {/* Desktop actions */}
                     <div className="hidden items-center gap-3 md:flex">
                         <Button variant="outline" asChild>
                             <Link to="/">Landing Page</Link>
@@ -306,10 +321,15 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                                         navigationMenuTriggerStyle(),
                                                         "relative",
                                                         active &&
-                                                        "bg-accent text-accent-foreground after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
+                                                            "bg-accent text-accent-foreground after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary"
                                                     )}
                                                 >
-                                                    <Link to={item.to} aria-current={active ? "page" : undefined}>
+                                                    <Link
+                                                        to={item.to}
+                                                        aria-current={
+                                                            active ? "page" : undefined
+                                                        }
+                                                    >
                                                         {item.label}
                                                     </Link>
                                                 </NavigationMenuLink>
@@ -329,7 +349,6 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                         )}
                     </div>
 
-                    {/* Mobile actions */}
                     <div className="md:hidden">
                         <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
                             <SheetTrigger asChild>
@@ -345,11 +364,19 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                 <SheetHeader>
                                     <SheetTitle className="text-left">
                                         <div className="flex items-center gap-3">
-                                            <img src={logo} alt="QueuePass logo" className="h-10 w-10" />
+                                            <img
+                                                src={logo}
+                                                alt="QueuePass logo"
+                                                className="h-10 w-10"
+                                            />
                                             <div className="leading-tight">
                                                 <div className="flex flex-wrap items-center gap-2">
-                                                    <span className="font-semibold">QueuePass</span>
-                                                    <Badge variant="secondary">{participantLabel}</Badge>
+                                                    <span className="font-semibold">
+                                                        QueuePass
+                                                    </span>
+                                                    <Badge variant="secondary">
+                                                        {participantLabel}
+                                                    </Badge>
                                                 </div>
                                                 <p className="mt-1 text-xs text-muted-foreground">
                                                     Student & guest pages (authenticated)
@@ -360,7 +387,11 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                 </SheetHeader>
 
                                 <div className="mt-6 flex flex-col gap-2">
-                                    <Button variant="ghost" className="w-full justify-start" asChild>
+                                    <Button
+                                        variant="ghost"
+                                        className="w-full justify-start"
+                                        asChild
+                                    >
                                         <Link to="/" onClick={() => setSheetOpen(false)}>
                                             Landing Page
                                         </Link>
@@ -369,7 +400,10 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                     {isParticipantAuthenticated ? (
                                         <>
                                             {participantMenuItems.map((item) => {
-                                                const active = isRouteActive(location.pathname, item.to)
+                                                const active = isRouteActive(
+                                                    location.pathname,
+                                                    item.to
+                                                )
 
                                                 return (
                                                     <Button
@@ -378,14 +412,18 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                                         className={cn(
                                                             "relative w-full justify-start",
                                                             active &&
-                                                            "bg-accent text-accent-foreground before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
+                                                                "bg-accent text-accent-foreground before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary"
                                                         )}
                                                         asChild
                                                     >
                                                         <Link
                                                             to={item.to}
-                                                            aria-current={active ? "page" : undefined}
-                                                            onClick={() => setSheetOpen(false)}
+                                                            aria-current={
+                                                                active ? "page" : undefined
+                                                            }
+                                                            onClick={() =>
+                                                                setSheetOpen(false)
+                                                            }
                                                         >
                                                             {item.label}
                                                         </Link>
@@ -399,7 +437,10 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                         </Button>
                                     ) : (
                                         <Button className="w-full" asChild>
-                                            <Link to="/login" onClick={() => setSheetOpen(false)}>
+                                            <Link
+                                                to="/login"
+                                                onClick={() => setSheetOpen(false)}
+                                            >
                                                 Login to continue
                                             </Link>
                                         </Button>
@@ -413,11 +454,12 @@ export default function Header({ variant = "landing" }: HeaderProps) {
         )
     }
 
-    // ✅ Landing header (scroll-spy + auth)
     return (
-        <header ref={headerRef} className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
+        <header
+            ref={headerRef}
+            className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur"
+        >
             <div className="mx-4 flex items-center justify-between px-4 py-3">
-                {/* Brand */}
                 <Link to="/" className="flex items-center gap-3">
                     <div className="flex h-14 w-14 items-center justify-center rounded-lg border">
                         <img src={logo} alt="QueuePass logo" className="h-12 w-12" />
@@ -435,7 +477,6 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                     </div>
                 </Link>
 
-                {/* Desktop nav */}
                 <div className="hidden items-center gap-3 md:flex">
                     <NavigationMenu>
                         <NavigationMenuList>
@@ -450,8 +491,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                                 navigationMenuTriggerStyle(),
                                                 "relative",
                                                 isActive &&
-                                                "bg-accent text-accent-foreground " +
-                                                "after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary",
+                                                    "bg-accent text-accent-foreground after:absolute after:bottom-1 after:left-3 after:right-3 after:h-0.5 after:rounded-full after:bg-primary"
                                             )}
                                         >
                                             <a
@@ -479,7 +519,6 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                     </div>
                 </div>
 
-                {/* Mobile nav */}
                 <div className="md:hidden">
                     <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
                         <SheetTrigger asChild>
@@ -501,7 +540,9 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                                 <span className="font-semibold">QueuePass</span>
                                                 <Badge variant="secondary">QR Queue</Badge>
                                             </div>
-                                            <p className="mt-1 text-xs text-muted-foreground">Ticketless student queue</p>
+                                            <p className="mt-1 text-xs text-muted-foreground">
+                                                Ticketless student queue
+                                            </p>
                                         </div>
                                     </div>
                                 </SheetTitle>
@@ -518,8 +559,7 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                             className={cn(
                                                 "relative w-full justify-start",
                                                 isActive &&
-                                                "bg-accent text-accent-foreground " +
-                                                "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary",
+                                                    "bg-accent text-accent-foreground before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-primary"
                                             )}
                                             asChild
                                         >
@@ -539,14 +579,18 @@ export default function Header({ variant = "landing" }: HeaderProps) {
                                         variant="outline"
                                         className="w-full"
                                         asChild
-                                        onClick={() => setSheetOpen(false)}
                                         disabled={loading || participantLoading}
                                     >
-                                        <Link to={authTo}>{authLabel}</Link>
+                                        <Link to={authTo} onClick={() => setSheetOpen(false)}>
+                                            {authLabel}
+                                        </Link>
                                     </Button>
 
                                     <Button className="w-full" asChild>
-                                        <Link to={landingJoinTo} onClick={() => setSheetOpen(false)}>
+                                        <Link
+                                            to={landingJoinTo}
+                                            onClick={() => setSheetOpen(false)}
+                                        >
                                             Join Queue
                                         </Link>
                                     </Button>
