@@ -31,7 +31,8 @@ export class ApiError extends Error {
 type QueryParamScalar = string | number | boolean | null | undefined
 type QueryParamValue = QueryParamScalar | readonly QueryParamScalar[]
 
-const DEFAULT_LOCAL_API_PORT = "3000"
+const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
+const DEFAULT_LOCAL_API_PORT = "5000"
 
 /**
  * ✅ Public-display friendly participant name picker (frontend mirror of displayController behavior).
@@ -277,23 +278,34 @@ function normalizeDevHostname(hostname: string) {
     return raw
 }
 
+function isFrontendDevPort(port: string) {
+    return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
+}
+
+function normalizeLocalDevUrl(url: URL) {
+    if (!isLikelyLocalDevHostname(url.hostname)) return
+
+    const normalizedHostname = normalizeDevHostname(url.hostname)
+    if (normalizedHostname && normalizedHostname !== url.hostname) {
+        url.hostname = normalizedHostname
+    }
+
+    const normalizedPort = isFrontendDevPort(url.port)
+        ? DEFAULT_LOCAL_API_PORT
+        : String(url.port ?? "").trim()
+
+    if (normalizedPort !== String(url.port ?? "").trim()) {
+        url.port = normalizedPort
+    }
+}
+
 function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = String(value ?? "").trim().replace(/\/+$/, "")
     if (!raw || raw === API_PREFIX) return raw
 
     try {
         const url = new URL(raw)
-        if (!isLikelyLocalDevHostname(url.hostname)) return raw
-
-        const hostname = normalizeDevHostname(url.hostname)
-        const changedHostname = Boolean(hostname) && hostname !== url.hostname
-
-        if (!changedHostname) return raw
-
-        if (changedHostname) {
-            url.hostname = hostname
-        }
-
+        normalizeLocalDevUrl(url)
         return String(url.toString()).replace(/\/+$/, "")
     } catch {
         return raw
