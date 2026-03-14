@@ -13,6 +13,13 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+import {
     Dialog,
     DialogContent,
     DialogFooter,
@@ -32,6 +39,40 @@ import {
 
 import type { PurposeBulkDraft } from "@/components/admin/departments/constants"
 import { safeInt, statusBadge } from "@/components/admin/departments/utils"
+
+type ManagerCategoryOption = {
+    value: string
+    label: string
+}
+
+function getManagerCategoryOptions(
+    enabledDepartments: Department[],
+    currentCategory: string
+): ManagerCategoryOption[] {
+    const seen = new Set<string>()
+    const options: ManagerCategoryOption[] = []
+
+    for (const dept of enabledDepartments) {
+        const value = (dept.code?.trim() || dept.name?.trim() || "").trim()
+        if (!value || seen.has(value)) continue
+
+        seen.add(value)
+        options.push({
+            value,
+            label: dept.code?.trim() ? `${dept.name} (${dept.code})` : dept.name,
+        })
+    }
+
+    const trimmedCurrentCategory = currentCategory.trim()
+    if (trimmedCurrentCategory && !seen.has(trimmedCurrentCategory)) {
+        options.unshift({
+            value: trimmedCurrentCategory,
+            label: trimmedCurrentCategory,
+        })
+    }
+
+    return options
+}
 
 type PurposeFormFieldsProps = {
     idPrefix: string
@@ -74,17 +115,35 @@ function PurposeFormFields({
     onEnabledChange,
     enabledDepartments,
 }: PurposeFormFieldsProps) {
+    const managerCategoryOptions = getManagerCategoryOptions(enabledDepartments, category)
+
     return (
         <div className="grid gap-4">
             <div className="grid gap-2 md:grid-cols-2 md:gap-4">
                 <div className="grid gap-2">
                     <Label htmlFor={`${idPrefix}-category`}>Manager category</Label>
-                    <Input
-                        id={`${idPrefix}-category`}
-                        value={category}
-                        onChange={(e) => onCategoryChange(e.target.value)}
-                        placeholder="e.g., REGISTRAR"
-                    />
+                    <Select
+                        value={category.trim() || undefined}
+                        onValueChange={onCategoryChange}
+                        disabled={managerCategoryOptions.length === 0}
+                    >
+                        <SelectTrigger id={`${idPrefix}-category`}>
+                            <SelectValue placeholder="Select manager category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {managerCategoryOptions.length === 0 ? (
+                                <SelectItem value="__no-manager-category__" disabled>
+                                    No manager categories available
+                                </SelectItem>
+                            ) : (
+                                managerCategoryOptions.map((option) => (
+                                    <SelectItem key={`${idPrefix}-category-${option.value}`} value={option.value}>
+                                        {option.label}
+                                    </SelectItem>
+                                ))
+                            )}
+                        </SelectContent>
+                    </Select>
                 </div>
 
                 <div className="grid gap-2">
