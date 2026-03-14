@@ -38,40 +38,29 @@ import {
 } from "@/components/ui/alert-dialog"
 
 import type { PurposeBulkDraft } from "@/components/admin/departments/constants"
-import { safeInt, statusBadge } from "@/components/admin/departments/utils"
+import { prettyManager, safeInt, statusBadge } from "@/components/admin/departments/utils"
 
-type ManagerCategoryOption = {
-    value: string
-    label: string
-}
+const normalizeManagerCategory = (value: unknown) =>
+    typeof value === "string" ? value.trim() : ""
 
-function getManagerCategoryOptions(
-    enabledDepartments: Department[],
-    currentCategory: string
-): ManagerCategoryOption[] {
-    const seen = new Set<string>()
-    const options: ManagerCategoryOption[] = []
+const getManagerCategoryOptions = (
+    managerOptions: string[] | undefined,
+    enabledDepartments: Department[]
+) => {
+    const unique = new Set<string>()
 
-    for (const dept of enabledDepartments) {
-        const value = (dept.code?.trim() || dept.name?.trim() || "").trim()
-        if (!value || seen.has(value)) continue
+    managerOptions?.forEach((option) => {
+        const normalized = normalizeManagerCategory(option)
+        if (normalized) unique.add(normalized)
+    })
 
-        seen.add(value)
-        options.push({
-            value,
-            label: dept.code?.trim() ? `${dept.name} (${dept.code})` : dept.name,
-        })
-    }
+    enabledDepartments.forEach((dept) => {
+        const deptRecord = dept as Record<string, unknown>
+        const normalized = normalizeManagerCategory(deptRecord.manager)
+        if (normalized) unique.add(normalized)
+    })
 
-    const trimmedCurrentCategory = currentCategory.trim()
-    if (trimmedCurrentCategory && !seen.has(trimmedCurrentCategory)) {
-        options.unshift({
-            value: trimmedCurrentCategory,
-            label: trimmedCurrentCategory,
-        })
-    }
-
-    return options
+    return Array.from(unique).sort((a, b) => a.localeCompare(b))
 }
 
 type PurposeFormFieldsProps = {
@@ -93,6 +82,7 @@ type PurposeFormFieldsProps = {
     enabled: boolean
     onEnabledChange: (value: boolean) => void
     enabledDepartments: Department[]
+    managerCategoryOptions: string[]
 }
 
 function PurposeFormFields({
@@ -114,36 +104,43 @@ function PurposeFormFields({
     enabled,
     onEnabledChange,
     enabledDepartments,
+    managerCategoryOptions,
 }: PurposeFormFieldsProps) {
-    const managerCategoryOptions = getManagerCategoryOptions(enabledDepartments, category)
+    const currentCategory = normalizeManagerCategory(category)
+
+    const categoryOptions = Array.from(
+        new Set([
+            ...managerCategoryOptions,
+            ...(currentCategory ? [currentCategory] : []),
+        ])
+    ).sort((a, b) => a.localeCompare(b))
 
     return (
         <div className="grid gap-4">
             <div className="grid gap-2 md:grid-cols-2 md:gap-4">
                 <div className="grid gap-2">
                     <Label htmlFor={`${idPrefix}-category`}>Manager category</Label>
-                    <Select
-                        value={category.trim() || undefined}
-                        onValueChange={onCategoryChange}
-                        disabled={managerCategoryOptions.length === 0}
-                    >
+                    <Select value={category} onValueChange={onCategoryChange}>
                         <SelectTrigger id={`${idPrefix}-category`}>
-                            <SelectValue placeholder="Select manager category" />
+                            <SelectValue placeholder="Select transaction manager category" />
                         </SelectTrigger>
                         <SelectContent>
-                            {managerCategoryOptions.length === 0 ? (
-                                <SelectItem value="__no-manager-category__" disabled>
-                                    No manager categories available
+                            {categoryOptions.length === 0 ? (
+                                <SelectItem value="__no-manager-category" disabled>
+                                    No available manager categories
                                 </SelectItem>
                             ) : (
-                                managerCategoryOptions.map((option) => (
-                                    <SelectItem key={`${idPrefix}-category-${option.value}`} value={option.value}>
-                                        {option.label}
+                                categoryOptions.map((option) => (
+                                    <SelectItem key={`${idPrefix}-category-${option}`} value={option}>
+                                        {prettyManager(option)}
                                     </SelectItem>
                                 ))
                             )}
                         </SelectContent>
                     </Select>
+                    <p className="text-xs text-muted-foreground">
+                        Select an available transaction manager category.
+                    </p>
                 </div>
 
                 <div className="grid gap-2">
@@ -275,6 +272,7 @@ function PurposeFormFields({
 
 type PurposeDialogsProps = {
     enabledDepartments: Department[]
+    managerOptions?: string[]
     saving: boolean
 
     createOpen: boolean
@@ -338,6 +336,7 @@ type PurposeDialogsProps = {
 
 export function PurposeDialogs({
     enabledDepartments,
+    managerOptions,
     saving,
     createOpen,
     onCreateOpenChange,
@@ -392,6 +391,8 @@ export function PurposeDialogs({
     selectedPurpose,
     onDelete,
 }: PurposeDialogsProps) {
+    const managerCategoryOptions = getManagerCategoryOptions(managerOptions, enabledDepartments)
+
     return (
         <>
             <Dialog open={createOpen} onOpenChange={onCreateOpenChange}>
@@ -419,6 +420,7 @@ export function PurposeDialogs({
                         enabled={cPurposeEnabled}
                         onEnabledChange={onCPurposeEnabledChange}
                         enabledDepartments={enabledDepartments}
+                        managerCategoryOptions={managerCategoryOptions}
                     />
 
                     <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
@@ -521,6 +523,7 @@ export function PurposeDialogs({
                                                     patchEditAllPurposeDraft(draft.id, { enabled: value })
                                                 }
                                                 enabledDepartments={enabledDepartments}
+                                                managerCategoryOptions={managerCategoryOptions}
                                             />
                                         </div>
                                     )
@@ -578,6 +581,7 @@ export function PurposeDialogs({
                         enabled={ePurposeEnabled}
                         onEnabledChange={onEPurposeEnabledChange}
                         enabledDepartments={enabledDepartments}
+                        managerCategoryOptions={managerCategoryOptions}
                     />
 
                     <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
