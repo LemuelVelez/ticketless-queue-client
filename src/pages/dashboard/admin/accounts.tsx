@@ -1219,7 +1219,7 @@ export default function AdminAccountsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete account?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will remove the user (or disable them if your backend does not support DELETE for this route).
+              This will remove the user.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
