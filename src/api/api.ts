@@ -5,7 +5,7 @@ export type ApiRouteParam = string | number
 export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
-const DEFAULT_LOCAL_API_PORT = "3000"
+const DEFAULT_LOCAL_API_PORT = "5000"
 
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
     ["/admin/service-window", "/service-windows"],
@@ -88,20 +88,30 @@ function isFrontendDevPort(port: string) {
     return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
 }
 
+function normalizeLocalDevUrl(url: URL) {
+    if (!isLikelyLocalDevHostname(url.hostname)) return
+
+    const normalizedHostname = normalizeDevHostname(url.hostname)
+    if (normalizedHostname && normalizedHostname !== url.hostname) {
+        url.hostname = normalizedHostname
+    }
+
+    const normalizedPort = isFrontendDevPort(url.port)
+        ? DEFAULT_LOCAL_API_PORT
+        : String(url.port ?? "").trim()
+
+    if (normalizedPort !== String(url.port ?? "").trim()) {
+        url.port = normalizedPort
+    }
+}
+
 function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = stripTrailingSlash(String(value ?? "").trim())
     if (!raw || raw === API_PREFIX) return raw
 
     try {
         const url = new URL(raw)
-        if (!isLikelyLocalDevHostname(url.hostname)) return raw
-
-        const hostname = normalizeDevHostname(url.hostname)
-        const changedHostname = Boolean(hostname) && hostname !== url.hostname
-
-        if (!changedHostname) return raw
-
-        url.hostname = hostname
+        normalizeLocalDevUrl(url)
         return stripTrailingSlash(url.toString())
     } catch {
         return raw
@@ -120,14 +130,7 @@ function normalizeAbsoluteUrl(value: string) {
 
     try {
         const url = new URL(candidate)
-
-        if (isLikelyLocalDevHostname(url.hostname)) {
-            const normalizedHostname = normalizeDevHostname(url.hostname)
-            if (normalizedHostname) {
-                url.hostname = normalizedHostname
-            }
-        }
-
+        normalizeLocalDevUrl(url)
         return url.toString()
     } catch {
         return raw
@@ -277,6 +280,8 @@ export const API_PATHS = {
     },
     transactionPurposes: {
         list: "/transaction-purposes",
+        byId: (id: ApiRouteParam) =>
+            `/transaction-purposes/${encodeRouteParam(id)}`,
     },
     tickets: {
         recent: "/tickets/recent",
@@ -301,6 +306,8 @@ export const API_PATHS = {
         byStudentId: (studentId: ApiRouteParam) =>
             `/users/student/${encodeRouteParam(studentId)}`,
         staff: "/users/staff",
+        staffById: (id: ApiRouteParam) =>
+            `/users/staff/${encodeRouteParam(id)}`,
         staffSendLogin: (id: ApiRouteParam) =>
             `/users/staff/${encodeRouteParam(id)}/send-login`,
         staffResendLogin: (id: ApiRouteParam) =>
@@ -310,6 +317,8 @@ export const API_PATHS = {
     admin: {
         auditLogs: "/admin/audit-logs",
         staff: "/admin/staff",
+        staffById: (id: ApiRouteParam) =>
+            `/admin/staff/${encodeRouteParam(id)}`,
         staffSendLogin: (id: ApiRouteParam) =>
             `/admin/staff/${encodeRouteParam(id)}/send-login`,
         staffResendLogin: (id: ApiRouteParam) =>
@@ -379,6 +388,8 @@ export const API_ROUTES = {
     },
     transactionPurposes: {
         list: () => toApiUrl(API_PATHS.transactionPurposes.list),
+        byId: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.transactionPurposes.byId(id)),
     },
     tickets: {
         recent: () => toApiUrl(API_PATHS.tickets.recent),
@@ -403,6 +414,8 @@ export const API_ROUTES = {
         byStudentId: (studentId: ApiRouteParam) =>
             toApiUrl(API_PATHS.users.byStudentId(studentId)),
         staff: () => toApiUrl(API_PATHS.users.staff),
+        staffById: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.users.staffById(id)),
         staffSendLogin: (id: ApiRouteParam) =>
             toApiUrl(API_PATHS.users.staffSendLogin(id)),
         staffResendLogin: (id: ApiRouteParam) =>
@@ -412,6 +425,8 @@ export const API_ROUTES = {
     admin: {
         auditLogs: () => toApiUrl(API_PATHS.admin.auditLogs),
         staff: () => toApiUrl(API_PATHS.admin.staff),
+        staffById: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.admin.staffById(id)),
         staffSendLogin: (id: ApiRouteParam) =>
             toApiUrl(API_PATHS.admin.staffSendLogin(id)),
         staffResendLogin: (id: ApiRouteParam) =>
