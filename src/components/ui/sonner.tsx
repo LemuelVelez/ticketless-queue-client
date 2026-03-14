@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react"
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -14,7 +15,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
-      className="toaster group text-primary"
+      className="toaster group"
       icons={{
         success: <CircleCheckIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,
@@ -25,10 +26,22 @@ const Toaster = ({ ...props }: ToasterProps) => {
       style={
         {
           "--normal-bg": "var(--popover)",
-          "--normal-text": "var(--primary)",
+          "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
+          "--success-bg": "var(--primary)",
+          "--success-text": "var(--primary-foreground)",
+          "--success-border": "var(--primary)",
+          "--info-bg": "var(--secondary)",
+          "--info-text": "var(--secondary-foreground)",
+          "--info-border": "var(--border)",
+          "--warning-bg": "var(--accent)",
+          "--warning-text": "var(--accent-foreground)",
+          "--warning-border": "var(--border)",
+          "--error-bg": "var(--destructive)",
+          "--error-text": "var(--primary-foreground)",
+          "--error-border": "var(--destructive)",
           "--border-radius": "var(--radius)",
-        } as React.CSSProperties
+        } as CSSProperties
       }
       {...props}
     />

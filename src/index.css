@@ -127,8 +127,7 @@
 
   /**
    * Sonner (toast) theming
-   * Fixes white-on-white description by explicitly mapping Sonner CSS vars
-   * to our OKLCH theme tokens.
+   * Keeps title and description readable across normal and rich-color toasts.
    */
   [data-sonner-toaster] {
     --normal-bg: var(--popover);
@@ -152,13 +151,24 @@
     --error-border: var(--destructive);
   }
 
-  /* Ensure non-rich toasts always have readable title/description */
+  /* Ensure standard toasts have readable title/description colors */
   [data-sonner-toast][data-rich-colors="false"] [data-title] {
-    color: var(--foreground);
+    color: var(--popover-foreground);
   }
 
   [data-sonner-toast][data-rich-colors="false"] [data-description] {
-    color: var(--primary);
+    color: var(--muted-foreground);
+    opacity: 1;
+  }
+
+  /* Keep rich-color toast descriptions readable against colored backgrounds */
+  [data-sonner-toast][data-rich-colors="true"] [data-title],
+  [data-sonner-toast][data-rich-colors="true"] [data-description] {
+    color: inherit;
+  }
+
+  [data-sonner-toast][data-rich-colors="true"] [data-description] {
+    opacity: 0.92;
   }
 
   /* WebKit (Chrome, Edge, Safari) */
