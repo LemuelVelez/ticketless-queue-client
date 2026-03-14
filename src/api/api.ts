@@ -5,7 +5,7 @@ export type ApiRouteParam = string | number
 export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
-const DEFAULT_LOCAL_API_PORT = "3000"
+const DEFAULT_LOCAL_API_PORT = "5000"
 
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
     ["/admin/staff", "/users/staff"],
@@ -101,6 +101,32 @@ function normalizeExplicitLocalDevApiBase(value: string) {
     }
 }
 
+function normalizeAbsoluteUrl(value: string) {
+    const raw = String(value ?? "").trim()
+    if (!raw) return raw
+
+    const candidate = raw.startsWith("//")
+        ? typeof window !== "undefined"
+            ? `${window.location.protocol}${raw}`
+            : `http:${raw}`
+        : raw
+
+    try {
+        const url = new URL(candidate)
+
+        if (isLikelyLocalDevHostname(url.hostname)) {
+            const normalizedHostname = normalizeDevHostname(url.hostname)
+            if (normalizedHostname) {
+                url.hostname = normalizedHostname
+            }
+        }
+
+        return url.toString()
+    } catch {
+        return raw
+    }
+}
+
 function inferBrowserDevApiBaseUrl() {
     if (typeof window === "undefined") return ""
 
@@ -177,7 +203,7 @@ export function toApiUrl(path: string) {
     if (!raw) return getResolvedApiBaseUrl()
 
     if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) {
-        return normalizeApiBaseUrl(raw)
+        return normalizeAbsoluteUrl(raw)
     }
 
     const apiPath = toApiPath(raw)
@@ -202,6 +228,16 @@ export const API_PATHS = {
         current: "/settings/current",
         avatar: "/settings/current/avatar",
         avatarPresign: "/settings/current/avatar/presign",
+    },
+    self: {
+        me: "/me",
+        mePassword: "/me/password",
+        meAvatar: "/me/avatar",
+        meAvatarPresign: "/me/avatar/presign",
+        usersMe: "/users/me",
+        usersMePassword: "/users/me/password",
+        usersMeAvatar: "/users/me/avatar",
+        usersMeAvatarPresign: "/users/me/avatar/presign",
     },
     auditLogs: {
         list: "/audit-logs",
@@ -241,6 +277,12 @@ export const API_PATHS = {
     reports: {
         summary: "/reports/summary",
         timeseries: "/reports/timeseries",
+    },
+    publicDisplay: {
+        managers: "/landing/managers",
+        stateByQuery: "/landing/public-display",
+        state: (transactionManager: ApiRouteParam) =>
+            `/landing/public-display/${encodeRouteParam(transactionManager)}`,
     },
     users: {
         byId: (id: ApiRouteParam) => `/users/${encodeRouteParam(id)}`,
@@ -285,6 +327,16 @@ export const API_ROUTES = {
         avatar: () => toApiUrl(API_PATHS.settings.avatar),
         avatarPresign: () => toApiUrl(API_PATHS.settings.avatarPresign),
     },
+    self: {
+        me: () => toApiUrl(API_PATHS.self.me),
+        mePassword: () => toApiUrl(API_PATHS.self.mePassword),
+        meAvatar: () => toApiUrl(API_PATHS.self.meAvatar),
+        meAvatarPresign: () => toApiUrl(API_PATHS.self.meAvatarPresign),
+        usersMe: () => toApiUrl(API_PATHS.self.usersMe),
+        usersMePassword: () => toApiUrl(API_PATHS.self.usersMePassword),
+        usersMeAvatar: () => toApiUrl(API_PATHS.self.usersMeAvatar),
+        usersMeAvatarPresign: () => toApiUrl(API_PATHS.self.usersMeAvatarPresign),
+    },
     auditLogs: {
         list: () => toApiUrl(API_PATHS.auditLogs.list),
         recent: () => toApiUrl(API_PATHS.auditLogs.recent),
@@ -322,6 +374,12 @@ export const API_ROUTES = {
     reports: {
         summary: () => toApiUrl(API_PATHS.reports.summary),
         timeseries: () => toApiUrl(API_PATHS.reports.timeseries),
+    },
+    publicDisplay: {
+        managers: () => toApiUrl(API_PATHS.publicDisplay.managers),
+        stateByQuery: () => toApiUrl(API_PATHS.publicDisplay.stateByQuery),
+        state: (transactionManager: ApiRouteParam) =>
+            toApiUrl(API_PATHS.publicDisplay.state(transactionManager)),
     },
     users: {
         byId: (id: ApiRouteParam) => toApiUrl(API_PATHS.users.byId(id)),

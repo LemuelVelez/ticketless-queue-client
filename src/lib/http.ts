@@ -28,9 +28,10 @@ export class ApiError extends Error {
     }
 }
 
-type QueryParamValue = string | number | boolean | null | undefined
+type QueryParamScalar = string | number | boolean | null | undefined
+type QueryParamValue = QueryParamScalar | readonly QueryParamScalar[]
 
-const DEFAULT_LOCAL_API_PORT = "3000"
+const DEFAULT_LOCAL_API_PORT = "5000"
 
 /**
  * ✅ Public-display friendly participant name picker (frontend mirror of displayController behavior).
@@ -202,7 +203,7 @@ type RequestOptions = {
     auth?: RequestAuthMode
     /**
      * Optional query params. Automatically merged with existing query string.
-     * Example: { since: "2026-02-27T00:00:00.000Z" }
+     * Supports scalar values and repeated array values.
      */
     params?: Record<string, QueryParamValue>
     /**
@@ -222,6 +223,17 @@ type RequestOptions = {
     throwOnError?: boolean
     signal?: AbortSignal
 }
+
+type RequestOptionsWithoutMethodBody = Omit<RequestOptions, "method" | "body">
+
+const REQUEST_OPTION_KEYS = new Set([
+    "headers",
+    "auth",
+    "params",
+    "credentials",
+    "throwOnError",
+    "signal",
+])
 
 function isAbsoluteUrl(input: string) {
     const s = String(input ?? "").trim()
@@ -301,6 +313,17 @@ const PUBLIC_AUTH_PATHS = new Set(
         API_PATHS.auth.login,
         API_PATHS.auth.forgotPassword,
         API_PATHS.auth.resetPassword,
+    ]
+        .map((path) => toApiPath(path))
+        .filter(Boolean)
+)
+
+const PUBLIC_PUT_UPLOAD_PATHS = new Set(
+    [
+        API_PATHS.auth.meAvatar,
+        API_PATHS.settings.avatar,
+        API_PATHS.self.meAvatar,
+        API_PATHS.self.usersMeAvatar,
     ]
         .map((path) => toApiPath(path))
         .filter(Boolean)
@@ -492,11 +515,23 @@ function isStaffOnlyApiPath(path: string) {
     )
 }
 
+function isPublicUploadPutPath(path: string, method: HttpMethod) {
+    if (method !== "PUT") return false
+    const comparablePath = getComparableApiPath(path)
+    if (!comparablePath) return false
+    return PUBLIC_PUT_UPLOAD_PATHS.has(comparablePath)
+}
+
 function resolveRequestAuthMode(
     path: string,
+    method: HttpMethod,
     auth: RequestAuthMode | undefined
 ): RequestAuthMode {
     if (auth !== undefined) return auth
+
+    if (isPublicUploadPutPath(path, method)) {
+        return false
+    }
 
     const comparablePath = getComparableApiPath(path)
     if (PUBLIC_AUTH_PATHS.has(comparablePath)) {
@@ -640,12 +675,27 @@ function ensureAuthorizationFromSessionToken(headers: Record<string, string>) {
     headers.Authorization = `Bearer ${token}`
 }
 
+function appendQueryParam(qs: URLSearchParams, key: string, value: QueryParamValue) {
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            if (item === undefined || item === null) continue
+            qs.append(key, String(item))
+        }
+        return
+    }
+
+    if (value === undefined || value === null) return
+    qs.set(key, String(value))
+}
+
 function withQuery(path: string, params?: Record<string, QueryParamValue>) {
     if (!params) return path
 
-    const entries = Object.entries(params).filter(
-        ([, v]) => v !== undefined && v !== null
-    )
+    const entries = Object.entries(params).filter(([, v]) => {
+        if (Array.isArray(v)) return v.some((item) => item !== undefined && item !== null)
+        return v !== undefined && v !== null
+    })
+
     if (!entries.length) return path
 
     const [beforeHash, hash] = path.split("#", 2)
@@ -653,10 +703,12 @@ function withQuery(path: string, params?: Record<string, QueryParamValue>) {
 
     const qs = new URLSearchParams(existingQs || "")
     for (const [k, v] of entries) {
-        qs.set(k, String(v))
+        qs.delete(k)
+        appendQueryParam(qs, k, v)
     }
 
-    const next = `${base}?${qs.toString()}`
+    const queryString = qs.toString()
+    const next = queryString ? `${base}?${queryString}` : base
     return hash ? `${next}#${hash}` : next
 }
 
@@ -945,7 +997,7 @@ export async function apiRequest<T>(
         ...headers,
     }
 
-    const resolvedAuth = resolveRequestAuthMode(path, auth)
+    const resolvedAuth = resolveRequestAuthMode(path, method, auth)
 
     // Respect caller-provided Authorization header.
     if (!hasHeader(finalHeaders, "Authorization")) {
@@ -1136,6 +1188,41 @@ export async function apiRequest<T>(
     return data as T
 }
 
+function isRequestOptionsLike(
+    value: unknown
+): value is RequestOptionsWithoutMethodBody {
+    if (!isPlainRecord(value)) return false
+
+    const keys = Object.keys(value)
+    if (keys.length === 0) return true
+
+    return keys.every((key) => REQUEST_OPTION_KEYS.has(key))
+}
+
+function resolveDeleteArgs(
+    bodyOrOpts?: unknown,
+    opts?: RequestOptionsWithoutMethodBody
+) {
+    if (opts) {
+        return {
+            body: bodyOrOpts,
+            opts,
+        }
+    }
+
+    if (isRequestOptionsLike(bodyOrOpts)) {
+        return {
+            body: undefined,
+            opts: bodyOrOpts,
+        }
+    }
+
+    return {
+        body: bodyOrOpts,
+        opts: undefined,
+    }
+}
+
 export const api = {
     get: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
         apiRequest<T>(path, { ...opts, method: "GET" }),
@@ -1158,11 +1245,23 @@ export const api = {
         opts?: Omit<RequestOptions, "method" | "body">
     ) => apiRequest<T>(path, { ...opts, method: "PATCH", body }),
 
-    delete: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<T>(path, { ...opts, method: "DELETE" }),
+    delete: <T>(
+        path: string,
+        bodyOrOpts?: unknown,
+        maybeOpts?: Omit<RequestOptions, "method" | "body">
+    ) => {
+        const { body, opts } = resolveDeleteArgs(bodyOrOpts, maybeOpts)
+        return apiRequest<T>(path, { ...opts, method: "DELETE", body })
+    },
 
-    del: <T>(path: string, opts?: Omit<RequestOptions, "method" | "body">) =>
-        apiRequest<T>(path, { ...opts, method: "DELETE" }),
+    del: <T>(
+        path: string,
+        bodyOrOpts?: unknown,
+        maybeOpts?: Omit<RequestOptions, "method" | "body">
+    ) => {
+        const { body, opts } = resolveDeleteArgs(bodyOrOpts, maybeOpts)
+        return apiRequest<T>(path, { ...opts, method: "DELETE", body })
+    },
 
     /**
      * ✅ Convenience methods:
@@ -1203,9 +1302,14 @@ export const api = {
 
     deleteData: <T>(
         path: string,
-        opts?: Omit<RequestOptions, "method" | "body">
-    ) =>
-        apiRequest<ApiData<T>>(path, { ...opts, method: "DELETE" }).then(
-            (res) => unwrapApiData<T>(res)
-        ),
+        bodyOrOpts?: unknown,
+        maybeOpts?: Omit<RequestOptions, "method" | "body">
+    ) => {
+        const { body, opts } = resolveDeleteArgs(bodyOrOpts, maybeOpts)
+        return apiRequest<ApiData<T>>(path, {
+            ...opts,
+            method: "DELETE",
+            body,
+        }).then((res) => unwrapApiData<T>(res))
+    },
 }
