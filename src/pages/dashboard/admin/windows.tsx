@@ -24,16 +24,35 @@ import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table"
 
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+    Dialog,
+    DialogContent,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 
 import {
     DropdownMenu,
@@ -55,7 +74,13 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -90,6 +115,9 @@ type ServiceWindow = {
     department?: string | null
     departmentId?: string | null
     departmentIds?: string[]
+    primaryDepartmentId?: string | null
+    primaryDepartmentName?: string | null
+    departmentNames?: string[]
     [key: string]: unknown
 }
 
@@ -106,6 +134,7 @@ type StaffUser = {
     assignedDepartments?: string[] | null
     departmentIds?: string[] | null
     transactionManager?: string | null
+    assignedTransactionManager?: string | null
     [key: string]: unknown
 }
 
@@ -136,6 +165,25 @@ function normalizeString(value: unknown) {
 function normalizeOptionalString(value: unknown): string | null {
     const clean = normalizeString(value)
     return clean || null
+}
+
+function normalizeId(value: unknown): string | null {
+    if (typeof value === "string" || typeof value === "number") {
+        return normalizeOptionalString(value)
+    }
+
+    if (isRecord(value)) {
+        return normalizeOptionalString(
+            value._id ??
+                value.id ??
+                value.departmentId ??
+                value.windowId ??
+                value.serviceWindowId ??
+                value.value
+        )
+    }
+
+    return null
 }
 
 function normalizeBoolean(value: unknown, fallback?: boolean) {
@@ -175,16 +223,8 @@ function toIdArray(value: unknown): string[] {
     const ids: string[] = []
 
     for (const item of value) {
-        if (typeof item === "string" || typeof item === "number") {
-            const id = normalizeString(item)
-            if (id) ids.push(id)
-            continue
-        }
-
-        if (isRecord(item)) {
-            const id = normalizeString(item._id ?? item.id ?? item.departmentId ?? item.value)
-            if (id) ids.push(id)
-        }
+        const id = normalizeId(item)
+        if (id) ids.push(id)
     }
 
     return uniqueStringIds(ids)
@@ -220,13 +260,17 @@ function normalizeDepartment(rawValue: unknown): Department {
     return {
         ...raw,
         _id,
-        ...(normalizeOptionalString(raw.id) ? { id: normalizeString(raw.id) } : {}),
+        ...(normalizeOptionalString(raw.id)
+            ? { id: normalizeString(raw.id) }
+            : {}),
         name,
         ...(code ? { code } : {}),
         enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
         transactionManager:
             normalizeOptionalString(
-                raw.transactionManager ?? raw.managerKey ?? raw.transaction_manager
+                raw.transactionManager ??
+                    raw.managerKey ??
+                    raw.transaction_manager
             ) ?? DEFAULT_MANAGER,
     }
 }
@@ -238,8 +282,9 @@ function normalizeWindow(rawValue: unknown): ServiceWindow {
     const departmentIds = uniqueStringIds([
         ...toIdArray(raw.departmentIds),
         ...toIdArray(raw.departments),
-        normalizeOptionalString(raw.departmentId),
-        normalizeOptionalString(raw.department),
+        normalizeId(raw.departmentId),
+        normalizeId(raw.department),
+        normalizeId(raw.primaryDepartmentId),
     ])
 
     const firstDepartmentId = departmentIds[0] ?? null
@@ -247,15 +292,27 @@ function normalizeWindow(rawValue: unknown): ServiceWindow {
     return {
         ...raw,
         _id,
-        ...(normalizeOptionalString(raw.id) ? { id: normalizeString(raw.id) } : {}),
+        ...(normalizeOptionalString(raw.id)
+            ? { id: normalizeString(raw.id) }
+            : {}),
         name:
-            normalizeString(raw.name ?? raw.windowName ?? raw.label) ||
-            `Window ${normalizeNumber(raw.number ?? raw.windowNumber, 1)}`,
+            normalizeString(
+                raw.name ?? raw.windowName ?? raw.label ?? raw.displayName
+            ) || `Window ${normalizeNumber(raw.number ?? raw.windowNumber, 1)}`,
         number: normalizeNumber(raw.number ?? raw.windowNumber, 1),
         enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
         departmentIds,
         departmentId: firstDepartmentId,
         department: firstDepartmentId,
+        primaryDepartmentId:
+            normalizeId(raw.primaryDepartmentId) ?? firstDepartmentId,
+        primaryDepartmentName:
+            normalizeOptionalString(raw.primaryDepartmentName) ?? undefined,
+        departmentNames: Array.isArray(raw.departmentNames)
+            ? raw.departmentNames
+                  .map((item) => normalizeString(item))
+                  .filter(Boolean)
+            : undefined,
     }
 }
 
@@ -265,7 +322,8 @@ function normalizeStaff(rawValue: unknown): StaffUser {
     const assignedDepartments = uniqueStringIds([
         ...toIdArray(raw.assignedDepartments),
         ...toIdArray(raw.departmentIds),
-        normalizeOptionalString(raw.assignedDepartment),
+        normalizeId(raw.assignedDepartment),
+        normalizeId(raw.departmentId),
     ])
 
     const fallbackName =
@@ -278,6 +336,17 @@ function normalizeStaff(rawValue: unknown): StaffUser {
             .join(" ")
             .trim() || null
 
+    const assignedWindow =
+        normalizeId(raw.assignedWindow) ??
+        normalizeId(raw.windowId) ??
+        normalizeId(raw.serviceWindowId)
+
+    const assignedDepartment =
+        normalizeId(raw.assignedDepartment) ??
+        normalizeId(raw.departmentId) ??
+        assignedDepartments[0] ??
+        null
+
     return {
         ...raw,
         _id: normalizeOptionalString(raw._id ?? raw.id) ?? undefined,
@@ -287,13 +356,18 @@ function normalizeStaff(rawValue: unknown): StaffUser {
         enabled: normalizeBoolean(raw.enabled, true),
         name: normalizeOptionalString(raw.name) ?? fallbackName,
         email: normalizeOptionalString(raw.email),
-        assignedWindow: normalizeOptionalString(
-            raw.assignedWindow ?? raw.windowId ?? raw.serviceWindowId
-        ),
-        assignedDepartment: assignedDepartments[0] ?? null,
+        assignedWindow,
+        assignedDepartment,
         assignedDepartments,
         departmentIds: assignedDepartments,
-        transactionManager: normalizeOptionalString(raw.transactionManager),
+        transactionManager:
+            normalizeOptionalString(
+                raw.assignedTransactionManager ?? raw.transactionManager
+            ) ?? null,
+        assignedTransactionManager:
+            normalizeOptionalString(
+                raw.assignedTransactionManager ?? raw.transactionManager
+            ) ?? null,
     }
 }
 
@@ -329,6 +403,7 @@ function normalizeManagerKey(value: unknown, fallback = DEFAULT_MANAGER) {
 function buildStaffUpdatePayload(input: UpdateStaffInput) {
     const departmentIds = uniqueStringIds(input.departmentIds)
     const firstDepartmentId = departmentIds[0] ?? null
+    const normalizedWindowId = normalizeId(input.windowId)
     const normalizedManager = input.transactionManager
         ? normalizeManagerKey(input.transactionManager, DEFAULT_MANAGER)
         : undefined
@@ -338,10 +413,15 @@ function buildStaffUpdatePayload(input: UpdateStaffInput) {
         assignedDepartments: departmentIds,
         assignedDepartment: firstDepartmentId,
         departmentId: firstDepartmentId,
-        windowId: input.windowId,
-        assignedWindow: input.windowId,
-        serviceWindowId: input.windowId,
-        ...(normalizedManager ? { transactionManager: normalizedManager } : {}),
+        windowId: normalizedWindowId,
+        assignedWindow: normalizedWindowId,
+        serviceWindowId: normalizedWindowId,
+        ...(normalizedManager
+            ? {
+                  transactionManager: normalizedManager,
+                  assignedTransactionManager: normalizedManager,
+              }
+            : {}),
     }
 }
 
@@ -424,10 +504,14 @@ const adminApi = {
         return runWithEndpointFallback([
             () => api.patchData<unknown>(API_PATHS.serviceWindows.byId(id), body),
             () => api.putData<unknown>(API_PATHS.serviceWindows.byId(id), body),
-            () => api.patchData<unknown>(buildAbsoluteApiUrl(`/windows/${id}`), body),
-            () => api.putData<unknown>(buildAbsoluteApiUrl(`/windows/${id}`), body),
-            () => api.patchData<unknown>(buildAbsoluteApiUrl(`/window/${id}`), body),
-            () => api.putData<unknown>(buildAbsoluteApiUrl(`/window/${id}`), body),
+            () =>
+                api.patchData<unknown>(buildAbsoluteApiUrl(`/windows/${id}`), body),
+            () =>
+                api.putData<unknown>(buildAbsoluteApiUrl(`/windows/${id}`), body),
+            () =>
+                api.patchData<unknown>(buildAbsoluteApiUrl(`/window/${id}`), body),
+            () =>
+                api.putData<unknown>(buildAbsoluteApiUrl(`/window/${id}`), body),
         ])
     },
 
@@ -458,10 +542,36 @@ const adminApi = {
         const body = buildStaffUpdatePayload(payload)
 
         return runWithEndpointFallback([
+            () => api.patchData<unknown>(API_PATHS.users.staffById(id), body),
+            () => api.putData<unknown>(API_PATHS.users.staffById(id), body),
+            () => api.patchData<unknown>(API_PATHS.admin.staffById(id), body),
+            () => api.putData<unknown>(API_PATHS.admin.staffById(id), body),
+            () =>
+                api.patchData<unknown>(
+                    buildAbsoluteApiUrl(`/users/staff/${id}`),
+                    body
+                ),
+            () =>
+                api.putData<unknown>(
+                    buildAbsoluteApiUrl(`/users/staff/${id}`),
+                    body
+                ),
+            () =>
+                api.patchData<unknown>(
+                    buildAbsoluteApiUrl(`/admin/staff/${id}`),
+                    body
+                ),
+            () =>
+                api.putData<unknown>(
+                    buildAbsoluteApiUrl(`/admin/staff/${id}`),
+                    body
+                ),
             () => api.patchData<unknown>(API_PATHS.users.byId(id), body),
             () => api.putData<unknown>(API_PATHS.users.byId(id), body),
-            () => api.patchData<unknown>(buildAbsoluteApiUrl(`/users/${id}`), body),
-            () => api.putData<unknown>(buildAbsoluteApiUrl(`/users/${id}`), body),
+            () =>
+                api.patchData<unknown>(buildAbsoluteApiUrl(`/users/${id}`), body),
+            () =>
+                api.putData<unknown>(buildAbsoluteApiUrl(`/users/${id}`), body),
         ])
     },
 }
@@ -472,7 +582,11 @@ function isEnabledFlag(value: boolean | undefined) {
 
 function statusBadge(enabled: boolean | undefined) {
     const on = isEnabledFlag(enabled)
-    return <Badge variant={on ? "default" : "secondary"}>{on ? "Enabled" : "Disabled"}</Badge>
+    return (
+        <Badge variant={on ? "default" : "secondary"}>
+            {on ? "Enabled" : "Disabled"}
+        </Badge>
+    )
 }
 
 function safeInt(v: string) {
@@ -486,7 +600,9 @@ function getStaffId(s: StaffUser) {
 
 function getStaffDepartmentIds(staff: StaffUser): string[] {
     return uniqueStringIds([
-        ...(Array.isArray(staff.assignedDepartments) ? staff.assignedDepartments : []),
+        ...(Array.isArray(staff.assignedDepartments)
+            ? staff.assignedDepartments
+            : []),
         staff.assignedDepartment ?? "",
         ...(Array.isArray(staff.departmentIds) ? staff.departmentIds : []),
     ])
@@ -498,6 +614,7 @@ function getWindowDepartmentIds(win?: ServiceWindow | null): string[] {
         ...(Array.isArray(win.departmentIds) ? win.departmentIds : []),
         win.department ?? "",
         win.departmentId ?? "",
+        win.primaryDepartmentId ?? "",
     ])
 }
 
@@ -505,7 +622,10 @@ function departmentLabelList(ids: string[], deptById: Map<string, Department>) {
     return ids.map((id) => deptById.get(id)?.name || id)
 }
 
-function getDepartmentManagerById(departmentId: string, deptById: Map<string, Department>) {
+function getDepartmentManagerById(
+    departmentId: string,
+    deptById: Map<string, Department>
+) {
     const dep = deptById.get(departmentId)
     const manager = normalizeManagerKey(dep?.transactionManager || "", "")
     return manager || null
@@ -530,13 +650,17 @@ function DepartmentMultiSelect({
 
     const selectedNames = React.useMemo(() => {
         const selectedSet = new Set(value)
-        return options.filter((d) => selectedSet.has(d._id)).map((d) => d.name)
+        return options
+            .filter((d) => selectedSet.has(d._id))
+            .map((d) => d.name)
     }, [value, options])
 
     const buttonText = React.useMemo(() => {
         if (selectedNames.length === 0) return placeholder
         if (selectedNames.length <= 2) return selectedNames.join(", ")
-        return `${selectedNames.slice(0, 2).join(", ")} +${selectedNames.length - 2}`
+        return `${selectedNames.slice(0, 2).join(", ")} +${
+            selectedNames.length - 2
+        }`
     }, [selectedNames, placeholder])
 
     function toggle(id: string) {
@@ -566,7 +690,10 @@ function DepartmentMultiSelect({
                 </Button>
             </PopoverTrigger>
 
-            <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+            <PopoverContent
+                className="w-(--radix-popover-trigger-width) p-0"
+                align="start"
+            >
                 <Command>
                     <CommandInput placeholder="Search department..." />
                     <CommandList>
@@ -583,7 +710,9 @@ function DepartmentMultiSelect({
                                         <Check
                                             className={cn(
                                                 "mr-2 h-4 w-4",
-                                                checked ? "opacity-100" : "opacity-0"
+                                                checked
+                                                    ? "opacity-100"
+                                                    : "opacity-0"
                                             )}
                                         />
                                         <span className="truncate">{d.name}</span>
@@ -623,7 +752,9 @@ export default function AdminWindowsPage() {
     const [staffUsers, setStaffUsers] = React.useState<StaffUser[]>([])
 
     const [winQ, setWinQ] = React.useState("")
-    const [winStatusTab, setWinStatusTab] = React.useState<"all" | "enabled" | "disabled">("all")
+    const [winStatusTab, setWinStatusTab] = React.useState<
+        "all" | "enabled" | "disabled"
+    >("all")
     const [winDeptFilter, setWinDeptFilter] = React.useState<string>("all")
 
     const [createWinOpen, setCreateWinOpen] = React.useState(false)
@@ -631,14 +762,21 @@ export default function AdminWindowsPage() {
     const [deleteWinOpen, setDeleteWinOpen] = React.useState(false)
     const [assignStaffOpen, setAssignStaffOpen] = React.useState(false)
 
-    const [selectedWin, setSelectedWin] = React.useState<ServiceWindow | null>(null)
-    const [assignTargetWin, setAssignTargetWin] = React.useState<ServiceWindow | null>(null)
+    const [selectedWin, setSelectedWin] = React.useState<ServiceWindow | null>(
+        null
+    )
+    const [assignTargetWin, setAssignTargetWin] =
+        React.useState<ServiceWindow | null>(null)
 
-    const [cWinDepartmentIds, setCWinDepartmentIds] = React.useState<string[]>([])
+    const [cWinDepartmentIds, setCWinDepartmentIds] = React.useState<string[]>(
+        []
+    )
     const [cWinName, setCWinName] = React.useState("")
     const [cWinNumber, setCWinNumber] = React.useState<number>(1)
 
-    const [eWinDepartmentIds, setEWinDepartmentIds] = React.useState<string[]>([])
+    const [eWinDepartmentIds, setEWinDepartmentIds] = React.useState<string[]>(
+        []
+    )
     const [eWinName, setEWinName] = React.useState("")
     const [eWinNumber, setEWinNumber] = React.useState<number>(1)
     const [eWinEnabled, setEWinEnabled] = React.useState(true)
@@ -679,7 +817,12 @@ export default function AdminWindowsPage() {
 
     const assignableStaff = React.useMemo(() => {
         return (staffUsers ?? [])
-            .filter((s) => String(s.role ?? "").toUpperCase() === "STAFF" && s.active && getStaffId(s))
+            .filter(
+                (s) =>
+                    String(s.role ?? "").toUpperCase() === "STAFF" &&
+                    s.active &&
+                    getStaffId(s)
+            )
             .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
     }, [staffUsers])
 
@@ -721,17 +864,26 @@ export default function AdminWindowsPage() {
         }
 
         if (winResult.status === "rejected") {
-            const msg = winResult.reason instanceof Error ? winResult.reason.message : "Failed to load windows."
+            const msg =
+                winResult.reason instanceof Error
+                    ? winResult.reason.message
+                    : "Failed to load windows."
             toast.error(msg)
         }
 
         if (deptResult.status === "rejected") {
-            const msg = deptResult.reason instanceof Error ? deptResult.reason.message : "Failed to load departments."
+            const msg =
+                deptResult.reason instanceof Error
+                    ? deptResult.reason.message
+                    : "Failed to load departments."
             toast.error(msg)
         }
 
         if (staffResult.status === "rejected") {
-            const msg = staffResult.reason instanceof Error ? staffResult.reason.message : "Failed to load staff accounts."
+            const msg =
+                staffResult.reason instanceof Error
+                    ? staffResult.reason.message
+                    : "Failed to load staff accounts."
             toast.error(msg)
         }
 
@@ -758,11 +910,17 @@ export default function AdminWindowsPage() {
                 if (winStatusTab === "disabled" && enabled) return false
 
                 const departmentIds = getWindowDepartmentIds(w)
-                if (winDeptFilter !== "all" && !departmentIds.includes(winDeptFilter)) return false
+                if (
+                    winDeptFilter !== "all" &&
+                    !departmentIds.includes(winDeptFilter)
+                )
+                    return false
 
                 if (!q) return true
 
-                const deptNames = departmentLabelList(departmentIds, deptById).join(" ")
+                const deptNames = departmentLabelList(departmentIds, deptById).join(
+                    " "
+                )
                 const hay = `${w.name ?? ""} ${w.number ?? ""} ${deptNames}`.toLowerCase()
                 return hay.includes(q)
             })
@@ -771,8 +929,14 @@ export default function AdminWindowsPage() {
                 const be = isEnabledFlag(b.enabled)
                 if (ae !== be) return ae ? -1 : 1
 
-                const deptA = departmentLabelList(getWindowDepartmentIds(a), deptById).join(" | ")
-                const deptB = departmentLabelList(getWindowDepartmentIds(b), deptById).join(" | ")
+                const deptA = departmentLabelList(
+                    getWindowDepartmentIds(a),
+                    deptById
+                ).join(" | ")
+                const deptB = departmentLabelList(
+                    getWindowDepartmentIds(b),
+                    deptById
+                ).join(" | ")
                 if (deptA !== deptB) return deptA.localeCompare(deptB)
 
                 return (a.number ?? 0) - (b.number ?? 0)
@@ -804,7 +968,8 @@ export default function AdminWindowsPage() {
         const name = cWinName.trim()
         const number = Number(cWinNumber)
 
-        if (departmentIds.length === 0) return toast.error("Select at least one department.")
+        if (departmentIds.length === 0)
+            return toast.error("Select at least one department.")
         if (!name) return toast.error("Window name is required.")
         if (!Number.isFinite(number) || number <= 0) {
             return toast.error("Window number must be a positive integer.")
@@ -818,7 +983,8 @@ export default function AdminWindowsPage() {
             resetCreateWinForm()
             await fetchAll()
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to create window."
+            const msg =
+                e instanceof Error ? e.message : "Failed to create window."
             toast.error(msg)
         } finally {
             setSaving(false)
@@ -834,7 +1000,8 @@ export default function AdminWindowsPage() {
         const name = eWinName.trim()
         const number = Number(eWinNumber)
 
-        if (departmentIds.length === 0) return toast.error("Select at least one department.")
+        if (departmentIds.length === 0)
+            return toast.error("Select at least one department.")
         if (!name) return toast.error("Window name is required.")
         if (!Number.isFinite(number) || number <= 0) {
             return toast.error("Window number must be a positive integer.")
@@ -853,7 +1020,8 @@ export default function AdminWindowsPage() {
             setSelectedWin(null)
             await fetchAll()
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to update window."
+            const msg =
+                e instanceof Error ? e.message : "Failed to update window."
             toast.error(msg)
         } finally {
             setSaving(false)
@@ -865,7 +1033,9 @@ export default function AdminWindowsPage() {
 
         const assignedStaff = staffAssignedByWindow.get(selectedWin._id) ?? []
         if (assignedStaff.length > 0) {
-            return toast.error("Unassign the staff member from this window before deleting it.")
+            return toast.error(
+                "Unassign the staff member from this window before deleting it."
+            )
         }
 
         setSaving(true)
@@ -876,7 +1046,8 @@ export default function AdminWindowsPage() {
             setSelectedWin(null)
             await fetchAll()
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to delete window."
+            const msg =
+                e instanceof Error ? e.message : "Failed to delete window."
             toast.error(msg)
         } finally {
             setSaving(false)
@@ -886,7 +1057,8 @@ export default function AdminWindowsPage() {
     async function handleAssignStaffToWindow() {
         if (!assignTargetWin) return toast.error("Please select a window.")
         if (!assignTargetWin._id) return toast.error("Invalid window id.")
-        if (!aStaffId || aStaffId === "none") return toast.error("Please select a staff account.")
+        if (!aStaffId || aStaffId === "none")
+            return toast.error("Please select a staff account.")
 
         const picked = assignableStaff.find((s) => getStaffId(s) === aStaffId)
         if (!picked) return toast.error("Selected staff was not found.")
@@ -896,10 +1068,12 @@ export default function AdminWindowsPage() {
             return toast.error("Window must have at least one department.")
         }
 
-        const currentAssignments = (staffAssignedByWindow.get(assignTargetWin._id) ?? []).filter((s) =>
-            getStaffId(s)
+        const currentAssignments = (
+            staffAssignedByWindow.get(assignTargetWin._id) ?? []
+        ).filter((s) => getStaffId(s))
+        const otherAssignments = currentAssignments.filter(
+            (s) => getStaffId(s) !== aStaffId
         )
-        const otherAssignments = currentAssignments.filter((s) => getStaffId(s) !== aStaffId)
 
         const windowManagers = uniqueStringIds(
             windowDepartmentIds
@@ -908,13 +1082,18 @@ export default function AdminWindowsPage() {
         )
 
         if (windowManagers.length > 1) {
-            return toast.error("Window departments are inconsistent (different transaction managers).")
+            return toast.error(
+                "Window departments are inconsistent (different transaction managers)."
+            )
         }
 
         const targetManager = windowManagers[0] ?? null
         const pickedDepartmentIds = getStaffDepartmentIds(picked)
         const compatiblePickedDepartmentIds = targetManager
-            ? pickedDepartmentIds.filter((depId) => getDepartmentManagerById(depId, deptById) === targetManager)
+            ? pickedDepartmentIds.filter(
+                  (depId) =>
+                      getDepartmentManagerById(depId, deptById) === targetManager
+              )
             : pickedDepartmentIds
 
         const nextDepartmentIds = uniqueStringIds([
@@ -923,7 +1102,9 @@ export default function AdminWindowsPage() {
         ])
 
         if (nextDepartmentIds.length === 0) {
-            return toast.error("Unable to resolve department assignment for selected staff.")
+            return toast.error(
+                "Unable to resolve department assignment for selected staff."
+            )
         }
 
         setSaving(true)
@@ -943,13 +1124,18 @@ export default function AdminWindowsPage() {
                 await adminApi.updateStaff(assignedId, {
                     departmentIds: getStaffDepartmentIds(assigned),
                     windowId: null,
-                    ...(targetManager ? { transactionManager: targetManager } : {}),
+                    ...(targetManager
+                        ? { transactionManager: targetManager }
+                        : {}),
                 })
             }
 
             const movedText =
                 movedFromWindowId && movedFromWindowId !== assignTargetWin._id
-                    ? ` Moved from ${windowById.get(movedFromWindowId)?.name ?? "another window"}.`
+                    ? ` Moved from ${
+                          windowById.get(movedFromWindowId)?.name ??
+                          "another window"
+                      }.`
                     : ""
 
             const replacedNames = otherAssignments
@@ -957,7 +1143,9 @@ export default function AdminWindowsPage() {
                 .filter(Boolean)
                 .join(", ")
 
-            const replacedText = replacedNames ? ` Replaced ${replacedNames}.` : ""
+            const replacedText = replacedNames
+                ? ` Replaced ${replacedNames}.`
+                : ""
 
             toast.success(
                 `Staff assigned to ${assignTargetWin.name} (#${assignTargetWin.number}).${movedText}${replacedText}`
@@ -966,7 +1154,8 @@ export default function AdminWindowsPage() {
             setAStaffId("none")
             await fetchAll()
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to assign staff."
+            const msg =
+                e instanceof Error ? e.message : "Failed to assign staff."
             toast.error(msg)
         } finally {
             setSaving(false)
@@ -984,7 +1173,9 @@ export default function AdminWindowsPage() {
         try {
             const existingDepartments = getStaffDepartmentIds(staff)
             const nextDepartmentIds =
-                existingDepartments.length > 0 ? existingDepartments : windowDepartmentIds
+                existingDepartments.length > 0
+                    ? existingDepartments
+                    : windowDepartmentIds
 
             await adminApi.updateStaff(staffId, {
                 departmentIds: nextDepartmentIds,
@@ -995,7 +1186,8 @@ export default function AdminWindowsPage() {
             )
             await fetchAll()
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to unassign staff."
+            const msg =
+                e instanceof Error ? e.message : "Failed to unassign staff."
             toast.error(msg)
         } finally {
             setSaving(false)
@@ -1004,7 +1196,9 @@ export default function AdminWindowsPage() {
 
     const stats = React.useMemo(() => {
         const totalWindows = windows.length
-        const enabledWindows = windows.filter((w) => isEnabledFlag(w.enabled)).length
+        const enabledWindows = windows.filter((w) =>
+            isEnabledFlag(w.enabled)
+        ).length
         const withAssignedStaff = windows.filter((w) =>
             staffAssignedByWindow.get(w._id)?.[0] ? true : false
         ).length
@@ -1036,8 +1230,9 @@ export default function AdminWindowsPage() {
                             <div className="min-w-0">
                                 <CardTitle>Window Management</CardTitle>
                                 <CardDescription>
-                                    Manage window records, link multiple departments, and keep one staff
-                                    assignment per window.
+                                    Manage window records, link multiple
+                                    departments, and keep one staff assignment per
+                                    window.
                                 </CardDescription>
                             </div>
 
@@ -1070,15 +1265,25 @@ export default function AdminWindowsPage() {
 
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <Badge variant="secondary">Total: {stats.total}</Badge>
-                                <Badge variant="default">Enabled: {stats.enabled}</Badge>
-                                <Badge variant="secondary">Disabled: {stats.disabled}</Badge>
-                                <Badge variant="secondary">With staff: {stats.withAssignedStaff}</Badge>
+                                <Badge variant="secondary">
+                                    Total: {stats.total}
+                                </Badge>
+                                <Badge variant="default">
+                                    Enabled: {stats.enabled}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    Disabled: {stats.disabled}
+                                </Badge>
+                                <Badge variant="secondary">
+                                    With staff: {stats.withAssignedStaff}
+                                </Badge>
                             </div>
 
                             <div className="flex items-center gap-2">
                                 <LayoutGrid className="h-4 w-4 text-muted-foreground" />
-                                <span className="text-sm text-muted-foreground">Windows</span>
+                                <span className="text-sm text-muted-foreground">
+                                    Windows
+                                </span>
                             </div>
                         </div>
                     </CardHeader>
@@ -1086,8 +1291,9 @@ export default function AdminWindowsPage() {
                     <CardContent className="min-w-0">
                         {!hasDepartmentOptions && !loading ? (
                             <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                                No enabled departments were loaded. Window create and edit actions stay
-                                disabled until the department endpoint responds.
+                                No enabled departments were loaded. Window create
+                                and edit actions stay disabled until the
+                                department endpoint responds.
                             </div>
                         ) : null}
 
@@ -1100,12 +1306,17 @@ export default function AdminWindowsPage() {
                                     className="w-full min-w-0 md:w-80"
                                 />
 
-                                <Select value={winDeptFilter} onValueChange={setWinDeptFilter}>
+                                <Select
+                                    value={winDeptFilter}
+                                    onValueChange={setWinDeptFilter}
+                                >
                                     <SelectTrigger className="w-full min-w-0 md:w-80">
                                         <SelectValue placeholder="Filter by department" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="all">All departments</SelectItem>
+                                        <SelectItem value="all">
+                                            All departments
+                                        </SelectItem>
                                         {departments.map((d) => (
                                             <SelectItem key={d._id} value={d._id}>
                                                 {d.name}
@@ -1117,13 +1328,21 @@ export default function AdminWindowsPage() {
 
                             <Tabs
                                 value={winStatusTab}
-                                onValueChange={(v) => setWinStatusTab(v as "all" | "enabled" | "disabled")}
+                                onValueChange={(v) =>
+                                    setWinStatusTab(
+                                        v as "all" | "enabled" | "disabled"
+                                    )
+                                }
                                 className="w-full md:w-auto"
                             >
                                 <TabsList className="grid w-full grid-cols-3 md:w-80">
                                     <TabsTrigger value="all">All</TabsTrigger>
-                                    <TabsTrigger value="enabled">Enabled</TabsTrigger>
-                                    <TabsTrigger value="disabled">Disabled</TabsTrigger>
+                                    <TabsTrigger value="enabled">
+                                        Enabled
+                                    </TabsTrigger>
+                                    <TabsTrigger value="disabled">
+                                        Disabled
+                                    </TabsTrigger>
                                 </TabsList>
                             </Tabs>
                         </div>
@@ -1148,27 +1367,48 @@ export default function AdminWindowsPage() {
                                                 <TableHead className="hidden md:table-cell">
                                                     Staff assigned
                                                 </TableHead>
-                                                <TableHead className="text-right">Status</TableHead>
+                                                <TableHead className="text-right">
+                                                    Status
+                                                </TableHead>
                                                 <TableHead className="w-14" />
                                             </TableRow>
                                         </TableHeader>
 
                                         <TableBody>
                                             {winRows.map((w) => {
-                                                const windowDepartmentIds = getWindowDepartmentIds(w)
-                                                const deptNames = departmentLabelList(windowDepartmentIds, deptById)
-                                                const preview = deptNames.slice(0, 2).join(", ")
+                                                const windowDepartmentIds =
+                                                    getWindowDepartmentIds(w)
+                                                const deptNames = departmentLabelList(
+                                                    windowDepartmentIds,
+                                                    deptById
+                                                )
+                                                const preview = deptNames
+                                                    .slice(0, 2)
+                                                    .join(", ")
                                                 const deptText =
                                                     deptNames.length > 2
-                                                        ? `${preview} +${deptNames.length - 2}`
+                                                        ? `${preview} +${
+                                                              deptNames.length - 2
+                                                          }`
                                                         : preview || "—"
 
-                                                const assignedStaff = staffAssignedByWindow.get(w._id) ?? []
-                                                const assignedPrimary = assignedStaff[0] ?? null
-                                                const extraAssignedCount = Math.max(0, assignedStaff.length - 1)
-                                                const assignedDisplay = assignedPrimary
-                                                    ? `${assignedPrimary.name || assignedPrimary.email}`
-                                                    : "—"
+                                                const assignedStaff =
+                                                    staffAssignedByWindow.get(
+                                                        w._id
+                                                    ) ?? []
+                                                const assignedPrimary =
+                                                    assignedStaff[0] ?? null
+                                                const extraAssignedCount = Math.max(
+                                                    0,
+                                                    assignedStaff.length - 1
+                                                )
+                                                const assignedDisplay =
+                                                    assignedPrimary
+                                                        ? `${
+                                                              assignedPrimary.name ||
+                                                              assignedPrimary.email
+                                                          }`
+                                                        : "—"
 
                                                 return (
                                                     <TableRow key={w._id}>
@@ -1182,13 +1422,17 @@ export default function AdminWindowsPage() {
                                                                 </span>
                                                                 <span
                                                                     className="truncate text-xs text-muted-foreground md:hidden"
-                                                                    title={deptNames.join(", ")}
+                                                                    title={deptNames.join(
+                                                                        ", "
+                                                                    )}
                                                                 >
                                                                     {deptText}
                                                                 </span>
                                                                 <span className="truncate text-xs text-muted-foreground md:hidden">
-                                                                    Staff: {assignedDisplay}
-                                                                    {extraAssignedCount > 0
+                                                                    Staff:{" "}
+                                                                    {assignedDisplay}
+                                                                    {extraAssignedCount >
+                                                                    0
                                                                         ? ` (+${extraAssignedCount} extra)`
                                                                         : ""}
                                                                 </span>
@@ -1197,15 +1441,20 @@ export default function AdminWindowsPage() {
 
                                                         <TableCell className="hidden md:table-cell">
                                                             <div className="min-w-0">
-                                                                {deptNames.length > 0 ? (
+                                                                {deptNames.length >
+                                                                0 ? (
                                                                     <p
                                                                         className="truncate text-muted-foreground"
-                                                                        title={deptNames.join(", ")}
+                                                                        title={deptNames.join(
+                                                                            ", "
+                                                                        )}
                                                                     >
                                                                         {deptText}
                                                                     </p>
                                                                 ) : (
-                                                                    <span className="text-muted-foreground">—</span>
+                                                                    <span className="text-muted-foreground">
+                                                                        —
+                                                                    </span>
                                                                 )}
                                                             </div>
                                                         </TableCell>
@@ -1213,14 +1462,27 @@ export default function AdminWindowsPage() {
                                                         <TableCell className="hidden md:table-cell">
                                                             {assignedPrimary ? (
                                                                 <div className="min-w-0">
-                                                                    <Badge variant="secondary">1</Badge>
+                                                                    <Badge variant="secondary">
+                                                                        1
+                                                                    </Badge>
                                                                     <p className="mt-1 truncate text-xs text-muted-foreground">
-                                                                        {assignedDisplay}
+                                                                        {
+                                                                            assignedDisplay
+                                                                        }
                                                                     </p>
-                                                                    {extraAssignedCount > 0 ? (
+                                                                    {extraAssignedCount >
+                                                                    0 ? (
                                                                         <p className="truncate text-xs text-amber-600">
-                                                                            +{extraAssignedCount} extra assignment
-                                                                            {extraAssignedCount > 1 ? "s" : ""}
+                                                                            +
+                                                                            {
+                                                                                extraAssignedCount
+                                                                            }{" "}
+                                                                            extra
+                                                                            assignment
+                                                                            {extraAssignedCount >
+                                                                            1
+                                                                                ? "s"
+                                                                                : ""}
                                                                         </p>
                                                                     ) : null}
                                                                     <Button
@@ -1228,22 +1490,34 @@ export default function AdminWindowsPage() {
                                                                         variant="link"
                                                                         size="sm"
                                                                         className="h-auto p-0 text-xs"
-                                                                        onClick={() => openAssignStaff(w)}
+                                                                        onClick={() =>
+                                                                            openAssignStaff(
+                                                                                w
+                                                                            )
+                                                                        }
                                                                     >
-                                                                        Manage assignment
+                                                                        Manage
+                                                                        assignment
                                                                     </Button>
                                                                 </div>
                                                             ) : (
                                                                 <div className="flex items-center gap-2">
-                                                                    <span className="text-muted-foreground">—</span>
+                                                                    <span className="text-muted-foreground">
+                                                                        —
+                                                                    </span>
                                                                     <Button
                                                                         type="button"
                                                                         variant="link"
                                                                         size="sm"
                                                                         className="h-auto p-0 text-xs"
-                                                                        onClick={() => openAssignStaff(w)}
+                                                                        onClick={() =>
+                                                                            openAssignStaff(
+                                                                                w
+                                                                            )
+                                                                        }
                                                                     >
-                                                                        Assign staff
+                                                                        Assign
+                                                                        staff
                                                                     </Button>
                                                                 </div>
                                                             )}
@@ -1269,28 +1543,47 @@ export default function AdminWindowsPage() {
                                                                     align="end"
                                                                     className="w-52"
                                                                 >
-                                                                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                                                    <DropdownMenuLabel>
+                                                                        Actions
+                                                                    </DropdownMenuLabel>
                                                                     <DropdownMenuSeparator />
                                                                     <DropdownMenuItem
-                                                                        onClick={() => openAssignStaff(w)}
+                                                                        onClick={() =>
+                                                                            openAssignStaff(
+                                                                                w
+                                                                            )
+                                                                        }
                                                                         className="cursor-pointer"
                                                                     >
                                                                         <UserPlus2 className="mr-2 h-4 w-4" />
-                                                                        Assign staff
+                                                                        Assign
+                                                                        staff
                                                                     </DropdownMenuItem>
                                                                     <DropdownMenuItem
-                                                                        onClick={() => openEditWin(w)}
+                                                                        onClick={() =>
+                                                                            openEditWin(
+                                                                                w
+                                                                            )
+                                                                        }
                                                                         className="cursor-pointer"
-                                                                        disabled={!hasDepartmentOptions}
+                                                                        disabled={
+                                                                            !hasDepartmentOptions
+                                                                        }
                                                                     >
-                                                                        Edit window
+                                                                        Edit
+                                                                        window
                                                                     </DropdownMenuItem>
                                                                     <DropdownMenuItem
-                                                                        onClick={() => openDeleteWin(w)}
+                                                                        onClick={() =>
+                                                                            openDeleteWin(
+                                                                                w
+                                                                            )
+                                                                        }
                                                                         className="cursor-pointer text-destructive focus:text-destructive"
                                                                     >
                                                                         <Trash2 className="mr-2 h-4 w-4" />
-                                                                        Delete window
+                                                                        Delete
+                                                                        window
                                                                     </DropdownMenuItem>
                                                                 </DropdownMenuContent>
                                                             </DropdownMenu>
@@ -1305,7 +1598,8 @@ export default function AdminWindowsPage() {
                                                         colSpan={5}
                                                         className="py-10 text-center text-muted-foreground"
                                                     >
-                                                        No windows match your filters.
+                                                        No windows match your
+                                                        filters.
                                                     </TableCell>
                                                 </TableRow>
                                             ) : null}
@@ -1356,7 +1650,9 @@ export default function AdminWindowsPage() {
                                 id="c-win-number"
                                 type="number"
                                 value={String(cWinNumber)}
-                                onChange={(e) => setCWinNumber(safeInt(e.target.value))}
+                                onChange={(e) =>
+                                    setCWinNumber(safeInt(e.target.value))
+                                }
                                 min={1}
                                 disabled={saving || !hasDepartmentOptions}
                             />
@@ -1426,7 +1722,9 @@ export default function AdminWindowsPage() {
                                 id="e-win-number"
                                 type="number"
                                 value={String(eWinNumber)}
-                                onChange={(e) => setEWinNumber(safeInt(e.target.value))}
+                                onChange={(e) =>
+                                    setEWinNumber(safeInt(e.target.value))
+                                }
                                 min={1}
                                 disabled={saving || !hasDepartmentOptions}
                             />
@@ -1434,12 +1732,19 @@ export default function AdminWindowsPage() {
 
                         <div className="flex items-center justify-between rounded-lg border p-3">
                             <div className="grid gap-0.5">
-                                <div className="text-sm font-medium">Enabled</div>
+                                <div className="text-sm font-medium">
+                                    Enabled
+                                </div>
                                 <div className="text-xs text-muted-foreground">
-                                    Disabled windows are hidden in normal assignment flow.
+                                    Disabled windows are hidden in normal
+                                    assignment flow.
                                 </div>
                             </div>
-                            <Switch checked={eWinEnabled} onCheckedChange={setEWinEnabled} disabled={saving} />
+                            <Switch
+                                checked={eWinEnabled}
+                                onCheckedChange={setEWinEnabled}
+                                disabled={saving}
+                            />
                         </div>
                     </div>
 
@@ -1498,10 +1803,10 @@ export default function AdminWindowsPage() {
                             <div className="mt-1 text-xs text-muted-foreground">
                                 Departments:{" "}
                                 {assignTargetWin
-                                    ? (departmentLabelList(
+                                    ? departmentLabelList(
                                           getWindowDepartmentIds(assignTargetWin),
                                           deptById
-                                      ).join(", ") || "—")
+                                      ).join(", ") || "—"
                                     : "—"}
                             </div>
                         </div>
@@ -1525,15 +1830,17 @@ export default function AdminWindowsPage() {
 
                                         return (
                                             <SelectItem key={staffId} value={staffId}>
-                                                {s.name} ({s.email}){tag}
+                                                {s.name} ({s.email})
+                                                {tag}
                                             </SelectItem>
                                         )
                                     })}
                                 </SelectContent>
                             </Select>
                             <p className="text-xs text-muted-foreground">
-                                Staff can only be in one window at a time. Reassigning here
-                                automatically removes any previous staff attached to this window.
+                                Staff can only be in one window at a time.
+                                Reassigning here automatically removes any
+                                previous staff attached to this window.
                             </p>
                         </div>
 
@@ -1565,7 +1872,11 @@ export default function AdminWindowsPage() {
                                                         type="button"
                                                         variant="outline"
                                                         size="sm"
-                                                        onClick={() => void handleUnassignStaffFromWindow(s)}
+                                                        onClick={() =>
+                                                            void handleUnassignStaffFromWindow(
+                                                                s
+                                                            )
+                                                        }
                                                         disabled={saving}
                                                         className="gap-1"
                                                     >
@@ -1622,8 +1933,8 @@ export default function AdminWindowsPage() {
                             </span>
                             .
                             <br />
-                            <br />
-                            A window can only be deleted if no staff account is currently assigned to it.
+                            <br />A window can only be deleted if no staff account
+                            is currently assigned to it.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
 
