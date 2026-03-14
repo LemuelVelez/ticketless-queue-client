@@ -1,7 +1,17 @@
 import * as React from "react"
 import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { LayoutGrid, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
+import {
+    MoreHorizontal,
+    Plus,
+    RefreshCw,
+    LayoutGrid,
+    UserPlus2,
+    UserMinus,
+    Trash2,
+    Check,
+    ChevronsUpDown,
+} from "lucide-react"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
@@ -10,17 +20,21 @@ import type { DashboardUser } from "@/components/nav-user"
 import { API_PATHS, getResolvedApiBaseUrl } from "@/api/api"
 import { useSession } from "@/hooks/use-session"
 import { ApiError, api } from "@/lib/http"
+import { cn } from "@/lib/utils"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-    Dialog,
-    DialogContent,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -29,13 +43,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+
 import {
     AlertDialog,
     AlertDialogAction,
@@ -47,12 +55,29 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+
+import {
+    Command,
+    CommandEmpty,
+    CommandGroup,
+    CommandInput,
+    CommandItem,
+    CommandList,
+} from "@/components/ui/command"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+
+const DEFAULT_MANAGER = "REGISTRAR"
+
 type Department = {
     _id: string
     id?: string
     name: string
     code?: string
     enabled?: boolean
+    transactionManager?: string | null
     [key: string]: unknown
 }
 
@@ -60,21 +85,45 @@ type ServiceWindow = {
     _id: string
     id?: string
     name: string
-    number: number
+    number?: number
     enabled?: boolean
+    department?: string | null
     departmentId?: string | null
-    departmentName?: string | null
+    departmentIds?: string[]
     [key: string]: unknown
 }
 
-type WindowPayload = {
-    name: string
-    number: number
-    departmentId: string
+type StaffUser = {
+    _id?: string
+    id?: string
+    role?: string | null
+    active?: boolean
     enabled?: boolean
+    name?: string | null
+    email?: string | null
+    assignedWindow?: string | null
+    assignedDepartment?: string | null
+    assignedDepartments?: string[] | null
+    departmentIds?: string[] | null
+    transactionManager?: string | null
+    [key: string]: unknown
 }
 
-const WINDOW_FALLBACK_STATUSES = new Set([404, 405, 501])
+type CreateWindowInput = {
+    departmentIds: string[]
+    name: string
+    number: number
+}
+
+type UpdateWindowInput = CreateWindowInput & {
+    enabled: boolean
+}
+
+type UpdateStaffInput = {
+    departmentIds: string[]
+    windowId: string | null
+    transactionManager?: string
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value)
@@ -85,32 +134,60 @@ function normalizeString(value: unknown) {
 }
 
 function normalizeOptionalString(value: unknown): string | null {
-    const normalized = normalizeString(value)
-    return normalized || null
+    const clean = normalizeString(value)
+    return clean || null
 }
 
-function normalizeBoolean(value: unknown, fallback = true) {
+function normalizeBoolean(value: unknown, fallback?: boolean) {
     if (typeof value === "boolean") return value
-
     if (typeof value === "string") {
         const normalized = value.trim().toLowerCase()
         if (normalized === "true") return true
         if (normalized === "false") return false
     }
-
     return fallback
 }
 
-function normalizeNumber(value: unknown, fallback = 1) {
+function normalizeNumber(value: unknown, fallback = 0) {
     if (typeof value === "number" && Number.isFinite(value)) return value
-
     const parsed = Number.parseInt(String(value ?? "").trim(), 10)
     return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function parsePositiveInt(value: string) {
-    const parsed = Number.parseInt(String(value ?? "").trim(), 10)
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+function uniqueStringIds(values: Array<string | null | undefined>) {
+    const seen = new Set<string>()
+    const out: string[] = []
+
+    for (const raw of values) {
+        const s = String(raw ?? "").trim()
+        if (!s) continue
+        if (seen.has(s)) continue
+        seen.add(s)
+        out.push(s)
+    }
+
+    return out
+}
+
+function toIdArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+
+    const ids: string[] = []
+
+    for (const item of value) {
+        if (typeof item === "string" || typeof item === "number") {
+            const id = normalizeString(item)
+            if (id) ids.push(id)
+            continue
+        }
+
+        if (isRecord(item)) {
+            const id = normalizeString(item._id ?? item.id ?? item.departmentId ?? item.value)
+            if (id) ids.push(id)
+        }
+    }
+
+    return uniqueStringIds(ids)
 }
 
 function extractCollection<T>(
@@ -147,195 +224,383 @@ function normalizeDepartment(rawValue: unknown): Department {
         name,
         ...(code ? { code } : {}),
         enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
+        transactionManager:
+            normalizeOptionalString(
+                raw.transactionManager ?? raw.managerKey ?? raw.transaction_manager
+            ) ?? DEFAULT_MANAGER,
     }
 }
 
 function normalizeWindow(rawValue: unknown): ServiceWindow {
     const raw = isRecord(rawValue) ? rawValue : {}
-    const nestedDepartment = isRecord(raw.department) ? raw.department : null
+    const _id = normalizeString(raw._id ?? raw.id)
 
-    const departmentId =
-        normalizeOptionalString(raw.departmentId ?? raw.department_id) ??
-        normalizeOptionalString(raw.department) ??
-        normalizeOptionalString(nestedDepartment?._id ?? nestedDepartment?.id) ??
-        (Array.isArray(raw.departmentIds) ? normalizeOptionalString(raw.departmentIds[0]) : null)
+    const departmentIds = uniqueStringIds([
+        ...toIdArray(raw.departmentIds),
+        ...toIdArray(raw.departments),
+        normalizeOptionalString(raw.departmentId),
+        normalizeOptionalString(raw.department),
+    ])
 
-    const departmentName =
-        normalizeOptionalString(raw.departmentName) ??
-        normalizeOptionalString(nestedDepartment?.name)
-
-    const number = normalizeNumber(raw.number ?? raw.windowNumber ?? raw.windowNo, 1)
-    const name =
-        normalizeString(raw.name ?? raw.windowName) ||
-        `Window ${number}`
+    const firstDepartmentId = departmentIds[0] ?? null
 
     return {
         ...raw,
-        _id: normalizeString(raw._id ?? raw.id),
+        _id,
         ...(normalizeOptionalString(raw.id) ? { id: normalizeString(raw.id) } : {}),
-        name,
-        number,
+        name:
+            normalizeString(raw.name ?? raw.windowName ?? raw.label) ||
+            `Window ${normalizeNumber(raw.number ?? raw.windowNumber, 1)}`,
+        number: normalizeNumber(raw.number ?? raw.windowNumber, 1),
         enabled: normalizeBoolean(raw.enabled ?? raw.isEnabled, true),
-        departmentId,
-        departmentName,
+        departmentIds,
+        departmentId: firstDepartmentId,
+        department: firstDepartmentId,
     }
 }
 
-function getWindowId(window: ServiceWindow) {
-    return window._id || window.id || ""
-}
+function normalizeStaff(rawValue: unknown): StaffUser {
+    const raw = isRecord(rawValue) ? rawValue : {}
 
-function getDepartmentId(window: ServiceWindow) {
-    return normalizeOptionalString(window.departmentId)
-}
+    const assignedDepartments = uniqueStringIds([
+        ...toIdArray(raw.assignedDepartments),
+        ...toIdArray(raw.departmentIds),
+        normalizeOptionalString(raw.assignedDepartment),
+    ])
 
-function getDepartmentLabel(
-    window: ServiceWindow,
-    departmentById: Map<string, Department>
-) {
-    const departmentId = getDepartmentId(window)
-    if (departmentId && departmentById.has(departmentId)) {
-        return departmentById.get(departmentId)?.name || departmentId
+    const fallbackName =
+        [
+            normalizeOptionalString(raw.firstName),
+            normalizeOptionalString(raw.middleName),
+            normalizeOptionalString(raw.lastName),
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .trim() || null
+
+    return {
+        ...raw,
+        _id: normalizeOptionalString(raw._id ?? raw.id) ?? undefined,
+        id: normalizeOptionalString(raw.id) ?? undefined,
+        role: normalizeOptionalString(raw.role),
+        active: normalizeBoolean(raw.active, normalizeBoolean(raw.enabled, true)),
+        enabled: normalizeBoolean(raw.enabled, true),
+        name: normalizeOptionalString(raw.name) ?? fallbackName,
+        email: normalizeOptionalString(raw.email),
+        assignedWindow: normalizeOptionalString(
+            raw.assignedWindow ?? raw.windowId ?? raw.serviceWindowId
+        ),
+        assignedDepartment: assignedDepartments[0] ?? null,
+        assignedDepartments,
+        departmentIds: assignedDepartments,
+        transactionManager: normalizeOptionalString(raw.transactionManager),
     }
-
-    return window.departmentName || departmentId || "—"
 }
 
-function statusBadge(enabled: boolean | undefined) {
-    const active = enabled !== false
-    return <Badge variant={active ? "default" : "secondary"}>{active ? "Enabled" : "Disabled"}</Badge>
-}
+function buildWindowPayload(input: CreateWindowInput | UpdateWindowInput) {
+    const departmentIds = uniqueStringIds(input.departmentIds)
+    const firstDepartmentId = departmentIds[0] ?? null
+    const enabled = "enabled" in input ? Boolean(input.enabled) : true
+    const number = Number(input.number)
+    const name = input.name.trim()
 
-function buildWindowPayload(input: WindowPayload) {
-    const payload: Record<string, unknown> = {
-        name: input.name.trim(),
-        windowName: input.name.trim(),
-        number: Number(input.number),
-        windowNumber: Number(input.number),
-        departmentId: input.departmentId,
-        department: input.departmentId,
-        departmentIds: [input.departmentId],
+    return {
+        name,
+        windowName: name,
+        number,
+        windowNumber: number,
+        enabled,
+        isEnabled: enabled,
+        departmentIds,
+        departments: departmentIds,
+        departmentId: firstDepartmentId,
+        department: firstDepartmentId,
     }
+}
 
-    if (typeof input.enabled === "boolean") {
-        payload.enabled = input.enabled
+function normalizeManagerKey(value: unknown, fallback = DEFAULT_MANAGER) {
+    const v = String(value || "")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "_")
+    return v || fallback
+}
+
+function buildStaffUpdatePayload(input: UpdateStaffInput) {
+    const departmentIds = uniqueStringIds(input.departmentIds)
+    const firstDepartmentId = departmentIds[0] ?? null
+    const normalizedManager = input.transactionManager
+        ? normalizeManagerKey(input.transactionManager, DEFAULT_MANAGER)
+        : undefined
+
+    return {
+        departmentIds,
+        assignedDepartments: departmentIds,
+        assignedDepartment: firstDepartmentId,
+        departmentId: firstDepartmentId,
+        windowId: input.windowId,
+        assignedWindow: input.windowId,
+        serviceWindowId: input.windowId,
+        ...(normalizedManager ? { transactionManager: normalizedManager } : {}),
     }
-
-    return payload
 }
 
-function shouldUseWindowFallback(error: unknown) {
-    return error instanceof ApiError && WINDOW_FALLBACK_STATUSES.has(error.status)
-}
+function buildAbsoluteApiUrl(path: string) {
+    const base = getResolvedApiBaseUrl().replace(/\/+$/, "")
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`
 
-function getAbsoluteApiBaseUrl() {
-    const base = String(getResolvedApiBaseUrl() ?? "").replace(/\/+$/, "")
-
-    if (/^https?:\/\//i.test(base)) return base
+    if (/^https?:\/\//i.test(base) || base.startsWith("//")) {
+        return `${base}${normalizedPath}`
+    }
 
     if (typeof window !== "undefined") {
-        const normalized = base.startsWith("/") ? base : `/${base}`
-        return `${window.location.origin}${normalized}`
+        return `${window.location.origin}${base}${normalizedPath}`
     }
 
-    return base
+    return `${base}${normalizedPath}`
 }
 
-function getLegacyWindowsCollectionUrl() {
-    return `${getAbsoluteApiBaseUrl()}/windows`
-}
+async function runWithEndpointFallback<T>(requests: Array<() => Promise<T>>) {
+    let lastError: unknown = null
 
-function getLegacyWindowItemUrl(id: string) {
-    return `${getLegacyWindowsCollectionUrl()}/${encodeURIComponent(id)}`
-}
-
-async function withWindowRouteFallback<T>(
-    primary: () => Promise<T>,
-    legacy: () => Promise<T>
-) {
-    try {
-        return await primary()
-    } catch (error) {
-        if (!shouldUseWindowFallback(error)) throw error
-        return legacy()
+    for (const request of requests) {
+        try {
+            return await request()
+        } catch (error) {
+            lastError = error
+            if (!(error instanceof ApiError)) continue
+            if (![404, 405, 501].includes(error.status)) throw error
+        }
     }
-}
 
-async function patchOrPutWindow(path: string, payload: Record<string, unknown>) {
-    try {
-        return await api.patchData<unknown>(path, payload)
-    } catch (error) {
-        if (!shouldUseWindowFallback(error)) throw error
-        return api.putData<unknown>(path, payload)
-    }
+    throw lastError ?? new Error("Request failed.")
 }
 
 const adminApi = {
     async listDepartments() {
-        try {
-            const response = await api.getData<unknown>(API_PATHS.departments.enabled)
-            return {
-                departments: extractCollection(
-                    response,
-                    ["departments", "items", "results"],
-                    normalizeDepartment
-                ),
-            }
-        } catch (error) {
-            if (!(error instanceof ApiError) || error.status !== 404) throw error
+        const res = await runWithEndpointFallback([
+            () => api.getData<unknown>(API_PATHS.departments.enabled),
+            () => api.getData<unknown>(API_PATHS.departments.list),
+        ])
 
-            const response = await api.getData<unknown>(API_PATHS.departments.list)
-            return {
-                departments: extractCollection(
-                    response,
-                    ["departments", "items", "results"],
-                    normalizeDepartment
-                ),
-            }
+        return {
+            departments: extractCollection(
+                res,
+                ["departments", "items", "results", "data"],
+                normalizeDepartment
+            ),
         }
     },
 
     async listWindows() {
-        const response = await withWindowRouteFallback(
+        const res = await runWithEndpointFallback([
             () => api.getData<unknown>(API_PATHS.serviceWindows.list),
-            () => api.getData<unknown>(getLegacyWindowsCollectionUrl())
-        )
+            () => api.getData<unknown>(buildAbsoluteApiUrl("/windows")),
+            () => api.getData<unknown>(buildAbsoluteApiUrl("/window")),
+        ])
 
         return {
             windows: extractCollection(
-                response,
-                ["windows", "serviceWindows", "items", "results"],
+                res,
+                ["windows", "serviceWindows", "items", "results", "data"],
                 normalizeWindow
             ),
         }
     },
 
-    async createWindow(payload: WindowPayload) {
+    async createWindow(payload: CreateWindowInput) {
         const body = buildWindowPayload(payload)
 
-        return withWindowRouteFallback(
+        return runWithEndpointFallback([
             () => api.postData<unknown>(API_PATHS.serviceWindows.create, body),
-            () => api.postData<unknown>(getLegacyWindowsCollectionUrl(), body)
-        )
+            () => api.postData<unknown>(buildAbsoluteApiUrl("/windows"), body),
+            () => api.postData<unknown>(buildAbsoluteApiUrl("/window"), body),
+        ])
     },
 
-    async updateWindow(id: string, payload: WindowPayload) {
+    async updateWindow(id: string, payload: UpdateWindowInput) {
         const body = buildWindowPayload(payload)
 
-        try {
-            return await patchOrPutWindow(API_PATHS.serviceWindows.byId(id), body)
-        } catch (error) {
-            if (!shouldUseWindowFallback(error)) throw error
-            return patchOrPutWindow(getLegacyWindowItemUrl(id), body)
-        }
+        return runWithEndpointFallback([
+            () => api.patchData<unknown>(API_PATHS.serviceWindows.byId(id), body),
+            () => api.putData<unknown>(API_PATHS.serviceWindows.byId(id), body),
+            () => api.patchData<unknown>(buildAbsoluteApiUrl(`/windows/${id}`), body),
+            () => api.putData<unknown>(buildAbsoluteApiUrl(`/windows/${id}`), body),
+            () => api.patchData<unknown>(buildAbsoluteApiUrl(`/window/${id}`), body),
+            () => api.putData<unknown>(buildAbsoluteApiUrl(`/window/${id}`), body),
+        ])
     },
 
     async deleteWindow(id: string) {
-        return withWindowRouteFallback(
+        return runWithEndpointFallback([
             () => api.deleteData<unknown>(API_PATHS.serviceWindows.byId(id)),
-            () => api.deleteData<unknown>(getLegacyWindowItemUrl(id))
-        )
+            () => api.deleteData<unknown>(buildAbsoluteApiUrl(`/windows/${id}`)),
+            () => api.deleteData<unknown>(buildAbsoluteApiUrl(`/window/${id}`)),
+        ])
     },
+
+    async listStaff() {
+        const res = await runWithEndpointFallback([
+            () => api.getData<unknown>(API_PATHS.users.staff),
+            () => api.getData<unknown>(API_PATHS.admin.staff),
+        ])
+
+        return {
+            staff: extractCollection(
+                res,
+                ["staff", "users", "items", "results", "data"],
+                normalizeStaff
+            ),
+        }
+    },
+
+    async updateStaff(id: string, payload: UpdateStaffInput) {
+        const body = buildStaffUpdatePayload(payload)
+
+        return runWithEndpointFallback([
+            () => api.patchData<unknown>(API_PATHS.users.byId(id), body),
+            () => api.putData<unknown>(API_PATHS.users.byId(id), body),
+            () => api.patchData<unknown>(buildAbsoluteApiUrl(`/users/${id}`), body),
+            () => api.putData<unknown>(buildAbsoluteApiUrl(`/users/${id}`), body),
+        ])
+    },
+}
+
+function isEnabledFlag(value: boolean | undefined) {
+    return value !== false
+}
+
+function statusBadge(enabled: boolean | undefined) {
+    const on = isEnabledFlag(enabled)
+    return <Badge variant={on ? "default" : "secondary"}>{on ? "Enabled" : "Disabled"}</Badge>
+}
+
+function safeInt(v: string) {
+    const n = Number.parseInt(v, 10)
+    return Number.isFinite(n) ? n : 0
+}
+
+function getStaffId(s: StaffUser) {
+    return s._id || s.id || ""
+}
+
+function getStaffDepartmentIds(staff: StaffUser): string[] {
+    return uniqueStringIds([
+        ...(Array.isArray(staff.assignedDepartments) ? staff.assignedDepartments : []),
+        staff.assignedDepartment ?? "",
+        ...(Array.isArray(staff.departmentIds) ? staff.departmentIds : []),
+    ])
+}
+
+function getWindowDepartmentIds(win?: ServiceWindow | null): string[] {
+    if (!win) return []
+    return uniqueStringIds([
+        ...(Array.isArray(win.departmentIds) ? win.departmentIds : []),
+        win.department ?? "",
+        win.departmentId ?? "",
+    ])
+}
+
+function departmentLabelList(ids: string[], deptById: Map<string, Department>) {
+    return ids.map((id) => deptById.get(id)?.name || id)
+}
+
+function getDepartmentManagerById(departmentId: string, deptById: Map<string, Department>) {
+    const dep = deptById.get(departmentId)
+    const manager = normalizeManagerKey(dep?.transactionManager || "", "")
+    return manager || null
+}
+
+type DepartmentMultiSelectProps = {
+    value: string[]
+    onChange: (next: string[]) => void
+    options: Department[]
+    placeholder?: string
+    disabled?: boolean
+}
+
+function DepartmentMultiSelect({
+    value,
+    onChange,
+    options,
+    placeholder = "Select departments",
+    disabled,
+}: DepartmentMultiSelectProps) {
+    const [open, setOpen] = React.useState(false)
+
+    const selectedNames = React.useMemo(() => {
+        const selectedSet = new Set(value)
+        return options.filter((d) => selectedSet.has(d._id)).map((d) => d.name)
+    }, [value, options])
+
+    const buttonText = React.useMemo(() => {
+        if (selectedNames.length === 0) return placeholder
+        if (selectedNames.length <= 2) return selectedNames.join(", ")
+        return `${selectedNames.slice(0, 2).join(", ")} +${selectedNames.length - 2}`
+    }, [selectedNames, placeholder])
+
+    function toggle(id: string) {
+        if (value.includes(id)) {
+            onChange(value.filter((v) => v !== id))
+            return
+        }
+        onChange([...value, id])
+    }
+
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+                <Button
+                    type="button"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={open}
+                    className="w-full justify-between gap-2 overflow-hidden"
+                    disabled={disabled}
+                    title={buttonText}
+                >
+                    <span className="min-w-0 flex-1 truncate text-left">
+                        {buttonText}
+                    </span>
+                    <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+            </PopoverTrigger>
+
+            <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+                <Command>
+                    <CommandInput placeholder="Search department..." />
+                    <CommandList>
+                        <CommandEmpty>No department found.</CommandEmpty>
+                        <CommandGroup>
+                            {options.map((d) => {
+                                const checked = value.includes(d._id)
+                                return (
+                                    <CommandItem
+                                        key={d._id}
+                                        value={`${d.name} ${d.code ?? ""}`}
+                                        onSelect={() => toggle(d._id)}
+                                    >
+                                        <Check
+                                            className={cn(
+                                                "mr-2 h-4 w-4",
+                                                checked ? "opacity-100" : "opacity-0"
+                                            )}
+                                        />
+                                        <span className="truncate">{d.name}</span>
+                                        {d.code ? (
+                                            <span className="ml-1 text-xs text-muted-foreground">
+                                                ({d.code})
+                                            </span>
+                                        ) : null}
+                                    </CommandItem>
+                                )
+                            })}
+                        </CommandGroup>
+                    </CommandList>
+                </Command>
+            </PopoverContent>
+        </Popover>
+    )
 }
 
 export default function AdminWindowsPage() {
@@ -344,7 +609,6 @@ export default function AdminWindowsPage() {
 
     const dashboardUser: DashboardUser | undefined = React.useMemo(() => {
         if (!sessionUser) return undefined
-
         return {
             name: sessionUser.name ?? "Admin",
             email: sessionUser.email ?? "",
@@ -356,69 +620,119 @@ export default function AdminWindowsPage() {
 
     const [departments, setDepartments] = React.useState<Department[]>([])
     const [windows, setWindows] = React.useState<ServiceWindow[]>([])
+    const [staffUsers, setStaffUsers] = React.useState<StaffUser[]>([])
 
-    const [searchQuery, setSearchQuery] = React.useState("")
-    const [statusFilter, setStatusFilter] = React.useState<"all" | "enabled" | "disabled">("all")
-    const [departmentFilter, setDepartmentFilter] = React.useState("all")
+    const [winQ, setWinQ] = React.useState("")
+    const [winStatusTab, setWinStatusTab] = React.useState<"all" | "enabled" | "disabled">("all")
+    const [winDeptFilter, setWinDeptFilter] = React.useState<string>("all")
 
-    const [createOpen, setCreateOpen] = React.useState(false)
-    const [editOpen, setEditOpen] = React.useState(false)
-    const [deleteOpen, setDeleteOpen] = React.useState(false)
+    const [createWinOpen, setCreateWinOpen] = React.useState(false)
+    const [editWinOpen, setEditWinOpen] = React.useState(false)
+    const [deleteWinOpen, setDeleteWinOpen] = React.useState(false)
+    const [assignStaffOpen, setAssignStaffOpen] = React.useState(false)
 
-    const [selectedWindow, setSelectedWindow] = React.useState<ServiceWindow | null>(null)
+    const [selectedWin, setSelectedWin] = React.useState<ServiceWindow | null>(null)
+    const [assignTargetWin, setAssignTargetWin] = React.useState<ServiceWindow | null>(null)
 
-    const [createName, setCreateName] = React.useState("")
-    const [createNumber, setCreateNumber] = React.useState("1")
-    const [createDepartmentId, setCreateDepartmentId] = React.useState("")
+    const [cWinDepartmentIds, setCWinDepartmentIds] = React.useState<string[]>([])
+    const [cWinName, setCWinName] = React.useState("")
+    const [cWinNumber, setCWinNumber] = React.useState<number>(1)
 
-    const [editName, setEditName] = React.useState("")
-    const [editNumber, setEditNumber] = React.useState("1")
-    const [editDepartmentId, setEditDepartmentId] = React.useState("")
-    const [editEnabled, setEditEnabled] = React.useState(true)
+    const [eWinDepartmentIds, setEWinDepartmentIds] = React.useState<string[]>([])
+    const [eWinName, setEWinName] = React.useState("")
+    const [eWinNumber, setEWinNumber] = React.useState<number>(1)
+    const [eWinEnabled, setEWinEnabled] = React.useState(true)
 
-    const departmentById = React.useMemo(() => {
-        const map = new Map<string, Department>()
+    const [aStaffId, setAStaffId] = React.useState<string>("none")
 
-        for (const department of departments) {
-            map.set(department._id, department)
-        }
-
-        return map
+    const deptById = React.useMemo(() => {
+        const m = new Map<string, Department>()
+        for (const d of departments) m.set(d._id, d)
+        return m
     }, [departments])
 
+    const windowById = React.useMemo(() => {
+        const m = new Map<string, ServiceWindow>()
+        for (const w of windows) m.set(w._id, w)
+        return m
+    }, [windows])
+
+    const staffAssignedByWindow = React.useMemo(() => {
+        const m = new Map<string, StaffUser[]>()
+        for (const s of staffUsers ?? []) {
+            if (String(s.role ?? "").toUpperCase() !== "STAFF") continue
+            if (!s.active) continue
+            if (!s.assignedWindow) continue
+
+            const arr = m.get(s.assignedWindow) ?? []
+            arr.push(s)
+            m.set(s.assignedWindow, arr)
+        }
+
+        for (const [k, arr] of m.entries()) {
+            arr.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+            m.set(k, arr)
+        }
+
+        return m
+    }, [staffUsers])
+
+    const assignableStaff = React.useMemo(() => {
+        return (staffUsers ?? [])
+            .filter((s) => String(s.role ?? "").toUpperCase() === "STAFF" && s.active && getStaffId(s))
+            .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+    }, [staffUsers])
+
     const enabledDepartments = React.useMemo(
-        () => departments.filter((department) => department.enabled !== false),
+        () =>
+            departments
+                .filter((d) => isEnabledFlag(d.enabled))
+                .sort((a, b) => a.name.localeCompare(b.name)),
         [departments]
     )
+
+    const hasDepartmentOptions = enabledDepartments.length > 0
 
     const fetchAll = React.useCallback(async () => {
         setLoading(true)
 
-        const [departmentResult, windowResult] = await Promise.allSettled([
+        const [deptResult, winResult, staffResult] = await Promise.allSettled([
             adminApi.listDepartments(),
             adminApi.listWindows(),
+            adminApi.listStaff(),
         ])
 
-        if (departmentResult.status === "fulfilled") {
-            setDepartments(departmentResult.value.departments ?? [])
+        if (deptResult.status === "fulfilled") {
+            setDepartments(deptResult.value.departments ?? [])
         } else {
             setDepartments([])
-            const message =
-                departmentResult.reason instanceof Error
-                    ? departmentResult.reason.message
-                    : "Failed to load departments."
-            toast.error(message)
         }
 
-        if (windowResult.status === "fulfilled") {
-            setWindows(windowResult.value.windows ?? [])
+        if (winResult.status === "fulfilled") {
+            setWindows(winResult.value.windows ?? [])
         } else {
             setWindows([])
-            const message =
-                windowResult.reason instanceof Error
-                    ? windowResult.reason.message
-                    : "Failed to load windows."
-            toast.error(message)
+        }
+
+        if (staffResult.status === "fulfilled") {
+            setStaffUsers(staffResult.value.staff ?? [])
+        } else {
+            setStaffUsers([])
+        }
+
+        if (winResult.status === "rejected") {
+            const msg = winResult.reason instanceof Error ? winResult.reason.message : "Failed to load windows."
+            toast.error(msg)
+        }
+
+        if (deptResult.status === "rejected") {
+            const msg = deptResult.reason instanceof Error ? deptResult.reason.message : "Failed to load departments."
+            toast.error(msg)
+        }
+
+        if (staffResult.status === "rejected") {
+            const msg = staffResult.reason instanceof Error ? staffResult.reason.message : "Failed to load staff accounts."
+            toast.error(msg)
         }
 
         setLoading(false)
@@ -428,195 +742,285 @@ export default function AdminWindowsPage() {
         void fetchAll()
     }, [fetchAll])
 
-    function resetCreateForm() {
-        setCreateName("")
-        setCreateNumber("1")
-        setCreateDepartmentId("")
+    function resetCreateWinForm() {
+        setCWinDepartmentIds([])
+        setCWinName("")
+        setCWinNumber(1)
     }
 
-    function resetEditForm() {
-        setEditName("")
-        setEditNumber("1")
-        setEditDepartmentId("")
-        setEditEnabled(true)
-    }
+    const winRows = React.useMemo(() => {
+        const q = winQ.trim().toLowerCase()
 
-    function openCreateDialog() {
-        resetCreateForm()
-        setCreateOpen(true)
-    }
+        return (windows ?? [])
+            .filter((w) => {
+                const enabled = isEnabledFlag(w.enabled)
+                if (winStatusTab === "enabled" && !enabled) return false
+                if (winStatusTab === "disabled" && enabled) return false
 
-    function openEditDialog(window: ServiceWindow) {
-        setSelectedWindow(window)
-        setEditName(window.name ?? "")
-        setEditNumber(String(window.number ?? 1))
-        setEditDepartmentId(getDepartmentId(window) ?? "")
-        setEditEnabled(window.enabled !== false)
-        setEditOpen(true)
-    }
+                const departmentIds = getWindowDepartmentIds(w)
+                if (winDeptFilter !== "all" && !departmentIds.includes(winDeptFilter)) return false
 
-    function openDeleteDialog(window: ServiceWindow) {
-        setSelectedWindow(window)
-        setDeleteOpen(true)
-    }
+                if (!q) return true
 
-    const rows = React.useMemo(() => {
-        const query = searchQuery.trim().toLowerCase()
-
-        return windows
-            .filter((window) => {
-                const enabled = window.enabled !== false
-                const departmentId = getDepartmentId(window)
-
-                if (statusFilter === "enabled" && !enabled) return false
-                if (statusFilter === "disabled" && enabled) return false
-                if (departmentFilter !== "all" && departmentId !== departmentFilter) return false
-
-                if (!query) return true
-
-                const departmentLabel = getDepartmentLabel(window, departmentById).toLowerCase()
-                const haystack = `${window.name} ${window.number} ${departmentLabel}`.toLowerCase()
-
-                return haystack.includes(query)
+                const deptNames = departmentLabelList(departmentIds, deptById).join(" ")
+                const hay = `${w.name ?? ""} ${w.number ?? ""} ${deptNames}`.toLowerCase()
+                return hay.includes(q)
             })
             .sort((a, b) => {
-                const aEnabled = a.enabled !== false
-                const bEnabled = b.enabled !== false
+                const ae = isEnabledFlag(a.enabled)
+                const be = isEnabledFlag(b.enabled)
+                if (ae !== be) return ae ? -1 : 1
 
-                if (aEnabled !== bEnabled) return aEnabled ? -1 : 1
-                if (a.number !== b.number) return a.number - b.number
+                const deptA = departmentLabelList(getWindowDepartmentIds(a), deptById).join(" | ")
+                const deptB = departmentLabelList(getWindowDepartmentIds(b), deptById).join(" | ")
+                if (deptA !== deptB) return deptA.localeCompare(deptB)
 
-                return a.name.localeCompare(b.name)
+                return (a.number ?? 0) - (b.number ?? 0)
             })
-    }, [windows, searchQuery, statusFilter, departmentFilter, departmentById])
+    }, [windows, winQ, winStatusTab, winDeptFilter, deptById])
 
-    const stats = React.useMemo(() => {
-        const total = windows.length
-        const enabled = windows.filter((window) => window.enabled !== false).length
+    function openEditWin(w: ServiceWindow) {
+        setSelectedWin(w)
+        setEWinDepartmentIds(getWindowDepartmentIds(w))
+        setEWinName(w.name ?? "")
+        setEWinNumber(Number(w.number ?? 1))
+        setEWinEnabled(isEnabledFlag(w.enabled))
+        setEditWinOpen(true)
+    }
 
-        return {
-            total,
-            enabled,
-            disabled: total - enabled,
-        }
-    }, [windows])
+    function openDeleteWin(w: ServiceWindow) {
+        setSelectedWin(w)
+        setDeleteWinOpen(true)
+    }
 
-    async function handleCreateWindow() {
-        const name = createName.trim()
-        const number = parsePositiveInt(createNumber)
-        const departmentId = createDepartmentId.trim()
+    function openAssignStaff(w: ServiceWindow) {
+        setAssignTargetWin(w)
+        setAStaffId("none")
+        setAssignStaffOpen(true)
+    }
 
-        if (!departmentId) {
-            toast.error("Please select a department.")
-            return
-        }
+    async function handleCreateWin() {
+        const departmentIds = uniqueStringIds(cWinDepartmentIds)
+        const name = cWinName.trim()
+        const number = Number(cWinNumber)
 
-        if (!name) {
-            toast.error("Window name is required.")
-            return
-        }
-
-        if (!number) {
-            toast.error("Window number must be a positive integer.")
-            return
+        if (departmentIds.length === 0) return toast.error("Select at least one department.")
+        if (!name) return toast.error("Window name is required.")
+        if (!Number.isFinite(number) || number <= 0) {
+            return toast.error("Window number must be a positive integer.")
         }
 
         setSaving(true)
-
         try {
-            await adminApi.createWindow({
-                name,
-                number,
-                departmentId,
-            })
-
+            await adminApi.createWindow({ departmentIds, name, number })
             toast.success("Window created.")
-            setCreateOpen(false)
-            resetCreateForm()
+            setCreateWinOpen(false)
+            resetCreateWinForm()
             await fetchAll()
-        } catch (error) {
-            const message =
-                error instanceof Error ? error.message : "Failed to create window."
-            toast.error(message)
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to create window."
+            toast.error(msg)
         } finally {
             setSaving(false)
         }
     }
 
-    async function handleUpdateWindow() {
-        const id = selectedWindow ? getWindowId(selectedWindow) : ""
-        const name = editName.trim()
-        const number = parsePositiveInt(editNumber)
-        const departmentId = editDepartmentId.trim()
+    async function handleSaveWin() {
+        if (!selectedWin) return
+        const id = selectedWin._id
+        if (!id) return toast.error("Invalid window id.")
 
-        if (!id) {
-            toast.error("Invalid window id.")
-            return
-        }
+        const departmentIds = uniqueStringIds(eWinDepartmentIds)
+        const name = eWinName.trim()
+        const number = Number(eWinNumber)
 
-        if (!departmentId) {
-            toast.error("Please select a department.")
-            return
-        }
-
-        if (!name) {
-            toast.error("Window name is required.")
-            return
-        }
-
-        if (!number) {
-            toast.error("Window number must be a positive integer.")
-            return
+        if (departmentIds.length === 0) return toast.error("Select at least one department.")
+        if (!name) return toast.error("Window name is required.")
+        if (!Number.isFinite(number) || number <= 0) {
+            return toast.error("Window number must be a positive integer.")
         }
 
         setSaving(true)
-
         try {
             await adminApi.updateWindow(id, {
                 name,
                 number,
-                departmentId,
-                enabled: editEnabled,
+                enabled: eWinEnabled,
+                departmentIds,
             })
-
             toast.success("Window updated.")
-            setEditOpen(false)
-            setSelectedWindow(null)
-            resetEditForm()
+            setEditWinOpen(false)
+            setSelectedWin(null)
             await fetchAll()
-        } catch (error) {
-            const message =
-                error instanceof Error ? error.message : "Failed to update window."
-            toast.error(message)
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to update window."
+            toast.error(msg)
         } finally {
             setSaving(false)
         }
     }
 
-    async function handleDeleteWindow() {
-        const id = selectedWindow ? getWindowId(selectedWindow) : ""
+    async function handleDeleteWin() {
+        if (!selectedWin?._id) return toast.error("Invalid window id.")
 
-        if (!id) {
-            toast.error("Invalid window id.")
-            return
+        const assignedStaff = staffAssignedByWindow.get(selectedWin._id) ?? []
+        if (assignedStaff.length > 0) {
+            return toast.error("Unassign the staff member from this window before deleting it.")
         }
 
         setSaving(true)
-
         try {
-            await adminApi.deleteWindow(id)
+            await adminApi.deleteWindow(selectedWin._id)
             toast.success("Window deleted.")
-            setDeleteOpen(false)
-            setSelectedWindow(null)
+            setDeleteWinOpen(false)
+            setSelectedWin(null)
             await fetchAll()
-        } catch (error) {
-            const message =
-                error instanceof Error ? error.message : "Failed to delete window."
-            toast.error(message)
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to delete window."
+            toast.error(msg)
         } finally {
             setSaving(false)
         }
     }
+
+    async function handleAssignStaffToWindow() {
+        if (!assignTargetWin) return toast.error("Please select a window.")
+        if (!assignTargetWin._id) return toast.error("Invalid window id.")
+        if (!aStaffId || aStaffId === "none") return toast.error("Please select a staff account.")
+
+        const picked = assignableStaff.find((s) => getStaffId(s) === aStaffId)
+        if (!picked) return toast.error("Selected staff was not found.")
+
+        const windowDepartmentIds = getWindowDepartmentIds(assignTargetWin)
+        if (windowDepartmentIds.length === 0) {
+            return toast.error("Window must have at least one department.")
+        }
+
+        const currentAssignments = (staffAssignedByWindow.get(assignTargetWin._id) ?? []).filter((s) =>
+            getStaffId(s)
+        )
+        const otherAssignments = currentAssignments.filter((s) => getStaffId(s) !== aStaffId)
+
+        const windowManagers = uniqueStringIds(
+            windowDepartmentIds
+                .map((depId) => getDepartmentManagerById(depId, deptById))
+                .filter((m): m is string => Boolean(m))
+        )
+
+        if (windowManagers.length > 1) {
+            return toast.error("Window departments are inconsistent (different transaction managers).")
+        }
+
+        const targetManager = windowManagers[0] ?? null
+        const pickedDepartmentIds = getStaffDepartmentIds(picked)
+        const compatiblePickedDepartmentIds = targetManager
+            ? pickedDepartmentIds.filter((depId) => getDepartmentManagerById(depId, deptById) === targetManager)
+            : pickedDepartmentIds
+
+        const nextDepartmentIds = uniqueStringIds([
+            ...compatiblePickedDepartmentIds,
+            ...windowDepartmentIds,
+        ])
+
+        if (nextDepartmentIds.length === 0) {
+            return toast.error("Unable to resolve department assignment for selected staff.")
+        }
+
+        setSaving(true)
+        try {
+            const movedFromWindowId = picked.assignedWindow || null
+
+            await adminApi.updateStaff(aStaffId, {
+                departmentIds: nextDepartmentIds,
+                windowId: assignTargetWin._id,
+                ...(targetManager ? { transactionManager: targetManager } : {}),
+            })
+
+            for (const assigned of otherAssignments) {
+                const assignedId = getStaffId(assigned)
+                if (!assignedId) continue
+
+                await adminApi.updateStaff(assignedId, {
+                    departmentIds: getStaffDepartmentIds(assigned),
+                    windowId: null,
+                    ...(targetManager ? { transactionManager: targetManager } : {}),
+                })
+            }
+
+            const movedText =
+                movedFromWindowId && movedFromWindowId !== assignTargetWin._id
+                    ? ` Moved from ${windowById.get(movedFromWindowId)?.name ?? "another window"}.`
+                    : ""
+
+            const replacedNames = otherAssignments
+                .map((s) => s.name?.trim() || s.email)
+                .filter(Boolean)
+                .join(", ")
+
+            const replacedText = replacedNames ? ` Replaced ${replacedNames}.` : ""
+
+            toast.success(
+                `Staff assigned to ${assignTargetWin.name} (#${assignTargetWin.number}).${movedText}${replacedText}`
+            )
+
+            setAStaffId("none")
+            await fetchAll()
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to assign staff."
+            toast.error(msg)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    async function handleUnassignStaffFromWindow(staff: StaffUser) {
+        if (!assignTargetWin) return toast.error("Please select a window.")
+        const staffId = getStaffId(staff)
+        if (!staffId) return toast.error("Invalid staff id.")
+
+        const windowDepartmentIds = getWindowDepartmentIds(assignTargetWin)
+
+        setSaving(true)
+        try {
+            const existingDepartments = getStaffDepartmentIds(staff)
+            const nextDepartmentIds =
+                existingDepartments.length > 0 ? existingDepartments : windowDepartmentIds
+
+            await adminApi.updateStaff(staffId, {
+                departmentIds: nextDepartmentIds,
+                windowId: null,
+            })
+            toast.success(
+                `Removed ${staff.name} from ${assignTargetWin.name} (#${assignTargetWin.number}).`
+            )
+            await fetchAll()
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed to unassign staff."
+            toast.error(msg)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const stats = React.useMemo(() => {
+        const totalWindows = windows.length
+        const enabledWindows = windows.filter((w) => isEnabledFlag(w.enabled)).length
+        const withAssignedStaff = windows.filter((w) =>
+            staffAssignedByWindow.get(w._id)?.[0] ? true : false
+        ).length
+
+        return {
+            total: totalWindows,
+            enabled: enabledWindows,
+            disabled: totalWindows - enabledWindows,
+            withAssignedStaff,
+        }
+    }, [windows, staffAssignedByWindow])
+
+    const assignedStaffForTargetWin = React.useMemo(() => {
+        if (!assignTargetWin?._id) return []
+        return staffAssignedByWindow.get(assignTargetWin._id) ?? []
+    }, [assignTargetWin, staffAssignedByWindow])
 
     return (
         <DashboardLayout
@@ -632,7 +1036,8 @@ export default function AdminWindowsPage() {
                             <div className="min-w-0">
                                 <CardTitle>Window Management</CardTitle>
                                 <CardDescription>
-                                    Create, update, and delete service windows with a clean single-department mapping.
+                                    Manage window records, link multiple departments, and keep one staff
+                                    assignment per window.
                                 </CardDescription>
                             </div>
 
@@ -648,8 +1053,11 @@ export default function AdminWindowsPage() {
                                 </Button>
 
                                 <Button
-                                    onClick={openCreateDialog}
-                                    disabled={saving}
+                                    onClick={() => {
+                                        resetCreateWinForm()
+                                        setCreateWinOpen(true)
+                                    }}
+                                    disabled={saving || !hasDepartmentOptions}
                                     className="w-full gap-2 sm:w-auto"
                                 >
                                     <Plus className="h-4 w-4" />
@@ -665,6 +1073,7 @@ export default function AdminWindowsPage() {
                                 <Badge variant="secondary">Total: {stats.total}</Badge>
                                 <Badge variant="default">Enabled: {stats.enabled}</Badge>
                                 <Badge variant="secondary">Disabled: {stats.disabled}</Badge>
+                                <Badge variant="secondary">With staff: {stats.withAssignedStaff}</Badge>
                             </div>
 
                             <div className="flex items-center gap-2">
@@ -675,52 +1084,49 @@ export default function AdminWindowsPage() {
                     </CardHeader>
 
                     <CardContent className="min-w-0">
+                        {!hasDepartmentOptions && !loading ? (
+                            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                                No enabled departments were loaded. Window create and edit actions stay
+                                disabled until the department endpoint responds.
+                            </div>
+                        ) : null}
+
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
                                 <Input
-                                    value={searchQuery}
-                                    onChange={(event) => setSearchQuery(event.target.value)}
-                                    placeholder="Search windows..."
+                                    value={winQ}
+                                    onChange={(e) => setWinQ(e.target.value)}
+                                    placeholder="Search windows…"
                                     className="w-full min-w-0 md:w-80"
                                 />
 
-                                <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-                                    <SelectTrigger className="w-full min-w-0 md:w-72">
+                                <Select value={winDeptFilter} onValueChange={setWinDeptFilter}>
+                                    <SelectTrigger className="w-full min-w-0 md:w-80">
                                         <SelectValue placeholder="Filter by department" />
                                     </SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="all">All departments</SelectItem>
-                                        {departments.map((department) => (
-                                            <SelectItem key={department._id} value={department._id}>
-                                                {department.name}
+                                        {departments.map((d) => (
+                                            <SelectItem key={d._id} value={d._id}>
+                                                {d.name}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>
-
-                                <Select
-                                    value={statusFilter}
-                                    onValueChange={(value) =>
-                                        setStatusFilter(value as "all" | "enabled" | "disabled")
-                                    }
-                                >
-                                    <SelectTrigger className="w-full min-w-0 md:w-52">
-                                        <SelectValue placeholder="Filter by status" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All statuses</SelectItem>
-                                        <SelectItem value="enabled">Enabled</SelectItem>
-                                        <SelectItem value="disabled">Disabled</SelectItem>
-                                    </SelectContent>
-                                </Select>
                             </div>
+
+                            <Tabs
+                                value={winStatusTab}
+                                onValueChange={(v) => setWinStatusTab(v as "all" | "enabled" | "disabled")}
+                                className="w-full md:w-auto"
+                            >
+                                <TabsList className="grid w-full grid-cols-3 md:w-80">
+                                    <TabsTrigger value="all">All</TabsTrigger>
+                                    <TabsTrigger value="enabled">Enabled</TabsTrigger>
+                                    <TabsTrigger value="disabled">Disabled</TabsTrigger>
+                                </TabsList>
+                            </Tabs>
                         </div>
-
-                        {enabledDepartments.length === 0 && !loading ? (
-                            <div className="mt-4 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                                No enabled departments found. Create or enable a department first before adding a window.
-                            </div>
-                        ) : null}
 
                         <div className="mt-4">
                             {loading ? (
@@ -736,75 +1142,164 @@ export default function AdminWindowsPage() {
                                         <TableHeader>
                                             <TableRow>
                                                 <TableHead>Window</TableHead>
-                                                <TableHead>Department</TableHead>
-                                                <TableHead className="hidden sm:table-cell">Number</TableHead>
+                                                <TableHead className="hidden md:table-cell">
+                                                    Departments
+                                                </TableHead>
+                                                <TableHead className="hidden md:table-cell">
+                                                    Staff assigned
+                                                </TableHead>
                                                 <TableHead className="text-right">Status</TableHead>
                                                 <TableHead className="w-14" />
                                             </TableRow>
                                         </TableHeader>
 
                                         <TableBody>
-                                            {rows.map((window) => (
-                                                <TableRow key={getWindowId(window)}>
-                                                    <TableCell className="font-medium">
-                                                        <div className="flex min-w-0 flex-col">
-                                                            <span className="truncate">{window.name}</span>
-                                                            <span className="truncate text-xs text-muted-foreground sm:hidden">
-                                                                #{window.number} · {getDepartmentLabel(window, departmentById)}
-                                                            </span>
-                                                        </div>
-                                                    </TableCell>
+                                            {winRows.map((w) => {
+                                                const windowDepartmentIds = getWindowDepartmentIds(w)
+                                                const deptNames = departmentLabelList(windowDepartmentIds, deptById)
+                                                const preview = deptNames.slice(0, 2).join(", ")
+                                                const deptText =
+                                                    deptNames.length > 2
+                                                        ? `${preview} +${deptNames.length - 2}`
+                                                        : preview || "—"
 
-                                                    <TableCell>
-                                                        <span className="text-muted-foreground">
-                                                            {getDepartmentLabel(window, departmentById)}
-                                                        </span>
-                                                    </TableCell>
+                                                const assignedStaff = staffAssignedByWindow.get(w._id) ?? []
+                                                const assignedPrimary = assignedStaff[0] ?? null
+                                                const extraAssignedCount = Math.max(0, assignedStaff.length - 1)
+                                                const assignedDisplay = assignedPrimary
+                                                    ? `${assignedPrimary.name || assignedPrimary.email}`
+                                                    : "—"
 
-                                                    <TableCell className="hidden sm:table-cell">
-                                                        <span className="text-muted-foreground">#{window.number}</span>
-                                                    </TableCell>
-
-                                                    <TableCell className="text-right">
-                                                        {statusBadge(window.enabled)}
-                                                    </TableCell>
-
-                                                    <TableCell className="text-right">
-                                                        <DropdownMenu>
-                                                            <DropdownMenuTrigger asChild>
-                                                                <Button
-                                                                    variant="ghost"
-                                                                    size="icon"
-                                                                    aria-label="Window actions"
+                                                return (
+                                                    <TableRow key={w._id}>
+                                                        <TableCell className="font-medium">
+                                                            <div className="flex min-w-0 flex-col">
+                                                                <span className="truncate">
+                                                                    {w.name}{" "}
+                                                                    <span className="text-muted-foreground">
+                                                                        (#{w.number})
+                                                                    </span>
+                                                                </span>
+                                                                <span
+                                                                    className="truncate text-xs text-muted-foreground md:hidden"
+                                                                    title={deptNames.join(", ")}
                                                                 >
-                                                                    <MoreHorizontal className="h-4 w-4" />
-                                                                </Button>
-                                                            </DropdownMenuTrigger>
+                                                                    {deptText}
+                                                                </span>
+                                                                <span className="truncate text-xs text-muted-foreground md:hidden">
+                                                                    Staff: {assignedDisplay}
+                                                                    {extraAssignedCount > 0
+                                                                        ? ` (+${extraAssignedCount} extra)`
+                                                                        : ""}
+                                                                </span>
+                                                            </div>
+                                                        </TableCell>
 
-                                                            <DropdownMenuContent align="end" className="w-48">
-                                                                <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                                                                <DropdownMenuSeparator />
-                                                                <DropdownMenuItem
-                                                                    onClick={() => openEditDialog(window)}
-                                                                    className="cursor-pointer"
-                                                                >
-                                                                    <Pencil className="mr-2 h-4 w-4" />
-                                                                    Edit window
-                                                                </DropdownMenuItem>
-                                                                <DropdownMenuItem
-                                                                    onClick={() => openDeleteDialog(window)}
-                                                                    className="cursor-pointer text-destructive focus:text-destructive"
-                                                                >
-                                                                    <Trash2 className="mr-2 h-4 w-4" />
-                                                                    Delete window
-                                                                </DropdownMenuItem>
-                                                            </DropdownMenuContent>
-                                                        </DropdownMenu>
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))}
+                                                        <TableCell className="hidden md:table-cell">
+                                                            <div className="min-w-0">
+                                                                {deptNames.length > 0 ? (
+                                                                    <p
+                                                                        className="truncate text-muted-foreground"
+                                                                        title={deptNames.join(", ")}
+                                                                    >
+                                                                        {deptText}
+                                                                    </p>
+                                                                ) : (
+                                                                    <span className="text-muted-foreground">—</span>
+                                                                )}
+                                                            </div>
+                                                        </TableCell>
 
-                                            {rows.length === 0 ? (
+                                                        <TableCell className="hidden md:table-cell">
+                                                            {assignedPrimary ? (
+                                                                <div className="min-w-0">
+                                                                    <Badge variant="secondary">1</Badge>
+                                                                    <p className="mt-1 truncate text-xs text-muted-foreground">
+                                                                        {assignedDisplay}
+                                                                    </p>
+                                                                    {extraAssignedCount > 0 ? (
+                                                                        <p className="truncate text-xs text-amber-600">
+                                                                            +{extraAssignedCount} extra assignment
+                                                                            {extraAssignedCount > 1 ? "s" : ""}
+                                                                        </p>
+                                                                    ) : null}
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="link"
+                                                                        size="sm"
+                                                                        className="h-auto p-0 text-xs"
+                                                                        onClick={() => openAssignStaff(w)}
+                                                                    >
+                                                                        Manage assignment
+                                                                    </Button>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="text-muted-foreground">—</span>
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="link"
+                                                                        size="sm"
+                                                                        className="h-auto p-0 text-xs"
+                                                                        onClick={() => openAssignStaff(w)}
+                                                                    >
+                                                                        Assign staff
+                                                                    </Button>
+                                                                </div>
+                                                            )}
+                                                        </TableCell>
+
+                                                        <TableCell className="text-right">
+                                                            {statusBadge(w.enabled)}
+                                                        </TableCell>
+
+                                                        <TableCell className="text-right">
+                                                            <DropdownMenu>
+                                                                <DropdownMenuTrigger asChild>
+                                                                    <Button
+                                                                        variant="ghost"
+                                                                        size="icon"
+                                                                        aria-label="Row actions"
+                                                                    >
+                                                                        <MoreHorizontal className="h-4 w-4" />
+                                                                    </Button>
+                                                                </DropdownMenuTrigger>
+
+                                                                <DropdownMenuContent
+                                                                    align="end"
+                                                                    className="w-52"
+                                                                >
+                                                                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                                                    <DropdownMenuSeparator />
+                                                                    <DropdownMenuItem
+                                                                        onClick={() => openAssignStaff(w)}
+                                                                        className="cursor-pointer"
+                                                                    >
+                                                                        <UserPlus2 className="mr-2 h-4 w-4" />
+                                                                        Assign staff
+                                                                    </DropdownMenuItem>
+                                                                    <DropdownMenuItem
+                                                                        onClick={() => openEditWin(w)}
+                                                                        className="cursor-pointer"
+                                                                        disabled={!hasDepartmentOptions}
+                                                                    >
+                                                                        Edit window
+                                                                    </DropdownMenuItem>
+                                                                    <DropdownMenuItem
+                                                                        onClick={() => openDeleteWin(w)}
+                                                                        className="cursor-pointer text-destructive focus:text-destructive"
+                                                                    >
+                                                                        <Trash2 className="mr-2 h-4 w-4" />
+                                                                        Delete window
+                                                                    </DropdownMenuItem>
+                                                                </DropdownMenuContent>
+                                                            </DropdownMenu>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                )
+                                            })}
+
+                                            {winRows.length === 0 ? (
                                                 <TableRow>
                                                     <TableCell
                                                         colSpan={5}
@@ -823,13 +1318,7 @@ export default function AdminWindowsPage() {
                 </Card>
             </div>
 
-            <Dialog
-                open={createOpen}
-                onOpenChange={(open) => {
-                    setCreateOpen(open)
-                    if (!open) resetCreateForm()
-                }}
-            >
+            <Dialog open={createWinOpen} onOpenChange={setCreateWinOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
                         <DialogTitle>Create window</DialogTitle>
@@ -837,49 +1326,40 @@ export default function AdminWindowsPage() {
 
                     <div className="grid gap-4">
                         <div className="grid gap-2">
-                            <Label htmlFor="create-window-name">Window name</Label>
-                            <Input
-                                id="create-window-name"
-                                value={createName}
-                                onChange={(event) => setCreateName(event.target.value)}
-                                placeholder="e.g., Registrar Window 1"
+                            <Label>Departments</Label>
+                            <DepartmentMultiSelect
+                                value={cWinDepartmentIds}
+                                onChange={setCWinDepartmentIds}
+                                options={enabledDepartments}
+                                placeholder="Select departments"
+                                disabled={saving || !hasDepartmentOptions}
                             />
-                        </div>
-
-                        <div className="grid gap-2">
-                            <Label htmlFor="create-window-number">Window number</Label>
-                            <Input
-                                id="create-window-number"
-                                type="number"
-                                min={1}
-                                value={createNumber}
-                                onChange={(event) => setCreateNumber(event.target.value)}
-                            />
-                        </div>
-
-                        <div className="grid gap-2">
-                            <Label>Department</Label>
-                            <Select
-                                value={createDepartmentId || "none"}
-                                onValueChange={(value) =>
-                                    setCreateDepartmentId(value === "none" ? "" : value)
-                                }
-                            >
-                                <SelectTrigger className="w-full">
-                                    <SelectValue placeholder="Select department" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="none">Select department</SelectItem>
-                                    {enabledDepartments.map((department) => (
-                                        <SelectItem key={department._id} value={department._id}>
-                                            {department.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
                             <p className="text-xs text-muted-foreground">
-                                Only enabled departments are available for new windows.
+                                Choose one or more enabled departments.
                             </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="c-win-name">Window name</Label>
+                            <Input
+                                id="c-win-name"
+                                value={cWinName}
+                                onChange={(e) => setCWinName(e.target.value)}
+                                placeholder="e.g., Window A"
+                                disabled={saving || !hasDepartmentOptions}
+                            />
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="c-win-number">Window number</Label>
+                            <Input
+                                id="c-win-number"
+                                type="number"
+                                value={String(cWinNumber)}
+                                onChange={(e) => setCWinNumber(safeInt(e.target.value))}
+                                min={1}
+                                disabled={saving || !hasDepartmentOptions}
+                            />
                         </div>
                     </div>
 
@@ -887,7 +1367,10 @@ export default function AdminWindowsPage() {
                         <Button
                             type="button"
                             variant="outline"
-                            onClick={() => setCreateOpen(false)}
+                            onClick={() => {
+                                setCreateWinOpen(false)
+                                resetCreateWinForm()
+                            }}
                             disabled={saving}
                             className="w-full sm:mr-2 sm:w-auto"
                         >
@@ -896,26 +1379,17 @@ export default function AdminWindowsPage() {
 
                         <Button
                             type="button"
-                            onClick={() => void handleCreateWindow()}
-                            disabled={saving || enabledDepartments.length === 0}
+                            onClick={() => void handleCreateWin()}
+                            disabled={saving || !hasDepartmentOptions}
                             className="w-full sm:w-auto"
                         >
-                            {saving ? "Creating..." : "Create"}
+                            {saving ? "Creating…" : "Create"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
 
-            <Dialog
-                open={editOpen}
-                onOpenChange={(open) => {
-                    setEditOpen(open)
-                    if (!open) {
-                        setSelectedWindow(null)
-                        resetEditForm()
-                    }
-                }}
-            >
+            <Dialog open={editWinOpen} onOpenChange={setEditWinOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
                         <DialogTitle>Edit window</DialogTitle>
@@ -923,55 +1397,49 @@ export default function AdminWindowsPage() {
 
                     <div className="grid gap-4">
                         <div className="grid gap-2">
-                            <Label htmlFor="edit-window-name">Window name</Label>
+                            <Label>Departments</Label>
+                            <DepartmentMultiSelect
+                                value={eWinDepartmentIds}
+                                onChange={setEWinDepartmentIds}
+                                options={enabledDepartments}
+                                placeholder="Select departments"
+                                disabled={saving || !hasDepartmentOptions}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                One window can include multiple departments.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="e-win-name">Window name</Label>
                             <Input
-                                id="edit-window-name"
-                                value={editName}
-                                onChange={(event) => setEditName(event.target.value)}
+                                id="e-win-name"
+                                value={eWinName}
+                                onChange={(e) => setEWinName(e.target.value)}
+                                disabled={saving || !hasDepartmentOptions}
                             />
                         </div>
 
                         <div className="grid gap-2">
-                            <Label htmlFor="edit-window-number">Window number</Label>
+                            <Label htmlFor="e-win-number">Window number</Label>
                             <Input
-                                id="edit-window-number"
+                                id="e-win-number"
                                 type="number"
+                                value={String(eWinNumber)}
+                                onChange={(e) => setEWinNumber(safeInt(e.target.value))}
                                 min={1}
-                                value={editNumber}
-                                onChange={(event) => setEditNumber(event.target.value)}
+                                disabled={saving || !hasDepartmentOptions}
                             />
-                        </div>
-
-                        <div className="grid gap-2">
-                            <Label>Department</Label>
-                            <Select
-                                value={editDepartmentId || "none"}
-                                onValueChange={(value) =>
-                                    setEditDepartmentId(value === "none" ? "" : value)
-                                }
-                            >
-                                <SelectTrigger className="w-full">
-                                    <SelectValue placeholder="Select department" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="none">Select department</SelectItem>
-                                    {departments.map((department) => (
-                                        <SelectItem key={department._id} value={department._id}>
-                                            {department.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
                         </div>
 
                         <div className="flex items-center justify-between rounded-lg border p-3">
                             <div className="grid gap-0.5">
                                 <div className="text-sm font-medium">Enabled</div>
                                 <div className="text-xs text-muted-foreground">
-                                    Disabled windows stay saved but can be hidden from active workflows.
+                                    Disabled windows are hidden in normal assignment flow.
                                 </div>
                             </div>
-                            <Switch checked={editEnabled} onCheckedChange={setEditEnabled} />
+                            <Switch checked={eWinEnabled} onCheckedChange={setEWinEnabled} disabled={saving} />
                         </div>
                     </div>
 
@@ -979,7 +1447,11 @@ export default function AdminWindowsPage() {
                         <Button
                             type="button"
                             variant="outline"
-                            onClick={() => setEditOpen(false)}
+                            onClick={() => {
+                                setEditWinOpen(false)
+                                setSelectedWin(null)
+                                setEWinDepartmentIds([])
+                            }}
                             disabled={saving}
                             className="w-full sm:mr-2 sm:w-auto"
                         >
@@ -988,47 +1460,192 @@ export default function AdminWindowsPage() {
 
                         <Button
                             type="button"
-                            onClick={() => void handleUpdateWindow()}
-                            disabled={saving}
+                            onClick={() => void handleSaveWin()}
+                            disabled={saving || !hasDepartmentOptions}
                             className="w-full sm:w-auto"
                         >
-                            {saving ? "Saving..." : "Save"}
+                            {saving ? "Saving…" : "Save"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
 
-            <AlertDialog
-                open={deleteOpen}
+            <Dialog
+                open={assignStaffOpen}
                 onOpenChange={(open) => {
-                    setDeleteOpen(open)
-                    if (!open) setSelectedWindow(null)
+                    setAssignStaffOpen(open)
+                    if (!open) {
+                        setAssignTargetWin(null)
+                        setAStaffId("none")
+                    }
                 }}
             >
+                <DialogContent className="sm:max-w-xl">
+                    <DialogHeader>
+                        <DialogTitle>Assign staff to window</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="grid gap-4">
+                        <div className="rounded-lg border p-3">
+                            <div className="text-sm font-medium">
+                                {assignTargetWin?.name || "—"}{" "}
+                                {assignTargetWin ? (
+                                    <span className="text-muted-foreground">
+                                        (#{assignTargetWin.number})
+                                    </span>
+                                ) : null}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                                Departments:{" "}
+                                {assignTargetWin
+                                    ? (departmentLabelList(
+                                          getWindowDepartmentIds(assignTargetWin),
+                                          deptById
+                                      ).join(", ") || "—")
+                                    : "—"}
+                            </div>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Select staff</Label>
+                            <Select value={aStaffId} onValueChange={setAStaffId}>
+                                <SelectTrigger className="w-full min-w-0">
+                                    <SelectValue placeholder="Choose staff account" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="none">Select…</SelectItem>
+                                    {assignableStaff.map((s) => {
+                                        const staffId = getStaffId(s)
+                                        const currentWindow = s.assignedWindow
+                                            ? windowById.get(s.assignedWindow)
+                                            : null
+                                        const tag = currentWindow
+                                            ? ` • currently at ${currentWindow.name} (#${currentWindow.number})`
+                                            : ""
+
+                                        return (
+                                            <SelectItem key={staffId} value={staffId}>
+                                                {s.name} ({s.email}){tag}
+                                            </SelectItem>
+                                        )
+                                    })}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Staff can only be in one window at a time. Reassigning here
+                                automatically removes any previous staff attached to this window.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Currently assigned in this window</Label>
+                            <div className="max-h-48 overflow-y-auto rounded-lg border p-2">
+                                {assignedStaffForTargetWin.length === 0 ? (
+                                    <p className="px-1 py-2 text-sm text-muted-foreground">
+                                        No staff assigned yet.
+                                    </p>
+                                ) : (
+                                    <div className="grid gap-2">
+                                        {assignedStaffForTargetWin.map((s) => {
+                                            const sid = getStaffId(s)
+                                            return (
+                                                <div
+                                                    key={sid}
+                                                    className="flex items-center justify-between rounded-md border px-3 py-2"
+                                                >
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-medium">
+                                                            {s.name}
+                                                        </p>
+                                                        <p className="truncate text-xs text-muted-foreground">
+                                                            {s.email}
+                                                        </p>
+                                                    </div>
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => void handleUnassignStaffFromWindow(s)}
+                                                        disabled={saving}
+                                                        className="gap-1"
+                                                    >
+                                                        <UserMinus className="h-4 w-4" />
+                                                        Unassign
+                                                    </Button>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-0">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                                setAssignStaffOpen(false)
+                                setAssignTargetWin(null)
+                                setAStaffId("none")
+                            }}
+                            disabled={saving}
+                            className="w-full sm:mr-2 sm:w-auto"
+                        >
+                            Close
+                        </Button>
+
+                        <Button
+                            type="button"
+                            onClick={() => void handleAssignStaffToWindow()}
+                            disabled={saving}
+                            className="w-full gap-2 sm:w-auto"
+                        >
+                            <UserPlus2 className="h-4 w-4" />
+                            {saving ? "Assigning…" : "Assign staff"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <AlertDialog open={deleteWinOpen} onOpenChange={setDeleteWinOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Delete window?</AlertDialogTitle>
                         <AlertDialogDescription>
                             This will permanently delete{" "}
                             <span className="font-medium">
-                                {selectedWindow
-                                    ? `${selectedWindow.name} (#${selectedWindow.number})`
+                                {selectedWin?.name
+                                    ? `${selectedWin.name} (#${selectedWin.number})`
                                     : "this window"}
-                            </span>.
+                            </span>
+                            .
+                            <br />
+                            <br />
+                            A window can only be deleted if no staff account is currently assigned to it.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
 
                     <AlertDialogFooter>
-                        <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+                        <AlertDialogCancel
+                            disabled={saving}
+                            onClick={() => {
+                                setDeleteWinOpen(false)
+                                setSelectedWin(null)
+                            }}
+                        >
+                            Cancel
+                        </AlertDialogCancel>
                         <AlertDialogAction
-                            onClick={(event) => {
-                                event.preventDefault()
-                                void handleDeleteWindow()
+                            onClick={(e) => {
+                                e.preventDefault()
+                                void handleDeleteWin()
                             }}
                             disabled={saving}
                             className="bg-destructive text-white hover:bg-destructive/90"
                         >
-                            {saving ? "Deleting..." : "Delete"}
+                            {saving ? "Deleting…" : "Delete"}
                         </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
