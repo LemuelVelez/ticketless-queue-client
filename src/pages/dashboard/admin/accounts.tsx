@@ -19,7 +19,7 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { ADMIN_NAV_ITEMS } from "@/components/dashboard-nav"
 import type { DashboardUser } from "@/components/nav-user"
 
-import { toApiPath } from "@/api/api"
+import { API_PATHS, toApiPath } from "@/api/api"
 import { useSession } from "@/hooks/use-session"
 import { api, ApiError } from "@/lib/http"
 
@@ -97,29 +97,82 @@ function encodeAccountId(value: string) {
   return encodeURIComponent(String(value ?? "").trim())
 }
 
+function buildUniqueApiPaths(values: string[]) {
+  const seen = new Set<string>()
+  const out: string[] = []
+
+  for (const value of values) {
+    const normalized = toApiPath(value)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    out.push(normalized)
+  }
+
+  return out
+}
+
+function isRetryableEndpointError(error: unknown) {
+  return error instanceof ApiError && (error.status === 404 || error.status === 405 || error.status === 501)
+}
+
+async function tryApiPaths<T>(paths: string[], request: (path: string) => Promise<T>) {
+  let lastError: unknown = null
+
+  for (const path of paths) {
+    try {
+      return await request(path)
+    } catch (error) {
+      if (isRetryableEndpointError(error)) {
+        lastError = error
+        continue
+      }
+
+      throw error
+    }
+  }
+
+  if (lastError instanceof Error) throw lastError
+  throw new Error("Failed to complete account request.")
+}
+
 const ACCOUNT_API_PATHS = {
-  list: toApiPath("/admin/staff"),
-  participants: toApiPath("/admin/participants"),
-  create: toApiPath("/admin/staff"),
-  byId: (id: string) => toApiPath(`/admin/staff/${encodeAccountId(id)}`),
-  resendLoginCredentialsCandidates: (id: string) => [
-    toApiPath(`/admin/staff/${encodeAccountId(id)}/resend-login-credentials`),
-    toApiPath(`/admin/staff/${encodeAccountId(id)}/resend-credentials`),
-    toApiPath(`/admin/staff/${encodeAccountId(id)}/resend-login`),
-  ],
+  listCandidates: buildUniqueApiPaths([API_PATHS.users.staff, API_PATHS.admin.staff]),
+  participantsCandidates: buildUniqueApiPaths([API_PATHS.users.participants, API_PATHS.admin.participants]),
+  createCandidates: buildUniqueApiPaths([API_PATHS.users.staff, API_PATHS.admin.staff]),
+  byIdCandidates: (id: string) =>
+    buildUniqueApiPaths([
+      API_PATHS.users.byId(id),
+      `/users/staff/${encodeAccountId(id)}`,
+      `/admin/staff/${encodeAccountId(id)}`,
+    ]),
+  resendLoginCredentialsCandidates: (id: string) =>
+    buildUniqueApiPaths([
+      API_PATHS.users.staffResendLogin(id),
+      API_PATHS.users.staffSendLogin(id),
+      `/users/staff/${encodeAccountId(id)}/resend-login-credentials`,
+      `/users/staff/${encodeAccountId(id)}/resend-credentials`,
+      `/admin/staff/${encodeAccountId(id)}/resend-login-credentials`,
+      `/admin/staff/${encodeAccountId(id)}/resend-credentials`,
+      `/admin/staff/${encodeAccountId(id)}/resend-login`,
+      `/admin/staff/${encodeAccountId(id)}/send-login`,
+    ]),
 } as const
 
 const accountApi = {
   async listAccounts(): Promise<AccountListResponse> {
     const [staffResult, participantResult] = await Promise.allSettled([
-      api.getData<AccountUser[]>(ACCOUNT_API_PATHS.list, {
-        auth: "staff",
-        params: { includeInactive: true },
-      }),
-      api.getData<AccountUser[]>(ACCOUNT_API_PATHS.participants, {
-        auth: "staff",
-        params: { includeInactive: true },
-      }),
+      tryApiPaths(ACCOUNT_API_PATHS.listCandidates, (path) =>
+        api.getData<AccountUser[]>(path, {
+          auth: "staff",
+          params: { includeInactive: true },
+        }),
+      ),
+      tryApiPaths(ACCOUNT_API_PATHS.participantsCandidates, (path) =>
+        api.getData<AccountUser[]>(path, {
+          auth: "staff",
+          params: { includeInactive: true },
+        }),
+      ),
     ])
 
     const errors: string[] = []
@@ -140,13 +193,13 @@ const accountApi = {
 
     if (staffResult.status === "rejected") {
       errors.push(
-        staffResult.reason instanceof Error ? staffResult.reason.message : "Failed to load staff accounts."
+        staffResult.reason instanceof Error ? staffResult.reason.message : "Failed to load staff accounts.",
       )
     }
 
     if (participantResult.status === "rejected") {
       errors.push(
-        participantResult.reason instanceof Error ? participantResult.reason.message : "Failed to load participant accounts."
+        participantResult.reason instanceof Error ? participantResult.reason.message : "Failed to load participant accounts.",
       )
     }
 
@@ -154,55 +207,45 @@ const accountApi = {
   },
 
   createAccount(payload: Record<string, unknown>) {
-    return api.postData<Record<string, unknown>>(ACCOUNT_API_PATHS.create, payload, {
-      auth: "staff",
-    })
+    return tryApiPaths(ACCOUNT_API_PATHS.createCandidates, (path) =>
+      api.postData<Record<string, unknown>>(path, payload, {
+        auth: "staff",
+      }),
+    )
   },
 
   async updateAccount(id: string, payload: Record<string, unknown>) {
-    const path = ACCOUNT_API_PATHS.byId(id)
-
-    try {
-      return await api.patchData<Record<string, unknown>>(path, payload, {
-        auth: "staff",
-      })
-    } catch (e) {
-      if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
-        return api.putData<Record<string, unknown>>(path, payload, {
-          auth: "staff",
-        })
-      }
-
-      throw e
-    }
-  },
-
-  async resendLoginCredentials(id: string) {
-    let lastError: unknown = null
-
-    for (const path of ACCOUNT_API_PATHS.resendLoginCredentialsCandidates(id)) {
+    return tryApiPaths(ACCOUNT_API_PATHS.byIdCandidates(id), async (path) => {
       try {
-        return await api.postData<Record<string, unknown>>(path, undefined, {
+        return await api.patchData<Record<string, unknown>>(path, payload, {
           auth: "staff",
         })
       } catch (e) {
         if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
-          lastError = e
-          continue
+          return api.putData<Record<string, unknown>>(path, payload, {
+            auth: "staff",
+          })
         }
 
         throw e
       }
-    }
+    })
+  },
 
-    if (lastError instanceof Error) throw lastError
-    throw new Error("Failed to resend login credentials.")
+  async resendLoginCredentials(id: string) {
+    return tryApiPaths(ACCOUNT_API_PATHS.resendLoginCredentialsCandidates(id), (path) =>
+      api.postData<Record<string, unknown>>(path, undefined, {
+        auth: "staff",
+      }),
+    )
   },
 
   deleteAccount(id: string) {
-    return api.deleteData<Record<string, unknown>>(ACCOUNT_API_PATHS.byId(id), {
-      auth: "staff",
-    })
+    return tryApiPaths(ACCOUNT_API_PATHS.byIdCandidates(id), (path) =>
+      api.deleteData<Record<string, unknown>>(path, {
+        auth: "staff",
+      }),
+    )
   },
 }
 
