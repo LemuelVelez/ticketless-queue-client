@@ -5,7 +5,7 @@ export type ApiRouteParam = string | number
 export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
-const DEFAULT_LOCAL_API_PORT = "5000"
+const DEFAULT_LOCAL_API_PORT = "3000"
 
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
     ["/admin/staff", "/users/staff"],
@@ -90,23 +90,11 @@ function normalizeExplicitLocalDevApiBase(value: string) {
         if (!isLikelyLocalDevHostname(url.hostname)) return raw
 
         const hostname = normalizeDevHostname(url.hostname)
-        const port = isFrontendDevPort(url.port)
-            ? DEFAULT_LOCAL_API_PORT
-            : url.port
-
         const changedHostname = Boolean(hostname) && hostname !== url.hostname
-        const changedPort = port !== url.port
 
-        if (!changedHostname && !changedPort) return raw
+        if (!changedHostname) return raw
 
-        if (changedHostname) {
-            url.hostname = hostname
-        }
-
-        if (changedPort) {
-            url.port = port
-        }
-
+        url.hostname = hostname
         return stripTrailingSlash(url.toString())
     } catch {
         return raw
@@ -131,7 +119,9 @@ function inferServerDevApiBaseUrl() {
 
     const explicitBase = stripTrailingSlash(
         normalizeExplicitLocalDevApiBase(
-            getRuntimeEnv("VITE_API_BASE_URL") ||
+            getRuntimeEnv("VITE_SERVER_PUBLIC_URL") ||
+                getRuntimeEnv("SERVER_PUBLIC_URL") ||
+                getRuntimeEnv("VITE_API_BASE_URL") ||
                 getRuntimeEnv("NEXT_PUBLIC_API_BASE_URL") ||
                 getRuntimeEnv("API_BASE_URL")
         )

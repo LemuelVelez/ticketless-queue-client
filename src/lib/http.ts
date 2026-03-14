@@ -30,8 +30,7 @@ export class ApiError extends Error {
 
 type QueryParamValue = string | number | boolean | null | undefined
 
-const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
-const DEFAULT_LOCAL_API_PORT = "5000"
+const DEFAULT_LOCAL_API_PORT = "3000"
 
 /**
  * ✅ Public-display friendly participant name picker (frontend mirror of displayController behavior).
@@ -266,10 +265,6 @@ function normalizeDevHostname(hostname: string) {
     return raw
 }
 
-function isFrontendDevPort(port: string) {
-    return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
-}
-
 function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = String(value ?? "").trim().replace(/\/+$/, "")
     if (!raw || raw === API_PREFIX) return raw
@@ -279,21 +274,12 @@ function normalizeExplicitLocalDevApiBase(value: string) {
         if (!isLikelyLocalDevHostname(url.hostname)) return raw
 
         const hostname = normalizeDevHostname(url.hostname)
-        const port = isFrontendDevPort(url.port)
-            ? DEFAULT_LOCAL_API_PORT
-            : url.port
-
         const changedHostname = Boolean(hostname) && hostname !== url.hostname
-        const changedPort = port !== url.port
 
-        if (!changedHostname && !changedPort) return raw
+        if (!changedHostname) return raw
 
         if (changedHostname) {
             url.hostname = hostname
-        }
-
-        if (changedPort) {
-            url.port = port
         }
 
         return String(url.toString()).replace(/\/+$/, "")
@@ -532,7 +518,9 @@ function absolutizeRelativeApiUrlForServer(url: string) {
     if (!raw.startsWith(API_PREFIX)) return raw
 
     const explicitBase = normalizeApiOriginBase(
-        getRuntimeEnv("VITE_API_BASE_URL") ||
+        getRuntimeEnv("VITE_SERVER_PUBLIC_URL") ||
+            getRuntimeEnv("SERVER_PUBLIC_URL") ||
+            getRuntimeEnv("VITE_API_BASE_URL") ||
             getRuntimeEnv("NEXT_PUBLIC_API_BASE_URL") ||
             getRuntimeEnv("API_BASE_URL")
     )
