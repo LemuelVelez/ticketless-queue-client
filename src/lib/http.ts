@@ -31,7 +31,7 @@ export class ApiError extends Error {
 type QueryParamScalar = string | number | boolean | null | undefined
 type QueryParamValue = QueryParamScalar | readonly QueryParamScalar[]
 
-const DEFAULT_LOCAL_API_PORT = "5000"
+const DEFAULT_LOCAL_API_PORT = "3000"
 
 /**
  * ✅ Public-display friendly participant name picker (frontend mirror of displayController behavior).

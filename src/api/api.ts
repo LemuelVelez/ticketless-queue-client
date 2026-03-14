@@ -5,7 +5,7 @@ export type ApiRouteParam = string | number
 export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
-const DEFAULT_LOCAL_API_PORT = "5000"
+const DEFAULT_LOCAL_API_PORT = "3000"
 
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
     ["/admin/staff", "/users/staff"],

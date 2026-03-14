@@ -44,9 +44,13 @@ type ListResult<T> = {
     items: T[]
 }
 
-const DEPARTMENTS_BASE_PATH = "/departments"
-const SERVICE_WINDOWS_BASE_PATH = "/service-windows"
-const TRANSACTION_PURPOSES_BASE_PATH = "/transaction-purposes"
+const DEPARTMENTS_BASE_PATH = API_PATHS.departments.list
+const SERVICE_WINDOWS_BASE_PATH = API_PATHS.serviceWindows.list
+const TRANSACTION_PURPOSES_BASE_PATH = API_PATHS.transactionPurposes.list
+
+function getTransactionPurposeByIdPath(id: string) {
+    return `${TRANSACTION_PURPOSES_BASE_PATH}/${encodeURIComponent(id)}`
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value)
@@ -395,14 +399,14 @@ const adminApi = {
         }
     ) {
         return requestWithUpdateFallback<TransactionPurpose>(
-            `${TRANSACTION_PURPOSES_BASE_PATH}/${encodeURIComponent(id)}`,
+            getTransactionPurposeByIdPath(id),
             payload
         )
     },
 
     async deleteTransactionPurpose(id: string) {
         return api.deleteData<unknown>(
-            `${TRANSACTION_PURPOSES_BASE_PATH}/${encodeURIComponent(id)}`,
+            getTransactionPurposeByIdPath(id),
             { auth: "staff" }
         )
     },
