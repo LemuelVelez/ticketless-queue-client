@@ -5,17 +5,19 @@ export type ApiRouteParam = string | number
 export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
-const DEFAULT_LOCAL_API_PORT = "5000"
+const DEFAULT_LOCAL_API_PORT = "3000"
 
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
+    ["/admin/service-window", "/service-windows"],
+    ["/admin/window", "/service-windows"],
+    ["/admin/windows", "/service-windows"],
+    ["/admin/service-windows", "/service-windows"],
     ["/admin/staff", "/users/staff"],
     ["/admin/participants", "/users/participants"],
     ["/admin/reports", "/reports"],
     ["/windows", "/service-windows"],
     ["/window", "/service-windows"],
     ["/service-window", "/service-windows"],
-    ["/admin/windows", "/service-windows"],
-    ["/admin/service-windows", "/service-windows"],
 ]
 
 function stripTrailingSlash(value: string) {
@@ -86,30 +88,20 @@ function isFrontendDevPort(port: string) {
     return FRONTEND_DEV_PORTS.has(String(port ?? "").trim())
 }
 
-function normalizeLocalDevUrl(url: URL) {
-    if (!isLikelyLocalDevHostname(url.hostname)) return
-
-    const normalizedHostname = normalizeDevHostname(url.hostname)
-    if (normalizedHostname && normalizedHostname !== url.hostname) {
-        url.hostname = normalizedHostname
-    }
-
-    const normalizedPort = isFrontendDevPort(url.port)
-        ? DEFAULT_LOCAL_API_PORT
-        : String(url.port ?? "").trim()
-
-    if (normalizedPort !== String(url.port ?? "").trim()) {
-        url.port = normalizedPort
-    }
-}
-
 function normalizeExplicitLocalDevApiBase(value: string) {
     const raw = stripTrailingSlash(String(value ?? "").trim())
     if (!raw || raw === API_PREFIX) return raw
 
     try {
         const url = new URL(raw)
-        normalizeLocalDevUrl(url)
+        if (!isLikelyLocalDevHostname(url.hostname)) return raw
+
+        const hostname = normalizeDevHostname(url.hostname)
+        const changedHostname = Boolean(hostname) && hostname !== url.hostname
+
+        if (!changedHostname) return raw
+
+        url.hostname = hostname
         return stripTrailingSlash(url.toString())
     } catch {
         return raw
@@ -128,7 +120,14 @@ function normalizeAbsoluteUrl(value: string) {
 
     try {
         const url = new URL(candidate)
-        normalizeLocalDevUrl(url)
+
+        if (isLikelyLocalDevHostname(url.hostname)) {
+            const normalizedHostname = normalizeDevHostname(url.hostname)
+            if (normalizedHostname) {
+                url.hostname = normalizedHostname
+            }
+        }
+
         return url.toString()
     } catch {
         return raw
