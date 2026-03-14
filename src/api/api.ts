@@ -203,6 +203,10 @@ export const API_PATHS = {
         forgotPassword: "/auth/forgot-password",
         resetPassword: "/auth/reset-password",
         me: "/auth/me",
+        mePassword: "/auth/me/password",
+        changePassword: "/auth/change-password",
+        meAvatar: "/auth/me/avatar",
+        meAvatarPresign: "/auth/me/avatar/presign",
     },
     settings: {
         current: "/settings/current",
@@ -281,6 +285,10 @@ export const API_ROUTES = {
         forgotPassword: () => toApiUrl(API_PATHS.auth.forgotPassword),
         resetPassword: () => toApiUrl(API_PATHS.auth.resetPassword),
         me: () => toApiUrl(API_PATHS.auth.me),
+        mePassword: () => toApiUrl(API_PATHS.auth.mePassword),
+        changePassword: () => toApiUrl(API_PATHS.auth.changePassword),
+        meAvatar: () => toApiUrl(API_PATHS.auth.meAvatar),
+        meAvatarPresign: () => toApiUrl(API_PATHS.auth.meAvatarPresign),
     },
     settings: {
         current: () => toApiUrl(API_PATHS.settings.current),

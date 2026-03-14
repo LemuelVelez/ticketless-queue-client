@@ -343,6 +343,122 @@ const STAFF_ONLY_AUTH_PATH_PREFIXES = [
     .map((path) => toApiPath(path))
     .filter(Boolean)
 
+function uniqueStrings(values: Array<string | null | undefined>) {
+    const seen = new Set<string>()
+    const out: string[] = []
+
+    for (const value of values) {
+        const normalized = String(value ?? "").trim()
+        if (!normalized || seen.has(normalized)) continue
+        seen.add(normalized)
+        out.push(normalized)
+    }
+
+    return out
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+const SETTINGS_CURRENT_API_PATH = toApiPath(API_PATHS.settings.current)
+const SETTINGS_AVATAR_API_PATH = toApiPath(API_PATHS.settings.avatar)
+const SETTINGS_AVATAR_PRESIGN_API_PATH = toApiPath(
+    API_PATHS.settings.avatarPresign
+)
+
+const SETTINGS_CURRENT_COMPAT_PATHS = uniqueStrings(
+    [
+        API_PATHS.settings.current,
+        API_PATHS.auth.me,
+        "/users/me",
+        "/me",
+    ].map((path) => toApiPath(path))
+)
+
+const SETTINGS_AVATAR_COMPAT_PATHS = uniqueStrings(
+    [
+        API_PATHS.settings.avatar,
+        API_PATHS.auth.meAvatar,
+        "/users/me/avatar",
+        "/me/avatar",
+    ].map((path) => toApiPath(path))
+)
+
+const SETTINGS_AVATAR_PRESIGN_COMPAT_PATHS = uniqueStrings(
+    [
+        API_PATHS.settings.avatarPresign,
+        API_PATHS.auth.meAvatarPresign,
+        "/users/me/avatar/presign",
+        "/me/avatar/presign",
+    ].map((path) => toApiPath(path))
+)
+
+const SETTINGS_PASSWORD_COMPAT_PATHS = uniqueStrings(
+    [
+        API_PATHS.auth.mePassword,
+        API_PATHS.auth.changePassword,
+        "/users/me/password",
+        "/me/password",
+    ].map((path) => toApiPath(path))
+)
+
+function hasPasswordUpdatePayload(body: unknown) {
+    if (!isPlainRecord(body)) return false
+
+    const currentPassword = String(body.currentPassword ?? "").trim()
+    const newPassword = String(body.newPassword ?? "").trim()
+    const confirmPassword = String(body.confirmPassword ?? "").trim()
+
+    return Boolean(currentPassword || newPassword || confirmPassword)
+}
+
+function buildCompatibleFallbackPaths(
+    path: string,
+    method: HttpMethod,
+    body: unknown
+) {
+    const comparablePath = getComparableApiPath(path)
+    if (!comparablePath) return [] as string[]
+
+    if (method === "GET" && comparablePath === SETTINGS_CURRENT_API_PATH) {
+        return SETTINGS_CURRENT_COMPAT_PATHS.filter(
+            (candidate) => candidate !== comparablePath
+        )
+    }
+
+    if (method === "PATCH" && comparablePath === SETTINGS_CURRENT_API_PATH) {
+        const compatPaths = hasPasswordUpdatePayload(body)
+            ? [...SETTINGS_CURRENT_COMPAT_PATHS, ...SETTINGS_PASSWORD_COMPAT_PATHS]
+            : SETTINGS_CURRENT_COMPAT_PATHS
+
+        return uniqueStrings(compatPaths).filter(
+            (candidate) => candidate !== comparablePath
+        )
+    }
+
+    if (method === "POST" && comparablePath === SETTINGS_AVATAR_API_PATH) {
+        return SETTINGS_AVATAR_COMPAT_PATHS.filter(
+            (candidate) => candidate !== comparablePath
+        )
+    }
+
+    if (
+        method === "POST" &&
+        comparablePath === SETTINGS_AVATAR_PRESIGN_API_PATH
+    ) {
+        return SETTINGS_AVATAR_PRESIGN_COMPAT_PATHS.filter(
+            (candidate) => candidate !== comparablePath
+        )
+    }
+
+    return [] as string[]
+}
+
+function shouldTryCompatiblePathFallback(status: number) {
+    return [401, 403, 404, 405, 501].includes(status)
+}
+
 function getComparableApiPath(path: string) {
     const raw = String(path ?? "").trim()
     if (!raw) return ""
@@ -672,14 +788,23 @@ function isBrowserSameOriginUrl(url: string) {
     }
 }
 
+function canReplayRequestBody(body: BodyInit | undefined) {
+    if (body === undefined) return true
+    if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) {
+        return false
+    }
+    return true
+}
+
 function canRetryUnauthorizedWithIncludedCredentials(
-    method: HttpMethod,
+    _method: HttpMethod,
     url: string,
-    explicit?: RequestCredentials
+    explicit?: RequestCredentials,
+    body?: BodyInit
 ) {
     if (typeof window === "undefined") return false
     if (explicit) return false
-    if (method !== "GET") return false
+    if (!canReplayRequestBody(body)) return false
 
     return (
         isBrowserSameOriginUrl(url) || isBrowserTrustedLocalDevApiUrl(url)
@@ -690,6 +815,31 @@ function formatServerReason(reason: unknown): string {
     const s = String(reason ?? "").trim()
     if (!s) return ""
     return s.replace(/[_-]+/g, " ").trim()
+}
+
+function applyHeaderErrorMessage(
+    res: Response,
+    data: unknown
+): { data: unknown; headerErrorMsg: string } {
+    const headerErrorMsg =
+        res.headers.get("x-error-message") ||
+        res.headers.get("X-Error-Message") ||
+        ""
+
+    if (
+        headerErrorMsg &&
+        data &&
+        typeof data === "object" &&
+        !Array.isArray(data)
+    ) {
+        const d: any = data
+        if ("ok" in d && d.ok === false) {
+            if (!d.message && !d.error && !d.reason) d.message = headerErrorMsg
+            if (!d.reason) d.reason = headerErrorMsg
+        }
+    }
+
+    return { data, headerErrorMsg }
 }
 
 /** =========================
@@ -848,75 +998,116 @@ export async function apiRequest<T>(
         }
     }
 
-    const url = buildUrl(withQuery(path, params))
-    const resolvedCredentials = resolveCredentials(url, credentials, finalHeaders)
+    const runAttempt = async (targetPath: string) => {
+        const url = buildUrl(withQuery(targetPath, params))
+        const resolvedCredentials = resolveCredentials(
+            url,
+            credentials,
+            finalHeaders
+        )
 
-    let res: Response
-    try {
-        res = await fetch(url, {
-            method,
-            headers: finalHeaders,
-            body: finalBody,
-            signal,
-            credentials: resolvedCredentials,
-        })
-    } catch (err: any) {
-        const msg = `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`
-
-        // ✅ When caller explicitly opts out of throwing, return a safe JSON-ish payload
-        // (prevents UI crashes on SMS endpoints that are designed to be "no throw".)
-        if (throwOnError === false) {
-            return ({
-                ok: false,
-                error: "network_error",
-                reason: "network_error",
-                message: msg,
-                status: 0,
-                method,
-                url,
-                path,
-                detail: String(err?.message || err || ""),
-            } as any) as T
-        }
-
-        throw new ApiError(msg, 0, err, { method, url, path })
-    }
-
-    if (
-        res.status === 401 &&
-        resolvedCredentials !== "include" &&
-        canRetryUnauthorizedWithIncludedCredentials(method, url, credentials)
-    ) {
+        let res: Response
         try {
-            const retryHeaders = stripTokenAuthHeaders(finalHeaders)
-
             res = await fetch(url, {
                 method,
-                headers: retryHeaders,
+                headers: finalHeaders,
                 body: finalBody,
                 signal,
-                credentials: "include",
+                credentials: resolvedCredentials,
             })
-        } catch {
-            // keep original 401 response if fallback request cannot be made
+        } catch (err: any) {
+            const msg = `Cannot reach API server at ${url}. Check your API base URL and make sure the backend is running.`
+
+            if (throwOnError === false) {
+                return {
+                    ok: false as const,
+                    url,
+                    path: targetPath,
+                    res: null,
+                    data: {
+                        ok: false,
+                        error: "network_error",
+                        reason: "network_error",
+                        message: msg,
+                        status: 0,
+                        method,
+                        url,
+                        path: targetPath,
+                        detail: String(err?.message || err || ""),
+                    },
+                    headerErrorMsg: "",
+                }
+            }
+
+            throw new ApiError(msg, 0, err, { method, url, path: targetPath })
+        }
+
+        if (
+            res.status === 401 &&
+            resolvedCredentials !== "include" &&
+            canRetryUnauthorizedWithIncludedCredentials(
+                method,
+                url,
+                credentials,
+                finalBody
+            )
+        ) {
+            try {
+                const retryHeaders = stripTokenAuthHeaders(finalHeaders)
+
+                res = await fetch(url, {
+                    method,
+                    headers: retryHeaders,
+                    body: finalBody,
+                    signal,
+                    credentials: "include",
+                })
+            } catch {
+                // keep original 401 response if fallback request cannot be made
+            }
+        }
+
+        const parsed = await parseResponseSafe(res)
+        const normalized = applyHeaderErrorMessage(res, parsed)
+
+        return {
+            ok: res.ok,
+            url,
+            path: targetPath,
+            res,
+            data: normalized.data,
+            headerErrorMsg: normalized.headerErrorMsg,
         }
     }
 
-    const data = await parseResponseSafe(res)
+    let attempt = await runAttempt(path)
 
-    // ✅ If backend sets X-Error-Message but returns 200 with `{ ok:false }`,
-    // carry it into the JSON payload so UI can render it without needing headers access.
-    const headerErrorMsg =
-        res.headers.get("x-error-message") ||
-        res.headers.get("X-Error-Message") ||
-        ""
-    if (headerErrorMsg && data && typeof data === "object" && !Array.isArray(data)) {
-        const d: any = data
-        if ("ok" in d && d.ok === false) {
-            if (!d.message && !d.error && !d.reason) d.message = headerErrorMsg
-            if (!d.reason) d.reason = headerErrorMsg
+    if (
+        attempt.res &&
+        !attempt.res.ok &&
+        shouldTryCompatiblePathFallback(attempt.res.status)
+    ) {
+        const fallbackPaths = buildCompatibleFallbackPaths(path, method, body)
+
+        for (const fallbackPath of fallbackPaths) {
+            const fallbackAttempt = await runAttempt(fallbackPath)
+            attempt = fallbackAttempt
+
+            if (!fallbackAttempt.res || fallbackAttempt.res.ok) {
+                break
+            }
+
+            if (!shouldTryCompatiblePathFallback(fallbackAttempt.res.status)) {
+                break
+            }
         }
     }
+
+    if (!attempt.res) {
+        return attempt.data as T
+    }
+
+    const { res, data, url, headerErrorMsg } = attempt
 
     if (!res.ok) {
         // ✅ Allow structured error bodies to be handled by caller without try/catch
@@ -950,7 +1141,7 @@ export async function apiRequest<T>(
         throw new ApiError(`${baseMessage}${bodyHint}`, res.status, data, {
             method,
             url,
-            path,
+            path: attempt.path,
         })
     }
 
