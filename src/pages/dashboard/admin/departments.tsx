@@ -280,7 +280,7 @@ async function requestWithUpdateFallback<T>(
     } catch (error) {
         if (
             error instanceof ApiError &&
-            (error.status === 404 || error.status === 405)
+            (error.status === 404 || error.status === 405 || error.status === 501)
         ) {
             return api.putData<T>(path, body, { auth: "staff" })
         }
