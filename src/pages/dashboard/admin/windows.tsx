@@ -618,10 +618,13 @@ function DepartmentMultiSelect({
                     variant="outline"
                     role="combobox"
                     aria-expanded={open}
-                    className="w-full justify-between"
+                    className="w-full justify-between overflow-hidden"
                     disabled={disabled}
+                    title={buttonText}
                 >
-                    <span className="truncate text-left">{buttonText}</span>
+                    <span className="min-w-0 flex-1 truncate pr-2 text-left">
+                        {buttonText}
+                    </span>
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
             </PopoverTrigger>
