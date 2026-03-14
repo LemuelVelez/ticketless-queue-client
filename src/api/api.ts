@@ -5,12 +5,17 @@ export type ApiRouteParam = string | number
 export const API_PREFIX = "/api"
 
 const FRONTEND_DEV_PORTS = new Set(["3000", "3001", "4173", "5173"])
-const DEFAULT_LOCAL_API_PORT = "3000"
+const DEFAULT_LOCAL_API_PORT = "5000"
 
 const LEGACY_API_PATH_ALIASES: ReadonlyArray<readonly [string, string]> = [
     ["/admin/staff", "/users/staff"],
     ["/admin/participants", "/users/participants"],
     ["/admin/reports", "/reports"],
+    ["/windows", "/service-windows"],
+    ["/window", "/service-windows"],
+    ["/service-window", "/service-windows"],
+    ["/admin/windows", "/service-windows"],
+    ["/admin/service-windows", "/service-windows"],
 ]
 
 function stripTrailingSlash(value: string) {
@@ -257,8 +262,13 @@ export const API_PATHS = {
     },
     serviceWindows: {
         list: "/service-windows",
+        create: "/service-windows",
         enabled: "/service-windows/enabled",
         byId: (id: ApiRouteParam) =>
+            `/service-windows/${encodeRouteParam(id)}`,
+        updateById: (id: ApiRouteParam) =>
+            `/service-windows/${encodeRouteParam(id)}`,
+        deleteById: (id: ApiRouteParam) =>
             `/service-windows/${encodeRouteParam(id)}`,
         byDepartment: (departmentId: ApiRouteParam) =>
             `/service-windows/department/${encodeRouteParam(departmentId)}`,
@@ -354,9 +364,14 @@ export const API_ROUTES = {
     },
     serviceWindows: {
         list: () => toApiUrl(API_PATHS.serviceWindows.list),
+        create: () => toApiUrl(API_PATHS.serviceWindows.create),
         enabled: () => toApiUrl(API_PATHS.serviceWindows.enabled),
         byId: (id: ApiRouteParam) =>
             toApiUrl(API_PATHS.serviceWindows.byId(id)),
+        updateById: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.serviceWindows.updateById(id)),
+        deleteById: (id: ApiRouteParam) =>
+            toApiUrl(API_PATHS.serviceWindows.deleteById(id)),
         byDepartment: (departmentId: ApiRouteParam) =>
             toApiUrl(API_PATHS.serviceWindows.byDepartment(departmentId)),
     },
